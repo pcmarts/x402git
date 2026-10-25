@@ -409,7 +409,7 @@ export default async function ListingPage({ params, searchParams }: Params) {
   const options = paymentOptionsFor(creator, listing);
   const stellarOption = options.find((o) => o.network.startsWith("stellar:")) ?? null;
   const evmPay = evmPayChains(options);
-  // What the Freighter button needs from the rail: network, passphrase, public endpoints
+  // What the Stellar wallet button needs from the rail: network, passphrase, public endpoints
   // and the token. Picked field by field, so nothing else in the rail's config (the
   // facilitator key) can ever reach a client component.
   const stellarConfig = stellarOption ? stellarCheckoutConfig(stellarOption) : null;

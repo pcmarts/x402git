@@ -1284,7 +1284,7 @@ describe("the Pay area follows payment_options (JOURNEYS B0 [today, Must], BATTL
     expect(block).not.toContain('type="radio"');
   });
 
-  it("hides the EVM button and renders the Freighter button plus the closed terminal line for a Stellar-only creator", async () => {
+  it("hides the EVM button and renders the Stellar wallet button plus the closed terminal line for a Stellar-only creator", async () => {
     setStellarTestnetEnv();
     resetEnv();
     seed();
@@ -1292,7 +1292,7 @@ describe("the Pay area follows payment_options (JOURNEYS B0 [today, Must], BATTL
 
     const markup = await html();
     // The Base button and its sentence are gone; the Stellar button's own pre-mount
-    // sentence stands in their place (buy-with-freighter.tsx renders nothing else on the
+    // sentence stands in their place (buy-with-stellar.tsx renders nothing else on the
     // server), and the terminal is a closed disclosure under it.
     expect(markup).not.toContain("Turn on JavaScript to pay from this page, or pay from the terminal — see");
     expect(markup).toContain("Turn on JavaScript to pay from this page with a Stellar wallet");

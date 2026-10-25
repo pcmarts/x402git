@@ -12,7 +12,7 @@
  *   ◉ USDT0 on Arbitrum    MetaMask detected
  *     [ Buy — $9 with MetaMask ]
  *   ○ USDC on Base         MetaMask detected
- *   ○ USDC on Stellar      Freighter detected
+ *   ○ USDT0 on Stellar     Stellar wallets: Freighter, Hana, HOT…
  *
  * Three rules hold it together.
  *
@@ -25,7 +25,7 @@
  *   the buyer touches the block; from the first touch it is fixed, and a press never lands
  *   on a button that is about to be swapped out.
  * - **One row, one button.** The selected row renders the existing button for its rail —
- *   `BuyWithWallet` for an EVM row, told its chain and token; `BuyWithFreighter` for the
+ *   `BuyWithWallet` for an EVM row, told its chain and token; `BuyWithStellar` (was `BuyWithFreighter`) for the
  *   Stellar row — so the money paths are the ones already proved. One option is the chip
  *   and its button, no radios.
  *
@@ -33,6 +33,16 @@
  * (and whose), and is Freighter installed (`isConnected`, no prompt, no account). Access
  * is still asked for on the press. The server render — what `curl` and a reader without
  * script get — is the rows as static chips and the chosen row's own one-line fallback.
+ *
+ * Amended 25 Oct 2026, ~21:30 (founder: "Lets use the stellar wallet SDK instead so we can
+ * support more wallets?"). The Stellar row pays through the Stellar Wallets Kit's picker
+ * (`BuyWithStellar`), so it is no longer one wallet's row: before connect its line names the
+ * family ("Stellar wallets: Freighter, Hana, HOT…"), after it the wallet chosen. Detection
+ * on load is now the EVM question alone — Freighter's `isConnected()` is no longer asked,
+ * because which Stellar wallets are installed is the picker's to find out, on the press.
+ * So the preselect cannot wait on a Stellar answer either: the row last used here, else
+ * the first EVM row when an EVM wallet is injected, else the Stellar row (its picker
+ * covers a browser with no wallet, with install links), else the first row.
  */
 
 import { useCallback, useEffect, useId, useState } from "react";
@@ -40,7 +50,7 @@ import { chainLabel } from "@/lib/buy-links";
 import type { PaymentOption } from "@/lib/core/access";
 import { detectProvider, type ProviderRoot, walletName } from "@/lib/web/checkout-copy";
 import type { StellarCheckoutConfig } from "@/lib/web/stellar-checkout";
-import { BuyWithFreighter } from "./buy-with-freighter";
+import { BuyWithStellar } from "./buy-with-stellar";
 import { BuyWithWallet } from "./buy-with-wallet";
 import { RailChip } from "./rail-marks";
 
@@ -60,7 +70,7 @@ export type PayRow =
   | { kind: "stellar"; network: string; symbol: string; chainName: string; config: StellarCheckoutConfig };
 
 /** What the block has learned about this browser's wallets; `undefined` is "not asked yet". */
-export type Detected = { evm: string | null | undefined; freighter: boolean | undefined };
+export type Detected = { evm: string | null | undefined };
 
 type Props = {
   /** `paymentOptionsFor(creator, listing)`, in its order (EVM first, the primary rail first of all). */
@@ -84,7 +94,9 @@ type Props = {
 export const LAST_RAIL_KEY = "x402git.pay.rail";
 
 const GET_EVM_WALLET = "https://metamask.io/download/";
-const GET_FREIGHTER = "https://www.freighter.app/";
+
+/** The Stellar row's line before connect: the kit's picker, by the wallets that can pay in it. */
+export const STELLAR_WALLETS_LINE = "Stellar wallets: Freighter, Hana, HOT…";
 
 /**
  * The options this page can render a working button for, in the 402's order. An EVM
@@ -106,12 +118,15 @@ export function payRows(options: Props["options"], chains: EvmChain[], stellar: 
   return rows;
 }
 
-/** Last used here → first row whose wallet is installed → first row. Null only for no rows. */
+/**
+ * Last used here → the first EVM row when an EVM wallet is injected → the Stellar row once
+ * the EVM question has been answered no → the first row. Null only for no rows.
+ */
 export function preselect(rows: Pick<PayRow, "kind" | "network">[], lastUsed: string | null, detected: Detected): string | null {
   if (rows.length === 0) return null;
   if (lastUsed && rows.some((r) => r.network === lastUsed)) return lastUsed;
-  const installed = rows.find((r) => (r.kind === "evm" ? Boolean(detected.evm) : detected.freighter === true));
-  return (installed ?? rows[0]).network;
+  const pick = detected.evm ? rows.find((r) => r.kind === "evm") : detected.evm === null ? rows.find((r) => r.kind === "stellar") : undefined;
+  return (pick ?? rows[0]).network;
 }
 
 function readLastRail(): string | null {
@@ -133,13 +148,14 @@ function rememberRail(network: string): void {
 export function PayBlock(props: Props) {
   const { options, chains, stellar } = props;
   const rows = payRows(options, chains, stellar);
-  const hasStellar = rows.some((r) => r.kind === "stellar");
   const groupId = useId();
 
   const [mounted, setMounted] = useState(false);
   const [lastUsed, setLastUsed] = useState<string | null>(null);
-  const [detected, setDetected] = useState<Detected>({ evm: undefined, freighter: undefined });
+  const [detected, setDetected] = useState<Detected>({ evm: undefined });
   const [picked, setPicked] = useState<string | null>(null);
+  /** The wallet chosen in the Stellar row's picker, while its button holds it. */
+  const [stellarWallet, setStellarWallet] = useState<string | null>(null);
 
   useEffect(() => {
     setMounted(true);
@@ -148,35 +164,19 @@ export function PayBlock(props: Props) {
     // Extensions inject at document start; MetaMask also announces a late injection.
     const readEvm = () => {
       const provider = detectProvider(window as unknown as ProviderRoot);
-      setDetected((d) => ({ ...d, evm: provider ? walletName(provider) : null }));
+      setDetected({ evm: provider ? walletName(provider) : null });
     };
     readEvm();
     window.addEventListener("ethereum#initialized", readEvm, { once: true });
     return () => window.removeEventListener("ethereum#initialized", readEvm);
   }, []);
 
-  useEffect(() => {
-    if (!hasStellar) return;
-    let live = true;
-    import("@stellar/freighter-api")
-      .then((api) => api.isConnected())
-      .then((r) => {
-        if (live) setDetected((d) => ({ ...d, freighter: Boolean(r && !r.error && r.isConnected) }));
-      })
-      .catch(() => {
-        if (live) setDetected((d) => ({ ...d, freighter: false }));
-      });
-    return () => {
-      live = false;
-    };
-  }, [hasStellar]);
-
   // Before mount there is no storage and no wallet to read: the first row, on both sides
   // of hydration, so the server HTML and the first client render agree.
   const auto = mounted ? preselect(rows, lastUsed, detected) : (rows[0]?.network ?? null);
   const selected = picked ?? auto;
 
-  /** The first touch fixes the pick, so a late Freighter answer cannot move the button. */
+  /** The first touch fixes the pick, so a late `ethereum#initialized` cannot move the button. */
   const hold = useCallback(() => {
     if (mounted) setPicked((p) => p ?? auto);
   }, [auto, mounted]);
@@ -208,7 +208,7 @@ export function PayBlock(props: Props) {
           sizeLabel={props.sizeLabel}
         />
       ) : (
-        <BuyWithFreighter
+        <BuyWithStellar
           owner={props.owner}
           slug={props.slug}
           version={props.version}
@@ -218,6 +218,7 @@ export function PayBlock(props: Props) {
           config={row.config}
           forSale={props.forSale}
           sizeLabel={props.sizeLabel}
+          onWallet={setStellarWallet}
         />
       )}
     </div>
@@ -271,7 +272,7 @@ export function PayBlock(props: Props) {
                   <RailChip network={row.network} symbol={row.symbol} />
                 </label>
                 <span className="pay-wallet" id={statusId}>
-                  <WalletLine row={row} detected={detected} />
+                  <WalletLine row={row} detected={detected} stellarWallet={isSelected ? stellarWallet : null} />
                 </span>
               </div>
             ) : (
@@ -288,7 +289,7 @@ export function PayBlock(props: Props) {
 }
 
 /** The wallet this row would use, said in as few words as hold it — or where to get one. */
-function WalletLine({ row, detected }: { row: PayRow; detected: Detected }) {
+export function WalletLine({ row, detected, stellarWallet }: { row: Pick<PayRow, "kind">; detected: Detected; stellarWallet: string | null }) {
   if (row.kind === "evm") {
     if (detected.evm === undefined) return null;
     if (detected.evm) return <>{detected.evm} detected</>;
@@ -301,11 +302,7 @@ function WalletLine({ row, detected }: { row: PayRow; detected: Detected }) {
       </>
     );
   }
-  if (detected.freighter === undefined) return null;
-  if (detected.freighter) return <>Freighter detected</>;
-  return (
-    <a href={GET_FREIGHTER} rel="noopener noreferrer" target="_blank">
-      Get Freighter
-    </a>
-  );
+  // Which Stellar wallets are installed is the picker's to find; this line only names them.
+  if (stellarWallet) return <>{stellarWallet} connected</>;
+  return <>{STELLAR_WALLETS_LINE}</>;
 }

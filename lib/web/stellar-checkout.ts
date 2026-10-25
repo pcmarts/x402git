@@ -1,12 +1,12 @@
 /**
- * lib/web/stellar-checkout.ts — the browser's Stellar purchase, through Freighter.
+ * lib/web/stellar-checkout.ts — the browser's Stellar purchase, through any Stellar wallet.
  *
  * 25 Oct 2026, HackMeridian (founder: "we need a non-agent way for users to pay, a visual
  * 'pay with wallet' option"). This is the same x402 exchange the CLI (`x402git-stellar`)
- * and the Base button run, with Freighter as the signer:
+ * and the Base button run, with the buyer's wallet as the signer:
  *
  *   GET the resource → 402 with `accepts` → the Stellar `exact` entry → `ExactStellarScheme`
- *   simulates the token contract's `transfer` and asks Freighter to sign the one Soroban
+ *   simulates the token contract's `transfer` and asks the wallet to sign the one Soroban
  *   auth entry (SEP-43 `signAuthEntry`) → the same GET again with PAYMENT-SIGNATURE and
  *   X-Quote-Id → the grant, and the settlement hash from PAYMENT-RESPONSE.
  *
@@ -16,15 +16,27 @@
  * (`areFeesSponsored`), so the account needs the token and nothing else.
  *
  * Shapes are shared with the EVM checkout (`CheckoutResult`, `failure`, `mapApiError`) so
- * the two buttons render the same panels. `@stellar/freighter-api`, `@x402/stellar` and the
- * SDK behind it are imported on the first press and never run on the server.
+ * the two buttons render the same panels. The wallet kit, `@x402/stellar` and the SDK
+ * behind it are imported on the first press and never run on the server.
+ *
+ * Amended 25 Oct 2026, ~21:30 (founder: "Lets use the stellar wallet SDK instead so we can
+ * support more wallets?"). The signer was Freighter's API; it is now the Stellar Wallets
+ * Kit (`@creit.tech/stellar-wallets-kit`, pinned 2.7.1), whose picker lists every wallet it
+ * knows and links the ones not installed. The purchase itself did not change: it takes any
+ * `ClientStellarSigner` (`buyWithStellarWallet`), and `kitSigner` is that signer over the
+ * kit. Not every wallet in the picker can sign a Soroban auth entry — xBull, Albedo, Lobstr,
+ * Rabet, Fordefi, Bitget, Ledger and Trezor say so in their kit modules — so the kit's
+ * "does not support the signAuthEntry function" becomes one sentence naming the wallets
+ * that can, and the button says it at connect time for the ones known not to
+ * (`cannotPayWith`), before the buyer is asked to press Pay. The kit is set to this
+ * deployment's network; a wallet that reports another one is told so in its own menu's
+ * words, and one that cannot report a network at all is trusted to the passphrase every
+ * signing request carries.
  */
 
 import { decodePaymentResponseHeader, encodePaymentSignatureHeader } from "@x402/core/http";
 import type { PaymentPayload, PaymentRequirements } from "@x402/core/types";
-import { type CheckoutResult, type CheckoutSuccess, failure, isUserRejection, mapApiError, type Transport } from "@/lib/web/wallet-checkout";
-
-export type Freighter = typeof import("@stellar/freighter-api");
+import { type CheckoutFailure, type CheckoutResult, type CheckoutSuccess, failure, isUserRejection, mapApiError, type Transport } from "@/lib/web/wallet-checkout";
 
 /** What the page hands the button: the one Stellar network this deployment pays on, and its token. */
 export type StellarCheckoutConfig = {
@@ -36,44 +48,190 @@ export type StellarCheckoutConfig = {
   asset: { code: string; issuer: string; contract: string; symbol: string };
 };
 
-export const FREIGHTER_URL = "https://www.freighter.app/";
-
-type FreighterError = { message?: string; code?: number } | undefined;
-
-function freighterMessage(error: FreighterError, fallback: string): string {
-  return error && typeof error.message === "string" && error.message.length > 0 ? error.message : fallback;
-}
-
-/** The words a person sees in Freighter's network menu, from the passphrase it reports. */
+/** The words a person sees in a wallet's network menu, from the passphrase it reports. */
 export function networkLabel(passphrase: string, name?: string): string {
   if (passphrase === "Public Global Stellar Network ; September 2015") return "Mainnet";
   if (passphrase === "Test SDF Network ; September 2015") return "Testnet";
   return name && name.length > 0 ? name : "another network";
 }
 
-/** Installed and unlocked, or null: the caller shows the install link. */
-export async function loadFreighter(): Promise<Freighter | null> {
-  const api = await import("@stellar/freighter-api");
-  const connected = await api.isConnected();
-  if (connected.error || !connected.isConnected) return null;
-  return api;
+// --- the wallet kit ---------------------------------------------------------------------
+
+/** SEP-43's `signAuthEntry`, as the kit (and each wallet module behind it) speaks it. */
+export type SignAuthEntryFn = (
+  authEntry: string,
+  opts: { networkPassphrase: string; address: string },
+) => Promise<{ signedAuthEntry: string; signerAddress?: string }>;
+
+/**
+ * The slice of the kit's static `StellarWalletsKit` this file calls. Typed here, not taken
+ * from the package, so the type costs nothing on first paint and a test can hand in a fake.
+ */
+export type WalletKit = {
+  authModal(): Promise<{ address: string }>;
+  getNetwork(): Promise<{ network: string; networkPassphrase: string }>;
+  signAuthEntry(authEntry: string, opts?: { networkPassphrase?: string; address?: string }): Promise<{ signedAuthEntry: string; signerAddress?: string }>;
+  disconnect(): Promise<void>;
+  readonly selectedModule: { productId: string; productName: string };
+};
+
+/** The wallets that can approve this payment, in the order the failure copy names them. */
+export const AUTH_ENTRY_WALLETS = "Freighter, Hana or HOT Wallet";
+
+/**
+ * Kit module ids whose `signAuthEntry` is a hard-coded refusal in 2.7.1 (read from the
+ * modules, 25 Oct 2026). Pinned with the package: a kit upgrade re-reads this list.
+ */
+const NO_AUTH_ENTRY: ReadonlySet<string> = new Set(["albedo", "xbull", "lobstr", "rabet", "fordefi", "BitgetWallet", "LEDGER", "TREZOR"]);
+
+let kitFor: { passphrase: string; kit: Promise<WalletKit> } | null = null;
+
+/**
+ * The kit, initialised once per page for this deployment's network. `defaultModules()` is
+ * every wallet that needs no app-side setup (Ledger, Trezor and WalletConnect are not in
+ * it: the first two cannot sign an auth entry, and WalletConnect needs a project id). HOT
+ * Wallet is not in it either — its module warns it wants `Buffer` and `global` — so it is
+ * added from its own module, fetched in parallel, in a guard of its own: a wallet SDK that
+ * fails to load costs that one row of the picker and not the picker. It is also the
+ * heaviest chunk the press fetches (~92 KB gzipped of ~167 KB, 25 Oct 2026 build).
+ */
+export function loadKit(passphrase: string): Promise<WalletKit> {
+  if (kitFor && kitFor.passphrase === passphrase) return kitFor.kit;
+  const kit = (async () => {
+    const [{ StellarWalletsKit }, { defaultModules }, hot] = await Promise.all([
+      import("@creit.tech/stellar-wallets-kit"),
+      import("@creit.tech/stellar-wallets-kit/modules/utils"),
+      import("@creit.tech/stellar-wallets-kit/modules/hotwallet").then((m) => new m.HotWalletModule()).catch(() => null),
+    ]);
+    StellarWalletsKit.init({
+      // Only wallets that can sign a Soroban auth entry are offered (integrator, 25 Oct
+      // 2026, 22:10): a picker that lists Albedo or xBull first and then says "can't
+      // approve this kind of payment" is a worse first minute than a shorter list. The
+      // refusing set is the kit's own, read from each module's code; the per-connect
+      // check below stays as the belt to this brace.
+      modules: [...defaultModules({ filterBy: (m) => !NO_AUTH_ENTRY.has(m.productId) }), ...(hot ? [hot] : [])],
+      network: passphrase as Parameters<typeof StellarWalletsKit.setNetwork>[0],
+    });
+    return StellarWalletsKit as WalletKit;
+  })();
+  kitFor = { passphrase, kit };
+  // A failed load is not cached: the next press tries again.
+  kit.catch(() => {
+    if (kitFor?.kit === kit) kitFor = null;
+  });
+  return kit;
 }
 
-/** Freighter must be on the network this listing is paid on, said in the words of its own menu. */
-export async function requireNetwork(api: Freighter, passphrase: string): Promise<void> {
-  const net = await api.getNetwork();
-  if (net.error) throw new Error(freighterMessage(net.error, "Freighter did not say which network it is on."));
-  if (net.networkPassphrase !== passphrase) {
-    throw new Error(`Freighter is on ${networkLabel(net.networkPassphrase, net.network)}; switch it to ${networkLabel(passphrase)} in its network menu, then try again.`);
+/** A kit or wallet refusal, which arrives as a bare `{ code, message }`, or anything else thrown. */
+function messageOf(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (typeof error === "string") return error;
+  const m = (error as { message?: unknown } | null)?.message;
+  return typeof m === "string" ? m : "";
+}
+
+/** `<wallet> does not support the "<fn>" function` (or "do not … method"), as the kit's modules word it. */
+function notSupported(error: unknown, fn: string): boolean {
+  return new RegExp(`\\b(?:does|do) not support the "?${fn}"? (?:function|method)`, "i").test(messageOf(error));
+}
+
+/** The picker's ✕ or its backdrop: the buyer changed their mind, which is not an error. */
+export function isPickerClosed(error: unknown): boolean {
+  return /closed the modal/i.test(messageOf(error));
+}
+
+/** Thrown when the chosen wallet cannot sign an auth entry; its message is the whole sentence. */
+export class WalletCannotPayError extends Error {
+  constructor(walletName: string) {
+    super(`${walletName} can't approve this kind of payment yet. Use ${AUTH_ENTRY_WALLETS}, or pay from the terminal below.`);
+    this.name = "WalletCannotPayError";
   }
 }
 
-export async function requestAddress(api: Freighter): Promise<string> {
-  const access = await api.requestAccess();
-  if (access.error) throw new Error(freighterMessage(access.error, "Freighter refused to share an account."));
-  if (!access.address) throw new Error("Freighter did not share an account. Unlock it, allow this site, and try again.");
-  return access.address;
+/** For a wallet the kit's own module refuses `signAuthEntry` for, the failure to show at connect. */
+export function cannotPayWith(walletId: string, walletName: string): CheckoutFailure | null {
+  return NO_AUTH_ENTRY.has(walletId) ? failure("unknown", new WalletCannotPayError(walletName).message) : null;
 }
+
+/**
+ * The chosen wallet must be on the network this listing is paid on, said in the words of
+ * its own menu. A wallet that cannot say (xBull, Hana, Lobstr…) is not refused for it:
+ * every signing request names the passphrase, and a wallet on the wrong network fails there.
+ */
+export async function requireNetwork(kit: Pick<WalletKit, "getNetwork">, passphrase: string, walletName: string): Promise<void> {
+  let net: { network: string; networkPassphrase: string };
+  try {
+    net = await kit.getNetwork();
+  } catch (error) {
+    if (notSupported(error, "getNetwork")) return;
+    const said = messageOf(error);
+    throw new Error(said.length > 0 ? said : `${walletName} did not say which network it is on.`);
+  }
+  if (net.networkPassphrase && net.networkPassphrase !== passphrase) {
+    throw new Error(`${walletName} is on ${networkLabel(net.networkPassphrase, net.network)}; switch it to ${networkLabel(passphrase)} in its network menu, then try again.`);
+  }
+}
+
+export type ConnectedWallet = { address: string; walletId: string; walletName: string };
+
+/**
+ * The kit's picker → the account the buyer chose, and which wallet holds it. Detection is
+ * the picker's: nothing is asked of any extension before this press.
+ */
+export async function connectStellarWallet(config: StellarCheckoutConfig, load: (passphrase: string) => Promise<WalletKit> = loadKit): Promise<ConnectedWallet> {
+  const kit = await load(config.passphrase);
+  const { address } = await kit.authModal();
+  if (!address) throw new Error("The wallet did not share an account. Unlock it, allow this site, and try again.");
+  const { productId, productName } = kit.selectedModule;
+  await requireNetwork(kit, config.passphrase, productName);
+  return { address, walletId: productId, walletName: productName };
+}
+
+/** Forget the chosen wallet, so the next press opens the picker clean. Best effort. */
+export async function disconnectStellarWallet(passphrase: string): Promise<void> {
+  try {
+    await (await loadKit(passphrase)).disconnect();
+  } catch {
+    // Nothing to forget, or the kit never loaded: the next press opens the picker either way.
+  }
+}
+
+/** `@x402/stellar`'s `ClientStellarSigner` (SEP-43's shape), as this file builds and accepts it. */
+export type StellarSigner = {
+  address: string;
+  signAuthEntry: (authEntry: string, opts?: { networkPassphrase?: string; address?: string }) => Promise<{ signedAuthEntry: string; signerAddress?: string }>;
+};
+
+/**
+ * `ClientStellarSigner` over the kit. `@x402/stellar` hands over the auth entry's preimage
+ * as base64 XDR and wants it back signed; SEP-43 `signAuthEntry` speaks exactly that. The
+ * network and the account are pinned here, whatever the caller passes, so the wallet cannot
+ * be asked to sign for a different one.
+ */
+export function kitSigner(address: string, passphrase: string, opts: { walletName?: string; sign?: SignAuthEntryFn } = {}): StellarSigner {
+  const name = opts.walletName ?? "Your wallet";
+  const sign: SignAuthEntryFn = opts.sign ?? (async (entry, o) => (await loadKit(passphrase)).signAuthEntry(entry, o));
+  return {
+    address,
+    signAuthEntry: async (entry: string, _opts?: { networkPassphrase?: string; address?: string }) => {
+      let result: { signedAuthEntry?: string; signerAddress?: string } | undefined;
+      try {
+        result = await sign(entry, { networkPassphrase: passphrase, address });
+      } catch (error) {
+        if (notSupported(error, "signAuthEntry")) throw new WalletCannotPayError(name);
+        // The kit rejects with a bare `{ code, message }`; keep both for the mapper.
+        if (error instanceof Error) throw error;
+        throw Object.assign(new Error(messageOf(error) || `${name} refused to sign the payment.`), { code: (error as { code?: unknown } | null)?.code });
+      }
+      if (!result?.signedAuthEntry) throw new Error(`${name} returned no signature. Nothing was charged.`);
+      if (result.signerAddress && result.signerAddress !== address) {
+        throw new Error(`${name} signed with ${result.signerAddress}, not ${address}. Switch to that account and try again.`);
+      }
+      return { signedAuthEntry: result.signedAuthEntry, signerAddress: result.signerAddress };
+    },
+  };
+}
+
 
 // --- Horizon: can this account pay? ---------------------------------------------------
 
@@ -149,34 +307,14 @@ export function canonicalRequirement(accept: Accept): PaymentRequirements {
   } as PaymentRequirements;
 }
 
-// --- the signer -------------------------------------------------------------------------
-
-/**
- * `ClientStellarSigner` over Freighter. `@x402/stellar` hands over the auth entry's
- * preimage as base64 XDR and wants it back signed; Freighter's `signAuthEntry` (SEP-43)
- * speaks exactly that. The network and the account are pinned here so the extension
- * cannot be asked to sign for a different one.
- */
-export function freighterSigner(api: Freighter, address: string, passphrase: string) {
-  return {
-    address,
-    signAuthEntry: async (entry: string, opts?: { networkPassphrase?: string; address?: string }) => {
-      const result = await api.signAuthEntry(entry, { networkPassphrase: opts?.networkPassphrase ?? passphrase, address: opts?.address ?? address });
-      if (result.error) throw new Error(freighterMessage(result.error, "Freighter refused to sign the payment."));
-      if (!result.signedAuthEntry) throw new Error("Freighter returned no signature. Nothing was charged.");
-      if (result.signerAddress && result.signerAddress !== address) {
-        throw new Error(`Freighter signed with ${result.signerAddress}, not ${address}. Switch to that account and try again.`);
-      }
-      return { signedAuthEntry: result.signedAuthEntry, signerAddress: result.signerAddress };
-    },
-  };
-}
-
 // --- the purchase -----------------------------------------------------------------------
 
-export type FreighterCheckoutInput = {
-  api: Freighter;
+export type StellarWalletCheckoutInput = {
+  /** Any `ClientStellarSigner`: `kitSigner` in the page, a fake in a test. */
+  signer: StellarSigner;
   address: string;
+  /** "Freighter", "Hana": named in the trustline sentence. */
+  walletName?: string;
   owner: string;
   slug: string;
   config: StellarCheckoutConfig;
@@ -185,8 +323,8 @@ export type FreighterCheckoutInput = {
   account?: StellarAccount | null;
 };
 
-export async function buyWithFreighter(input: FreighterCheckoutInput): Promise<CheckoutResult> {
-  const { api, address, owner, slug, config, transport } = input;
+export async function buyWithStellarWallet(input: StellarWalletCheckoutInput): Promise<CheckoutResult> {
+  const { signer, address, owner, slug, config, transport } = input;
   const symbol = config.asset.symbol;
   try {
     const resourceUrl = `${transport.baseUrl}/api/r/${owner}/${slug}`;
@@ -211,7 +349,7 @@ export async function buyWithFreighter(input: FreighterCheckoutInput): Promise<C
       return failure("unknown", `${short(address)} does not exist on Stellar ${networkLabel(config.passphrase)} yet. Send it a little XLM first, then try again.`);
     }
     if (!account.trustline) {
-      return failure("unknown", `This wallet has not added ${symbol} yet. In Freighter: Manage assets → Add manually → code ${config.asset.code}, issuer ${config.asset.issuer}. Then try again.`);
+      return failure("unknown", `This wallet has not added ${symbol} yet. ${trustlineSteps(input.walletName, config.asset)} Then try again.`);
     }
     if (!account.authorized) return failure("unknown", `This wallet's ${symbol} trustline has not been authorised by the issuer, so it cannot pay yet.`);
     if (account.balanceStroops < price) {
@@ -220,7 +358,7 @@ export async function buyWithFreighter(input: FreighterCheckoutInput): Promise<C
 
     // The wallet signs the auth entry here, and only here.
     const { ExactStellarScheme } = await import("@x402/stellar");
-    const scheme = new ExactStellarScheme(freighterSigner(api, address, config.passphrase), { url: config.rpcUrl });
+    const scheme = new ExactStellarScheme(signer, { url: config.rpcUrl });
     const requirement = canonicalRequirement(accept);
     const signed = await scheme.createPaymentPayload(2, requirement);
 
@@ -242,13 +380,25 @@ export async function buyWithFreighter(input: FreighterCheckoutInput): Promise<C
     const txHash = settlementHash(paid);
     return grantResult(grant, txHash, txHash ? "paid" : "owned");
   } catch (error) {
-    return mapFreighterThrown(error);
+    return mapStellarThrown(error);
   }
 }
 
-/** Freighter's refusals, the SDK's simulation errors and a dead network, as the checkout's own codes. */
-export function mapFreighterThrown(error: unknown): CheckoutResult {
-  const message = error instanceof Error ? error.message : String(error);
+/** Where a wallet adds a token, in Freighter's own menu words when it is Freighter. */
+export function trustlineSteps(walletName: string | undefined, asset: { code: string; issuer: string }): string {
+  if (!walletName || walletName === "Freighter") return `In Freighter: Manage assets → Add manually → code ${asset.code}, issuer ${asset.issuer}.`;
+  return `Add it in ${walletName}: code ${asset.code}, issuer ${asset.issuer}.`;
+}
+
+/**
+ * A wallet's refusal, the SDK's simulation errors and a dead network, as the checkout's
+ * own codes. Wallets reject with a bare `{ code, message }` as often as with an Error.
+ */
+export function mapStellarThrown(error: unknown): CheckoutFailure {
+  if (error instanceof WalletCannotPayError) return failure("unknown", error.message);
+  const message = messageOf(error);
+  // The same refusal, if something between the wallet and here re-threw it as its own.
+  if (notSupported(error, "signAuthEntry")) return failure("unknown", new WalletCannotPayError(/^(.+?) (?:does|do) not support/i.exec(message)?.[1] ?? "This wallet").message);
   if (isUserRejection(error) || /declin|reject|denied|cancel/i.test(message)) return failure("rejected");
   if (error instanceof TypeError && /fetch|network/i.test(message)) return failure("network");
   if (/balance|insufficient/i.test(message)) return failure("insufficient_balance", `The payment could not be built: ${message}`);

@@ -4,13 +4,17 @@
  * a wrong one puts the button on a rail whose wallet is not installed — so `preselect` is
  * tested as a function, and the server render through `renderToStaticMarkup`, which is
  * the bytes `curl` receives (no effects run, so no storage and no wallet are read).
+ *
+ * 25 Oct 2026, ~21:30 (the wallet kit): Freighter is no longer asked on load, so the pick
+ * reads the EVM answer alone, and the Stellar row's line names the kit's wallets until one
+ * is chosen.
  */
 
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { StellarCheckoutConfig } from "@/lib/web/stellar-checkout";
-import { type EvmChain, PayBlock, payRows, preselect } from "./pay-block";
+import { type EvmChain, PayBlock, payRows, preselect, STELLAR_WALLETS_LINE, WalletLine } from "./pay-block";
 import { rowSymbol } from "./purchases";
 
 const BASE: EvmChain = { network: "eip155:8453", chainId: 8453, chainName: "Base", explorer: "https://basescan.org", symbol: "USDC" };
@@ -29,7 +33,7 @@ const ALL = [
   { network: "stellar:pubnet", asset_symbol: "USDT0" },
 ];
 
-const none = { evm: null, freighter: false } as const;
+const none = { evm: null } as const;
 
 describe("payRows: only what the page can make work", () => {
   it("keeps the 402's order, one row per option", () => {
@@ -51,34 +55,57 @@ describe("payRows: only what the page can make work", () => {
   });
 });
 
-describe("preselect: last used → first installed → first", () => {
+describe("preselect: last used → EVM wallet → Stellar row → first", () => {
   const rows = payRows(ALL, [BASE, ARBITRUM], STELLAR);
 
   it("takes the row last used in this browser, when the listing still offers it", () => {
-    expect(preselect(rows, "eip155:8453", { evm: "MetaMask", freighter: true })).toBe("eip155:8453");
-    expect(preselect(rows, "stellar:pubnet", none)).toBe("stellar:pubnet");
+    expect(preselect(rows, "eip155:8453", { evm: "MetaMask" })).toBe("eip155:8453");
+    expect(preselect(rows, "stellar:pubnet", { evm: "MetaMask" })).toBe("stellar:pubnet");
   });
 
   it("ignores a remembered rail this listing does not take", () => {
-    expect(preselect(rows, "eip155:1", { evm: "MetaMask", freighter: false })).toBe("eip155:42161");
+    expect(preselect(rows, "eip155:1", { evm: "MetaMask" })).toBe("eip155:42161");
   });
 
-  it("puts a Freighter-only browser on the Stellar row", () => {
-    expect(preselect(rows, null, { evm: null, freighter: true })).toBe("stellar:pubnet");
+  it("puts a browser with an EVM wallet on the first EVM row", () => {
+    expect(preselect(rows, null, { evm: "MetaMask" })).toBe("eip155:42161");
+    expect(preselect(rows.slice(2).concat(rows.slice(0, 2)), null, { evm: "Coinbase Wallet" })).toBe("eip155:42161");
   });
 
-  it("puts a MetaMask browser on the first EVM row", () => {
-    expect(preselect(rows, null, { evm: "MetaMask", freighter: false })).toBe("eip155:42161");
-    expect(preselect(rows, null, { evm: "MetaMask", freighter: true })).toBe("eip155:42161");
+  it("puts a browser with no EVM wallet on the Stellar row, whose picker covers having none", () => {
+    expect(preselect(rows, null, none)).toBe("stellar:pubnet");
   });
 
-  it("falls back to the first row with no wallet at all, or before Freighter has answered", () => {
-    expect(preselect(rows, null, none)).toBe("eip155:42161");
-    expect(preselect(rows.slice(2).concat(rows.slice(0, 2)), null, { evm: null, freighter: undefined })).toBe("stellar:pubnet");
+  it("falls back to the first row before the EVM question is answered, or with no Stellar row", () => {
+    expect(preselect(rows, null, { evm: undefined })).toBe("eip155:42161");
+    expect(preselect(rows.slice(0, 2), null, none)).toBe("eip155:42161");
   });
 
   it("has nothing to pick with no rows", () => {
-    expect(preselect([], "eip155:8453", { evm: "MetaMask", freighter: true })).toBeNull();
+    expect(preselect([], "eip155:8453", { evm: "MetaMask" })).toBeNull();
+  });
+});
+
+describe("the wallet line beside each row", () => {
+  const line = (kind: "evm" | "stellar", evm: string | null | undefined, stellarWallet: string | null = null) =>
+    renderToStaticMarkup(createElement(WalletLine, { row: { kind }, detected: { evm }, stellarWallet }));
+
+  it("names the kit's wallets on the Stellar row before connect, and asks no extension", () => {
+    expect(STELLAR_WALLETS_LINE).toBe("Stellar wallets: Freighter, Hana, HOT…");
+    expect(line("stellar", undefined)).toBe("Stellar wallets: Freighter, Hana, HOT…");
+    expect(line("stellar", "MetaMask")).toBe("Stellar wallets: Freighter, Hana, HOT…");
+    expect(line("stellar", null)).not.toContain("Get Freighter");
+  });
+
+  it("names the wallet chosen in the picker once connected", () => {
+    expect(line("stellar", null, "Hana")).toBe("Hana connected");
+    expect(line("stellar", null, "Freighter")).toBe("Freighter connected");
+  });
+
+  it("keeps the EVM row's detected wallet, or where to get one", () => {
+    expect(line("evm", undefined)).toBe("");
+    expect(line("evm", "MetaMask")).toBe("MetaMask detected");
+    expect(line("evm", null)).toContain("No EVM wallet");
   });
 });
 

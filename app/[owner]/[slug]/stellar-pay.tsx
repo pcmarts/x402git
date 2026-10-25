@@ -3,7 +3,7 @@
  *
  * Until the evening of 25 Oct 2026 this block *was* the Stellar way to pay: a command line,
  * as text. The founder on seeing it on a live listing: "that's terrible — we need a visual
- * pay-with-wallet option". The button is `BuyWithFreighter` now; this is what sits under
+ * pay-with-wallet option". The button is `BuyWithStellar` now (the Stellar Wallets Kit picker, since 22:00); this is what sits under
  * it, closed: the same `npx x402git-stellar buy` an agent reads off this page with `curl`
  * and a person without Freighter can paste, plus the bridge hint on mainnet. A retired
  * listing shows only the way back in for a holder.
