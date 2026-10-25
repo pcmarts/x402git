@@ -9,13 +9,14 @@
  *    to it fails with `op_no_trust`, so money would have nowhere to go; binding is refused
  *    with the exact sentence the wallet page shows, and nothing is written.
  * 2. **An addition is immediate, a change waits 48 hours** — the same rule as the EVM
- *    rebind (FR-5 / §7.6, `lib/auth/step-up.ts`): both keys signed an addition and the
- *    destination is on a chain the creator just proved they control, while a change is
- *    where a takeover would redirect earnings. `stellarBindPatch` computes the row patch
- *    and nothing else; the route writes it. `lib/payouts/stellar.ts` promotes the pending
- *    address when the delay has passed.
- * 3. **Type-to-confirm**: the whole address or its last six characters, because a
- *    strkey is 56 characters nobody reads, and the last six are what explorers show.
+ *    rebind (FR-5 / §7.6, `lib/auth/step-up.ts`): an addition opens a rail that had no
+ *    money on it, at a destination the creator just proved they control, while a change
+ *    is where a takeover would redirect earnings. `stellarBindPatch` computes the row
+ *    patch and nothing else; the route writes it. `lib/payouts/stellar.ts` promotes the
+ *    pending address when the delay has passed.
+ * 3. **Type-to-confirm** on a change: the whole address or its last six characters,
+ *    because a strkey is 56 characters nobody reads, and the last six are what explorers
+ *    show. Since 25 Oct 2026 an addition from the dashboard skips it (`railBeingAdded`).
  *
  * F4 (no multisig at the event): the signer is the address, so nothing here reads
  * signers or thresholds. `stellar_payout_meta` records only the trustline check.
@@ -153,7 +154,7 @@ export type StellarBindOutcome = {
 
 /**
  * The `creator` row patch for binding `inspected.meta.address`. Pure: the caller has
- * already proved the key (SEP-53), taken the step-up and read Horizon.
+ * already proved the key (SEP-53), taken the step-up when one is due, and read Horizon.
  */
 export function stellarBindPatch(
   creator: Pick<CreatorRow, "payout_address" | "stellar_payout_address" | "pending_stellar_payout_address">,
@@ -181,6 +182,36 @@ export function stellarBindPatch(
     effectiveAt,
     patch: { ...common, pending_stellar_payout_address: next, stellar_rebind_effective_at: effectiveAt },
   };
+}
+
+/**
+ * The payout rail a PATCH /api/creators/me *opens* — one the account has no address on
+ * yet — or null when the request changes an address money already flows to.
+ *
+ * - `stellar` (JOURNEYS C3): a `stellar_payout_address` on an account with no Stellar
+ *   address bound and an identity that is not itself a `G…`.
+ * - `evm` (C4): a `payout_address` sent with `payout_proof` to an account whose identity
+ *   is a `G…`. On such an account `payout_address` without a proof is the 48-hour rebind.
+ *
+ * 25 Oct 2026, ~21:30 (HackMeridian; the founder: "lets not have the confirm the last 6
+ * digits of your evm wallet - a lot of hassle. Do we need to have the stellar wallet
+ * confirm? Feels needless."). Opening a rail from the dashboard (a session key; the route
+ * checks) takes only the new wallet's own proof: no step-up from the other wallet, no
+ * type-to-confirm. The proof already shows control of the destination, the caller is a
+ * signed-in GitHub session, and nothing already flowing is redirected, because the new
+ * rail had no money on it. The accepted risk: a stolen GitHub session could add a payout
+ * address for a rail the creator had not yet opened. A change keeps the step-up and
+ * type-to-confirm.
+ */
+export function railBeingAdded(
+  creator: Pick<CreatorRow, "payout_address" | "stellar_payout_address">,
+  body: { payout_address?: string; payout_proof?: unknown; stellar_payout_address?: string },
+): "stellar" | "evm" | null {
+  if (body.stellar_payout_address !== undefined) return currentStellarPayoutAddress(creator) === null ? "stellar" : null;
+  if (body.payout_address !== undefined && body.payout_proof !== undefined) {
+    return addressFamily(creator.payout_address) === "stellar" && addressFamily(body.payout_address) === "evm" ? "evm" : null;
+  }
+  return null;
 }
 
 /** Type-to-confirm: the whole address, or its last six characters, case-insensitively (an EVM address is checksummed mixed-case). */

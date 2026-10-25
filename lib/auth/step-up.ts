@@ -6,6 +6,11 @@
  * bound* payout address over a fresh challenge — not the API key, which by §14.7 is
  * assumed to have leaked.
  *
+ * Not for opening a payout rail the account has no address on yet, from a dashboard
+ * session key (25 Oct 2026, HackMeridian; `railBeingAdded` in `./stellar-binding.ts`
+ * says why): the new wallet's own proof is enough there, because nothing already
+ * flowing moves. An agent key still steps up for it.
+ *
  *   const body = UpdateCreatorRequest.parse(await req.json());
  *   await requireStepUp(creator, body.step_up);
  *

@@ -9,24 +9,40 @@
  * contact has no sender (RED-TEAM-2026-09-21.md PAY-10), and no page may claim one.
  *
  * The Stellar payout address (25 Oct 2026, HACKMERIDIAN-JOURNEYS C3–C5) rides the same
- * route with one more proof. Adding a second payout address takes the step-up from the
- * identity address *and* a SEP-53 signature from the new `G…`, plus type-to-confirm, and
- * is live at once — both keys signed, and nothing already bound is redirected. Changing
- * the Stellar address keeps the 48-hour delay. The account must hold an authorised
+ * route with one more proof: a SEP-53 signature from the new `G…` itself. Adding it is
+ * live at once; changing it keeps the 48-hour delay. The account must hold an authorised
  * trustline in the configured asset (`lib/auth/stellar-binding.ts`) or nothing is written.
  *
  * The mirror (C4): a Stellar-only account adds an EVM address with `payout_address` plus
- * `payout_proof` from the new `0x…`, the step-up from the bound `G…` and type-to-confirm.
- * Also live at once. The EVM address becomes the identity and the `G…` stays the Stellar
- * payout address, which is the row an EVM creator who added Stellar (C3) has, and the row
- * the 48-hour rebind without a proof already ends in when the sweep promotes it.
+ * `payout_proof` from the new `0x…`. Also live at once. The EVM address becomes the
+ * identity and the `G…` stays the Stellar payout address, which is the row an EVM creator
+ * who added Stellar (C3) has, and the row the 48-hour rebind without a proof already ends
+ * in when the sweep promotes it.
+ *
+ * Adding versus changing (25 Oct 2026, ~21:30, HackMeridian; the founder: "lets not have
+ * the confirm the last 6 digits of your evm wallet - a lot of hassle. Do we need to have
+ * the stellar wallet confirm? Feels needless."). Adding a rail the account has no address
+ * on yet (C3, C4) takes only the new wallet's own proof when it comes from the dashboard's
+ * session key: no step-up from the other wallet, no type-to-confirm. The proof already
+ * shows control of the destination, the session is a signed-in GitHub session, and
+ * nothing already flowing is redirected — the new rail had no money on it. The accepted
+ * risk: a stolen GitHub session could add a payout address for a rail the creator had not
+ * yet opened. An agent key still sends both for an addition: §14.7 assumes that key
+ * leaks, and the case above rests on a GitHub sign-in it does not have. A `step_up` or
+ * `confirm_address` sent on an addition is still verified, and the write only lands while
+ * the rail is still empty, so an addition can never overwrite an address that appeared
+ * while the request was in flight.
+ *
+ * Changing an address (C5, the 48-hour rebind of either family) is unchanged: step-up
+ * from the wallet bound now, naming the new address, and type-to-confirm. Money already
+ * flowing is what those protect.
  */
 
 import { type NextRequest, NextResponse } from "next/server";
 import { type AuthedCreator, requireCreator } from "@/lib/auth/api-key";
 import { dbAddress, normaliseAddress } from "@/lib/auth/challenge";
 import { enforceLimit } from "@/lib/auth/rate-limit";
-import { confirmsAddress, inspectStellarPayoutAccount, stellarBindPatch } from "@/lib/auth/stellar-binding";
+import { confirmsAddress, inspectStellarPayoutAccount, railBeingAdded, stellarBindPatch } from "@/lib/auth/stellar-binding";
 import { rebindContext, rebindEffectiveAt, requireStepUp } from "@/lib/auth/step-up";
 import { consumeChallenge } from "@/lib/auth/challenge";
 import { db } from "@/lib/db";
@@ -50,7 +66,8 @@ export const PATCH = handle(async (req: NextRequest) => {
 
   const body = UpdateCreatorRequest.parse(await req.json());
 
-  // FR-5: every field on this route is a step-up field. A payout rebind additionally
+  // FR-5: every field on this route is a step-up field, bar opening an empty payout rail
+  // from the dashboard (header, and `proofAlone` below). A payout rebind additionally
   // binds the signature to the incoming address (`rebindContext`): the challenge must
   // have been minted naming it, so a phished generic step-up cannot redirect earnings.
   // The Stellar address is a payout rebind in that sense too: the step-up names the G….
@@ -76,15 +93,23 @@ export const PATCH = handle(async (req: NextRequest) => {
     });
   }
 
+  // 25 Oct 2026 (header): opening an empty rail from the dashboard is the new wallet's
+  // proof alone. Never when an abuse-contact change rides along, which is a step-up field.
+  const adding = railBeingAdded(creator, body);
+  const proofAlone =
+    adding !== null && creator.apiKey.kind === "session" && body.abuse_contact_url === undefined && body.abuse_contact_email === undefined;
+
   // Type-to-confirm comes before any signature is spent: a typo is the cheapest thing to
-  // bounce on, and both nonces stay usable for the retry.
-  if (stellarTo !== null && !confirmsAddress(body.confirm_address, stellarTo)) {
+  // bounce on, and both nonces stay usable for the retry. Optional on a proof-alone
+  // addition, and checked when sent.
+  const confirmDue = !proofAlone || body.confirm_address !== undefined;
+  if (stellarTo !== null && confirmDue && !confirmsAddress(body.confirm_address, stellarTo)) {
     throw new ApiError("invalid_request", {
       message: "confirm_address must be the Stellar address being bound, or its last six characters.",
       details: { field: "confirm_address" },
     });
   }
-  if (addingEvm && !confirmsAddress(body.confirm_address, rebindTo)) {
+  if (addingEvm && confirmDue && !confirmsAddress(body.confirm_address, rebindTo)) {
     throw new ApiError("invalid_request", {
       message: "confirm_address must be the EVM address being added, or its last six characters.",
       details: { field: "confirm_address" },
@@ -92,7 +117,9 @@ export const PATCH = handle(async (req: NextRequest) => {
   }
 
   const stepUpTarget = rebindTo ?? stellarTo;
-  await requireStepUp(creator, body.step_up, stepUpTarget ? rebindContext(stepUpTarget) : null);
+  if (!proofAlone || body.step_up !== undefined) {
+    await requireStepUp(creator, body.step_up, stepUpTarget ? rebindContext(stepUpTarget) : null);
+  }
 
   const now = new Date();
   const effectiveAt = rebindEffectiveAt(now);
@@ -100,9 +127,9 @@ export const PATCH = handle(async (req: NextRequest) => {
   let stellarEffectiveAt: string | null = null;
 
   if (stellarTo !== null) {
-    // JOURNEYS C3 step 3: the new account proves itself. The step-up above proved the
-    // owner; this proves the destination, so a mistyped or pasted-from-elsewhere G… can
-    // never be bound. Purpose `address_proof`, the same as a first bind.
+    // JOURNEYS C3 step 3: the new account proves itself. The step-up above, when one is
+    // due, proved the owner; this proves the destination, so a mistyped or
+    // pasted-from-elsewhere G… can never be bound. Purpose `address_proof`, as a first bind.
     if (!body.stellar_proof) {
       throw new ApiError("payout_address_unverified", {
         message: "stellar_proof is required: a SEP-53 signature from the Stellar account being bound.",
@@ -165,8 +192,18 @@ export const PATCH = handle(async (req: NextRequest) => {
     patch.abuse_contact_effective_at = effectiveAt.toISOString();
   }
 
-  const { data, error } = await db().from("creator").update(patch).eq("id", creator.id).select("*").single();
+  // An addition lands only on a rail that is still empty. Without this, a request that read
+  // the row before another one bound the rail would overwrite that address with no step-up.
+  let write = db().from("creator").update(patch).eq("id", creator.id);
+  if (adding === "stellar") write = write.is("stellar_payout_address", null);
+  if (adding === "evm") write = write.eq("payout_address", creator.payout_address);
+  const { data, error } = await write.select("*").maybeSingle();
   if (error) throw error;
+  if (!data) {
+    throw new ApiError("invalid_request", {
+      message: "That rail got a payout address while this request was being signed, so nothing was changed. Reload the wallet page: changing it now is a 48-hour change, signed off by the wallet bound now.",
+    });
+  }
   const updated = data as CreatorRow;
 
   return NextResponse.json(

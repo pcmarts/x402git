@@ -24,10 +24,17 @@
  * page prints the exact steps, with the issuer to copy, and a Refresh.
  *
  * Once bound, the page is two sections, one per rail, each with its address and one
- * action: add it (live at once, both wallets sign: C3 for Stellar, C4 for EVM) or change
- * it (48 hours, signed by the wallet bound now: C5). A Stellar-only creator who adds an
- * EVM wallet ends up with the EVM address as the identity and the G… as the Stellar
- * payout address, the same row as an EVM creator who added Stellar.
+ * action: add it (live at once: C3 for Stellar, C4 for EVM) or change it (48 hours,
+ * signed off by the wallet bound now and typed to confirm: C5). A Stellar-only creator
+ * who adds an EVM wallet ends up with the EVM address as the identity and the G… as the
+ * Stellar payout address, the same row as an EVM creator who added Stellar.
+ *
+ * Adding is one button since 25 Oct 2026, ~21:30 (HackMeridian; the founder: "lets not
+ * have the confirm the last 6 digits of your evm wallet - a lot of hassle. Do we need to
+ * have the stellar wallet confirm? Feels needless."): connect the new wallet, sign once,
+ * done. The rail had no money on it, so there is nothing for the other wallet to protect;
+ * PATCH /api/creators/me's header has the reasoning and the accepted risk. Changing keeps
+ * the sign-off and the six characters, because money is already flowing there.
  */
 
 import type { Metadata } from "next";
@@ -205,18 +212,17 @@ export default async function WalletPage({
                   ) : (
                     <p className="written measure">Agents paying on {chainName} can&apos;t buy your listings yet. Add an EVM wallet to accept USDC.</p>
                   )}
-                  {rail && !pending ? (
+                  {!pending ? (
                     <details>
                       <summary>
                         <span className="label">Add an EVM wallet</span>
                         <span className="computed">live at once</span>
                       </summary>
                       <p className="written measure">
-                        Your EVM wallet (MetaMask, Coinbase Wallet…) signs for the new address, then Freighter signs off from the Stellar wallet you are paid at now,
-                        then you type the last six characters. Stellar payouts keep going where they go now. From then on, changing either wallet is signed off by
-                        the EVM wallet.
+                        Connect your EVM wallet (MetaMask, Coinbase Wallet…) and sign one message. Stellar payouts keep going where they go now. From then on,
+                        changing either wallet is signed off by the EVM wallet.
                       </p>
-                      <EvmWallet action="/dashboard/wallet/evm" networkPassphrase={rail.passphrase} identity={bound} />
+                      <EvmWallet action="/dashboard/wallet/evm" />
                     </details>
                   ) : null}
                 </>
@@ -289,9 +295,8 @@ export default async function WalletPage({
             </summary>
             <p className="written measure">
               {stellarBound
-                ? `A change takes ${REBIND_DELAY_HOURS} hours to land, and Stellar payouts keep going to the current wallet until then.`
-                : "Adding a second wallet is live at once: both wallets sign, and nothing already bound moves."}{" "}
-              Freighter signs for the new wallet, then the wallet you are paid at now signs off, then you type the last six characters.
+                ? `A change takes ${REBIND_DELAY_HOURS} hours to land, and Stellar payouts keep going to the current wallet until then. Freighter signs for the new wallet, then the wallet you are paid at now signs off, then you type the last six characters.`
+                : "Connect Freighter and sign one message. It is live at once, and nothing already bound moves."}{" "}
               The new wallet must already allow {rail.asset.code}; if it does not, you will be told exactly what to add in Freighter.
             </p>
             <StellarWallet

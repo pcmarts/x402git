@@ -1,6 +1,7 @@
 /**
  * Binding a Stellar payout address (JOURNEYS C2–C5, BUILD W2 tests 6, 7, 8, 9, 11): the
- * Horizon trustline gate, the addition-now / change-in-48h rule, and type-to-confirm.
+ * Horizon trustline gate, the addition-now / change-in-48h rule, type-to-confirm, and
+ * which requests open an empty rail (the 25 Oct 2026 one-signature addition).
  */
 
 import { Keypair } from "@stellar/stellar-sdk";
@@ -8,7 +9,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { StellarRail } from "@/lib/env";
 import { STELLAR_CONTRACT_PAYER } from "@/lib/test/stellar";
 import { REBIND_DELAY_HOURS } from "./step-up";
-import { confirmsAddress, currentStellarPayoutAddress, inspectStellarPayoutAccount, stellarBindPatch, stellarBindReason, trustlineCopy } from "./stellar-binding";
+import { confirmsAddress, currentStellarPayoutAddress, inspectStellarPayoutAccount, railBeingAdded, stellarBindPatch, stellarBindReason, trustlineCopy } from "./stellar-binding";
 
 const G = Keypair.random().publicKey();
 const G2 = Keypair.random().publicKey();
@@ -162,5 +163,31 @@ describe("confirmsAddress (type-to-confirm, test 8)", () => {
     expect(confirmsAddress("", G)).toBe(false);
     expect(confirmsAddress(undefined, G)).toBe(false);
     expect(confirmsAddress(G2, G)).toBe(false);
+  });
+});
+
+describe("railBeingAdded (25 Oct 2026: an empty rail opens on the new wallet's proof alone)", () => {
+  const proof = { nonce: "n", signature: "s" };
+
+  it("is `stellar` for a Stellar address on an EVM account with none (C3)", () => {
+    expect(railBeingAdded({ payout_address: EVM, stellar_payout_address: null }, { stellar_payout_address: G })).toBe("stellar");
+  });
+
+  it("is null for a Stellar address when one is bound, or when the identity is itself a G… (C5: a change)", () => {
+    expect(railBeingAdded({ payout_address: EVM, stellar_payout_address: G2 }, { stellar_payout_address: G })).toBeNull();
+    expect(railBeingAdded({ payout_address: G2, stellar_payout_address: null }, { stellar_payout_address: G })).toBeNull();
+  });
+
+  it("is `evm` for an EVM address with its own proof on a Stellar-only account (C4)", () => {
+    expect(railBeingAdded({ payout_address: G, stellar_payout_address: G }, { payout_address: EVM, payout_proof: proof })).toBe("evm");
+  });
+
+  it("is null for the EVM rebind: no proof, or an account already paid at an EVM address", () => {
+    expect(railBeingAdded({ payout_address: G, stellar_payout_address: G }, { payout_address: EVM })).toBeNull();
+    expect(railBeingAdded({ payout_address: EVM, stellar_payout_address: null }, { payout_address: "0x3333333333333333333333333333333333333333", payout_proof: proof })).toBeNull();
+  });
+
+  it("is null when no payout address is in the request", () => {
+    expect(railBeingAdded({ payout_address: EVM, stellar_payout_address: null }, {})).toBeNull();
   });
 });
