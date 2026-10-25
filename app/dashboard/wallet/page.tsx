@@ -1,5 +1,5 @@
 /**
- * GET /dashboard/wallet — bind or change the payout address (FR-1, FR-5, FR-26).
+ * GET /dashboard/wallet — bind or change the payout wallets (FR-1, FR-5, FR-26).
  *
  * This page is where a GitHub identity becomes a creator. `creator.payout_address` is
  * NOT NULL and every payout goes to it with no `to` parameter anywhere, so the row is
@@ -12,43 +12,40 @@
  *   1. POST the address → the server mints a nonce and re-renders with the exact bytes.
  *   2. Sign those bytes in a wallet, paste the signature, POST it back.
  *
- * With JavaScript on and a browser wallet, it is one button (`BindWallet`): connect,
- * fetch the challenge, sign, POST — the same three fields as the manual path, which
- * stays underneath for anyone binding a hardware or remote wallet by hand.
+ * With JavaScript on and a browser wallet, it is one button (`BindWallet`, `StellarWallet`):
+ * connect, fetch the challenge, sign, POST — the same three fields as the manual path,
+ * which stays underneath for anyone binding a hardware or remote wallet by hand.
  *
- * Two kinds of wallet since 25 Oct 2026 (HACKMERIDIAN-JOURNEYS rule 1): one EVM address
- * for being paid on Base, one Stellar account for being paid on Stellar, and a creator
- * needs one, not both. A Stellar account is bound from Freighter (`StellarWallet`) with
- * the same challenge, signed as SEP-53. The one Stellar-only step is the trustline (C2
- * step 3): until the account has allowed the asset in Freighter, Horizon says so and this
- * page prints the exact steps, with the issuer to copy, and a Refresh.
+ * Two wallets since 25 Oct 2026 (HACKMERIDIAN-JOURNEYS rule 1): one EVM address, paid on
+ * every EVM rail this deployment runs (USDC on Base, USDT0 on Arbitrum), and one Stellar
+ * account, paid in USDT0 on Stellar. A creator needs one, not both. The one Stellar-only
+ * step is the trustline (C2 step 3): until the account has allowed the asset, Horizon says
+ * so and this page prints the exact steps, with the issuer to copy, and a Refresh.
  *
- * Once bound, the page is two sections, one per rail, each with its address and one
- * action: add it (live at once: C3 for Stellar, C4 for EVM) or change it (signed off by the
- * wallet bound now: C5; at once since 25 Oct 2026 23:30 unless the deployment runs a rebind delay). A Stellar-only creator
- * who adds an EVM wallet ends up with the EVM address as the identity and the G… as the
- * Stellar payout address, the same row as an EVM creator who added Stellar.
- *
- * Adding is one button since 25 Oct 2026, ~21:30 (HackMeridian; the founder: "lets not
- * have the confirm the last 6 digits of your evm wallet - a lot of hassle. Do we need to
- * have the stellar wallet confirm? Feels needless."): connect the new wallet, sign once,
- * done. The rail had no money on it, so there is nothing for the other wallet to protect;
- * PATCH /api/creators/me's header has the reasoning and the accepted risk. Changing keeps
- * the sign-off, because money is already flowing there; the typed characters and the 48-hour
- * wait went at 23:30 the same evening (founder: "drop that requirement"; "make it instant").
+ * Laid out by rail since 25 Oct 2026, 23:50 (founder: "show USDT0 Arb and USDC Base and
+ * then USDT0 on Stellar, use the icons too, clean up the whole page, less text"). Two
+ * sections, one per wallet, each a list of the rails it is paid on — the chip and the
+ * address — and one closed disclosure holding its one action: add it (one signature,
+ * live at once) or change it (the new wallet signs, the wallet bound now signs off, at
+ * once unless the deployment runs a rebind delay; nothing typed). The rails come from
+ * `payoutRailsFor`, the same function the 402 and the listing page read, so this page
+ * can never name a rail a buyer would not be offered.
  */
 
 import type { Metadata } from "next";
 import { BindWallet, EvmWallet, StellarWallet } from "@/app/_components/bind-wallet";
 import { CopyButton } from "@/app/_components/copy-button";
 import { Notice } from "@/app/_components/notice";
+import { RailChip } from "@/app/_components/rail-marks";
+import { shortAddress } from "@/app/dashboard/[id]/where-you-get-paid";
 import { currentStellarPayoutAddress, inspectStellarPayoutAccount, stellarBindReason } from "@/lib/auth/stellar-binding";
+import { type PayoutRail, payoutRailsFor } from "@/lib/core/access";
 import { type StellarRail, paymentChain, stellarRail } from "@/lib/env";
 import { ApiError } from "@/lib/errors";
 import { currentCreator, currentSession, signInPath } from "@/lib/web/current";
 import { challengeByNonce } from "@/lib/web/loaders";
 import { formatDateTime } from "@/lib/web/manifest-view";
-import { chainInfo, explorerAddressUrl } from "@/lib/web/wallet-checkout";
+import { explorerAddressUrl } from "@/lib/web/wallet-checkout";
 import { addressFamily } from "@/lib/x402/stellar";
 import { redirect } from "next/navigation";
 
@@ -69,11 +66,12 @@ export default async function WalletPage({
 
   const challenge = nonce ? await challengeByNonce(nonce) : null;
   const bound = current?.creator.payout_address ?? null;
-  const pending = current?.creator.pending_payout_address ?? null;
   const boundFamily = bound ? addressFamily(bound) : null;
+  const evmBound = boundFamily === "evm" ? bound : null;
+  const pending = current?.creator.pending_payout_address ?? null;
 
   // `stellarRail()` throws on a misconfigured deployment; this page is not the place to
-  // surface that, so a broken rail reads as "not offered here" and the Base half still works.
+  // surface that, so a broken rail reads as "not offered here" and the EVM half still works.
   let rail: StellarRail | null = null;
   try {
     rail = stellarRail();
@@ -83,22 +81,39 @@ export default async function WalletPage({
   const stellarBound = current ? currentStellarPayoutAddress(current.creator) : null;
   const stellarPending = current?.creator.pending_stellar_payout_address ?? null;
 
+  // The rails this deployment pays on, each with where it pays this creator (null before a bind).
+  const rails = payoutRailsFor(current?.creator ?? { payout_address: "", stellar_payout_address: null });
+  const evmRails = rails.filter((r) => r.family === "evm");
+  const stellarRails = rails.filter((r) => r.family === "stellar");
+
   // The Refresh on the trustline steps (C2 step 3): read Horizon again for that account.
   const trustlineCheck = rail && trustline && refresh === "1" ? await checkTrustline(trustline) : null;
 
   const chain = paymentChain();
-  const chainName = chainInfo(chain.chainId).name;
   const addressLink = (value: string) => {
     const family = addressFamily(value);
     const url = family === "stellar" && rail ? stellarExplorerUrl(rail.network, value) : family === "evm" ? explorerAddressUrl(chain.chainId, value) : null;
     return url ? (
-      <a href={url} rel="noopener noreferrer" target="_blank" className="computed">
-        {value}
+      <a href={url} rel="noopener noreferrer" target="_blank" className="computed" title={value}>
+        {shortAddress(value)}
       </a>
     ) : (
-      <span className="computed">{value}</span>
+      <span className="computed" title={value}>
+        {shortAddress(value)}
+      </span>
     );
   };
+
+  /** One line per rail: the chip, then where it pays, or that it does not yet. */
+  const railLines = (list: PayoutRail[], at: string | null) => (
+    <ul className="facts">
+      {list.map((r) => (
+        <li key={r.network} data-network={r.network}>
+          <RailChip network={r.network} symbol={r.symbol} /> {at ? addressLink(at) : <span className="muted">not yet</span>}
+        </li>
+      ))}
+    </ul>
+  );
 
   return (
     <main>
@@ -107,29 +122,16 @@ export default async function WalletPage({
 
       {rail && trustline ? <TrustlineSteps address={trustline} asset={rail.asset} check={trustlineCheck} /> : null}
 
-      {bound ? (
-        <p className="written measure">
-          Each sale is paid out on the rail it was bought on, to the wallet below for that rail. The ledger is on <a href="/dashboard/earnings">Earnings</a>.
-        </p>
-      ) : (
-        <p className="written measure">
-          Signed in as <span className="computed">{session.github.login}</span>. One thing is missing before you have an account: an
-          address to be paid at. Every payout goes to the address bound here and there is no parameter anywhere for sending one
-          somewhere else, so it has to be an address you can sign from — an exchange deposit address will not work.
-        </p>
-      )}
-
       {challenge && address ? (
         <section>
           <h2>Sign this</h2>
           <p className="written measure">
-            Sign these exact bytes with the wallet holding <span className="computed">{address}</span>, then paste the signature below.
-            The challenge is single use and expires at <span className="computed">{formatDateTime(challenge.expires_at)}</span>.
+            Sign these exact bytes with the wallet holding <span className="computed">{address}</span>, then paste the signature below. Single use;
+            expires <span className="computed">{formatDateTime(challenge.expires_at)}</span>.
           </p>
           {queued ? (
             <p className="written measure">
-              You are signing from the address bound now, to authorise payouts moving to <span className="computed">{queued}</span>. An API key alone
-              cannot do this.
+              You are signing from the wallet bound now, to move payouts to <span className="computed">{queued}</span>. An API key alone cannot do this.
             </p>
           ) : null}
           <form method="post" action={bound ? "/dashboard/wallet/rebind" : "/dashboard/wallet/bind"} id="sign-form">
@@ -158,8 +160,8 @@ export default async function WalletPage({
               />
               <small id="signature-help">
                 {addressFamily(address) === "stellar"
-                  ? "A SEP-53 signature over the message above from that Stellar account, base64-encoded (your wallet's signMessage, or the x402git-stellar CLI)."
-                  : "An EIP-191 personal_sign signature over the message above, from that address."}
+                  ? "SEP-53, base64 (your wallet's signMessage, or the x402git-stellar CLI)."
+                  : "EIP-191 personal_sign, from that address."}
               </small>
             </div>
             {addressFamily(address) === "evm" ? <BindWallet mode="sign" address={address} message={challenge.message} signatureFieldId="signature" /> : null}
@@ -169,153 +171,127 @@ export default async function WalletPage({
             </p>
           </form>
         </section>
-      ) : (
-        <section>
-          {bound ? (
-            <>
-              <h2>EVM wallet, paid on {chainName}</h2>
-              {boundFamily === "evm" ? (
-                <>
-                  <dl>
-                    <dt>Paid in USDC at</dt>
-                    <dd className="wrap">{addressLink(bound)}</dd>
-                    {pending ? (
-                      <>
-                        <dt>Pending</dt>
-                        <dd className="wrap" data-status="warn">
-                          {addressLink(pending)} — effective {formatDateTime(current?.creator.rebind_effective_at)}
-                        </dd>
-                      </>
-                    ) : null}
-                  </dl>
-                  <details>
-                    <summary>
-                      <span className="label">Change the EVM wallet</span>
-                      <span className="computed">signed by your current wallet</span>
-                    </summary>
-                    <p className="written measure">
-                      Pick the new account in your wallet and sign; then the account you are paid at now signs off. Payouts on {chainName} go to the new wallet from
-                      then on.
-                    </p>
-                    <EvmWallet action="/dashboard/wallet/evm" change={{ identity: bound }} />
-                    <details>
-                      <summary>
-                        <span className="label">Change by hand</span>
-                      </summary>
-                      <AddressForm bound={bound} />
-                    </details>
-                  </details>
-                </>
-              ) : (
-                <>
-                  {pending ? (
-                    <dl>
-                      <dt>Pending</dt>
-                      <dd className="wrap" data-status="warn">
-                        {addressLink(pending)} — effective {formatDateTime(current?.creator.rebind_effective_at)}
-                      </dd>
-                    </dl>
-                  ) : (
-                    <p className="written measure">Agents paying on {chainName} can&apos;t buy your listings yet. Add an EVM wallet to accept USDC.</p>
-                  )}
-                  {!pending ? (
-                    <details>
-                      <summary>
-                        <span className="label">Add an EVM wallet</span>
-                        <span className="computed">live at once</span>
-                      </summary>
-                      <p className="written measure">
-                        Connect your EVM wallet (MetaMask, Coinbase Wallet…) and sign one message. Stellar payouts keep going where they go now. From then on,
-                        changing either wallet is signed off by the EVM wallet.
-                      </p>
-                      <EvmWallet action="/dashboard/wallet/evm" />
-                    </details>
-                  ) : null}
-                </>
-              )}
-            </>
-          ) : (
-            <>
-              <h2>Bind a payout address</h2>
-              <p className="written measure">
-                Connect the wallet you want to be paid at and sign one message. That is the whole thing.
+      ) : bound ? (
+        <>
+          <p className="written measure">
+            Each sale pays out on the rail it was bought on. The ledger is on <a href="/dashboard/earnings">Earnings</a>.
+          </p>
+
+          <section aria-labelledby="evm-wallet">
+            <h2 id="evm-wallet">EVM wallet</h2>
+            {railLines(evmRails, evmBound)}
+            {pending ? (
+              <p className="written" data-status="warn">
+                <small>
+                  Moving to {addressLink(pending)} on {formatDateTime(current?.creator.rebind_effective_at)}
+                </small>
               </p>
-              <h3>EVM wallet, paid on {chainName}</h3>
-              <BindWallet mode="bind" action="/dashboard/wallet/bind" />
-              {rail ? (
-                <>
-                  <h3>Stellar wallet, paid on Stellar</h3>
-                  <p className="written measure">
-                    Freighter, Hana, HOT, xBull, Lobstr and more. Paid in {rail.asset.code}. Your wallet has to allow {rail.asset.code} first; if it does not yet,
-                    the next step tells you exactly what to add.
-                  </p>
-                  <StellarWallet mode="bind" action="/dashboard/wallet/bind" networkPassphrase={rail.passphrase} />
-                </>
+            ) : null}
+            {evmBound ? (
+              <details>
+                <summary>
+                  <span className="label">Change the EVM wallet</span>
+                </summary>
+                <p className="written measure">
+                  <small className="muted">Pick the new account in your wallet and sign; then the account you are paid at now signs off.</small>
+                </p>
+                <EvmWallet action="/dashboard/wallet/evm" change={{ identity: evmBound }} />
+                <details>
+                  <summary>
+                    <span className="label">Change by hand</span>
+                  </summary>
+                  <AddressForm bound={evmBound} />
+                </details>
+              </details>
+            ) : !pending ? (
+              <details>
+                <summary>
+                  <span className="label">Add an EVM wallet</span>
+                  <span className="computed">live at once</span>
+                </summary>
+                <p className="written measure">
+                  <small className="muted">MetaMask, Coinbase Wallet… Connect and sign once.</small>
+                </p>
+                <EvmWallet action="/dashboard/wallet/evm" />
+              </details>
+            ) : null}
+          </section>
+
+          {rail && boundFamily ? (
+            <section aria-labelledby="stellar-wallet">
+              <h2 id="stellar-wallet">Stellar wallet</h2>
+              {railLines(stellarRails, stellarBound)}
+              {stellarBound && current?.creator.stellar_payout_verified_at ? (
+                <p className="written">
+                  <small className="muted">
+                    {rail.asset.code} allowed · checked {formatDateTime(current.creator.stellar_payout_verified_at)}
+                  </small>
+                </p>
+              ) : null}
+              {stellarPending ? (
+                <p className="written" data-status="warn">
+                  <small>
+                    Moving to {addressLink(stellarPending)} on {formatDateTime(current?.creator.stellar_rebind_effective_at)}
+                  </small>
+                </p>
               ) : null}
               <details>
                 <summary>
-                  <span className="label">No browser wallet? Bind by hand</span>
+                  <span className="label">{stellarBound ? "Change the Stellar wallet" : "Add a Stellar wallet"}</span>
+                  {stellarBound ? null : <span className="computed">live at once</span>}
                 </summary>
-                <AddressForm bound={bound} />
+                <p className="written measure">
+                  <small className="muted">
+                    {stellarBound
+                      ? "Connect the new wallet and sign; then the wallet you are paid at now signs off."
+                      : "Freighter, Hana, HOT, xBull, Lobstr… Connect and sign once."}{" "}
+                    The wallet must allow {rail.asset.code}; if it does not, you will be told what to add.
+                  </small>
+                </p>
+                <StellarWallet
+                  mode="add"
+                  action="/dashboard/wallet/stellar"
+                  networkPassphrase={rail.passphrase}
+                  identity={bound}
+                  identityFamily={boundFamily}
+                  change={stellarBound !== null}
+                />
               </details>
-            </>
-          )}
-        </section>
-      )}
+            </section>
+          ) : null}
+        </>
+      ) : (
+        <>
+          <p className="written measure">
+            Connect the wallet you want to be paid at and sign one message. It has to be a wallet you can sign from, not an exchange deposit
+            address.
+          </p>
 
-      {bound && rail && boundFamily ? (
-        <section>
-          <h2>Stellar wallet</h2>
-          {stellarBound ? (
-            <dl>
-              <dt>Paid on Stellar at</dt>
-              <dd className="wrap">
-                {addressLink(stellarBound)} <span className="muted">in {rail.asset.code}</span>
-              </dd>
-              {current?.creator.stellar_payout_verified_at ? (
-                <>
-                  <dt>Allowed in the wallet</dt>
-                  <dd>
-                    {rail.asset.code} confirmed {formatDateTime(current.creator.stellar_payout_verified_at)}
-                  </dd>
-                </>
-              ) : null}
-              {stellarPending ? (
-                <>
-                  <dt>Pending</dt>
-                  <dd className="wrap" data-status="warn">
-                    {addressLink(stellarPending)} — effective {formatDateTime(current?.creator.stellar_rebind_effective_at)}
-                  </dd>
-                </>
-              ) : null}
-            </dl>
-          ) : (
-            <p className="written measure">
-              Agents paying on Stellar can&apos;t buy your listings yet. Add a Stellar wallet to accept {rail.asset.code}.
-            </p>
-          )}
+          <section aria-labelledby="evm-wallet">
+            <h2 id="evm-wallet">EVM wallet</h2>
+            {railLines(evmRails, null)}
+            <BindWallet mode="bind" action="/dashboard/wallet/bind" />
+          </section>
+
+          {rail ? (
+            <section aria-labelledby="stellar-wallet">
+              <h2 id="stellar-wallet">Stellar wallet</h2>
+              {railLines(stellarRails, null)}
+              <p className="written measure">
+                <small className="muted">The wallet must allow {rail.asset.code}; if it does not yet, the next step tells you what to add.</small>
+              </p>
+              <StellarWallet mode="bind" action="/dashboard/wallet/bind" networkPassphrase={rail.passphrase} />
+            </section>
+          ) : null}
+
           <details>
             <summary>
-              <span className="label">{stellarBound ? "Change the Stellar wallet" : "Add a Stellar wallet"}</span>
-              <span className="computed">{stellarBound ? "signed by your current wallet" : "live at once"}</span>
+              <span className="label">No browser wallet? Bind by hand</span>
             </summary>
-            <p className="written measure">
-              {stellarBound
-                ? "Connect the new Stellar wallet and sign; then the wallet you are paid at now signs off. Stellar payouts go to the new wallet from then on."
-                : "Connect a Stellar wallet and sign one message. It is live at once, and nothing already bound moves."}{" "}
-              The new wallet must already allow {rail.asset.code}; if it does not, you will be told exactly what to add.
-            </p>
-            <StellarWallet
-              mode="add"
-              action="/dashboard/wallet/stellar"
-              networkPassphrase={rail.passphrase}
-              identity={bound}
-              identityFamily={boundFamily}
-              change={stellarBound !== null}
-            />
+            <AddressForm bound={null} />
           </details>
-        </section>
-      ) : null}
+        </>
+      )}
     </main>
   );
 }
@@ -414,8 +390,8 @@ function AddressForm({ bound }: { bound: string | null }) {
         />
         <small>
           {bound
-            ? "Where payouts on Base should go from now on. The next step asks the address bound now to sign off on the change."
-            : "An EVM address paid on Base, or a Stellar account (G…) paid on Stellar, that you can sign from. The next step gives you a challenge to sign, which is how we know it is yours."}
+            ? "Where EVM payouts go from now on. The next step asks the wallet bound now to sign off."
+            : "An EVM address (0x…) or a Stellar account (G…) you can sign from. The next step is a challenge to sign."}
         </small>
       </div>
       <p className="actions">
