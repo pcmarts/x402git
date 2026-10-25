@@ -458,7 +458,8 @@ registerRoute({
   method: "get",
   path: "/api/earnings",
   summary: "The ledger view",
-  description: "FR-29. Sale rows carry version, kind, amount and time — never the buyer address, never the transaction hash (FR-40).",
+  description:
+    "FR-29. Sale rows carry version, kind, amount and time — never the buyer address, never the transaction hash (FR-40) — and the rail they settled on: `network` (CAIP-2) and `asset_symbol` (`USDC`, `USDT0`). `by_rail` splits the totals the same way, one entry per network and token: each sale is paid out on the network and in the token it was paid in, so that is where it lands.",
   auth: "apiKey",
   params: [cursor],
   response: EarningsResponse,
@@ -469,7 +470,8 @@ registerRoute({
   method: "post",
   path: "/api/payouts/sweep",
   summary: "Force a sweep of the released balance",
-  description: "FR-26. Payouts go only to the bound payout address; there is no `to` parameter. Normally the daily cron does this and you never call it.",
+  description:
+    "FR-26. Payouts go only to the bound payout address; there is no `to` parameter. Normally the daily cron does this and you never call it. Without `?network=` every EVM rail is swept (Base USDC, Arbitrum USDT0, …), each in the token its sales were paid in; `?network=eip155:<chainId>` sweeps one EVM rail and `?network=stellar:pubnet` (or `stellar:testnet`) the Stellar one. The body is the first rail's sweep; `rails` beside it lists every rail swept with its `network`, `asset_symbol` and, when nothing moved, `skipped` (`nothing_to_sweep`, `no_gas_float`, `payout_in_flight`, …).",
   auth: "apiKey",
   response: SweepResponse,
   errors: ["invalid_key", "sanctioned_counterparty", "rate_limited"],
@@ -497,7 +499,8 @@ registerRoute({
   method: "get",
   path: "/api/cron/sweep",
   summary: "Daily sweep",
-  description: "FR-26 / FR-28. Vercel Cron.",
+  description:
+    "FR-26 / FR-28. Vercel Cron. Every creator with a released balance, on every EVM rail, from the one sweep wallet; `?network=eip155:<chainId>` runs one rail. A rail whose sweep wallet holds no native gas is skipped (`no_gas_float`) before any payout row is written.",
   tags: ["internal"],
   responses: [{ status: 200, description: "Swept" }],
 });

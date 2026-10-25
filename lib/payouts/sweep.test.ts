@@ -109,9 +109,10 @@ describe("sweepCreator (FR-26, FR-28)", () => {
       tx_hash: null,
       status: "broadcast",
       created_at: new Date().toISOString(),
-      // The in-flight guard is per creator *per chain* (20260906010000): a row without
-      // this chain's id is another network's problem and must not block here.
+      // The in-flight guard is per creator *per rail* (20260906010000, 20261025090100): a
+      // row without this rail's network is another rail's problem and must not block here.
       chain_id: 84532,
+      network: "eip155:84532",
     });
 
     const result = await sweepCreator(creator(), { broadcast: async () => "0xabc", confirm: async () => ({ status: "success" }) });

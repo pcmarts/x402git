@@ -17,6 +17,24 @@
  *
  * If the process dies between 3 and 5 the row is `pending`, rule 2 blocks the creator,
  * and a human reconciles — which is the failure we want, rather than a second transfer.
+ *
+ * **One sweep per EVM rail** (25 Oct 2026, HackMeridian W6b;
+ * docs/HACKMERIDIAN-EVM-USDT0-RAIL.md §2 item 4). A deployment may now be paid on several
+ * EVM rails — Base USDC first, Arbitrum USDT0 beside it — and a sale is paid out on the
+ * chain and in the token it was paid in, never converted and never bridged. Every rail is
+ * its own ledger: its own sweep set (`network`, `asset`), its own in-flight guard (the
+ * `payout_one_in_flight_per_creator_network` index), its own RPC and chain check. The
+ * signer is not per rail: one EOA, the same address on every chain, pays them all.
+ * `sweepCreator` sweeps one rail (the primary when none is named) and keeps the shape every
+ * caller already had; `sweepCreatorRails` walks them all and returns one result per rail.
+ *
+ * **No gas, no row** (same day). Before a rail broadcasts, the sweep EOA's native balance
+ * on that chain is read, and zero skips the rail as `no_gas_float` before anything is
+ * written. Without it, a rail added before its float was funded fails `writeContract` at
+ * gas estimation, the broadcast catch below reads that as indeterminate, and every creator
+ * with a balance on that rail is left blocked behind a `pending` row a human must clear.
+ * Skipping costs nothing: the purchases stay unswept and the first run after the float
+ * arrives pays them.
  */
 
 import { createHash } from "node:crypto";
@@ -25,13 +43,13 @@ import { privateKeyToAccount } from "viem/accounts";
 import { db } from "@/lib/db";
 import type { CreatorRow, PayoutRow } from "@/lib/db/types";
 import { fromMicro, toMicro } from "@/lib/db/types";
-import { paymentChain, rpcUrl, sweepPrivateKey, x402Config } from "@/lib/env";
+import { type EvmRail, evmChains, sweepPrivateKey } from "@/lib/env";
 import { assertRpcServesChain } from "@/lib/chain";
 import { isPaused } from "@/lib/ops/switches";
 import { record } from "@/lib/events";
 import { screen } from "@/lib/screening";
 import { addressFamily } from "@/lib/x402/stellar";
-import { creatorListings, sweepablePurchases } from "./ledger";
+import { creatorListings, sweepablePurchasesOn } from "./ledger";
 
 export type SweepSkip =
   | "sanctioned"
@@ -40,10 +58,17 @@ export type SweepSkip =
   | "nothing_to_sweep"
   | "no_sweep_signer"
   | "no_evm_payout_address"
-  | "paused";
+  | "paused"
+  /** The sweep EOA holds no native gas on this rail's chain (25 Oct 2026). Nothing is written. */
+  | "no_gas_float";
 
 export type SweepResult = {
   creatorId: string;
+  /** The rail this result is about (25 Oct 2026): CAIP-2, EVM chain id, token contract, token symbol. */
+  network: string;
+  chainId: number;
+  asset: string;
+  symbol: string;
   payoutId: string | null;
   amountMicro: bigint;
   gasMicro: bigint;
@@ -52,12 +77,14 @@ export type SweepResult = {
   txHash: string | null;
   purchasesSwept: number;
   skipped?: SweepSkip;
+  /** `sweepCreatorRails` only: this rail threw, and the rails after it still ran. */
+  error?: string;
 };
 
 /**
- * V0 records gas as 0. Gas on Base is paid in ETH by the sweep wallet, and converting
- * it to micro-USDC needs a price oracle the PRD does not have (§11, "deliberately not
- * in V0"). The column exists, FR-26 promises the field on `GET /api/earnings`, and it
+ * V0 records gas as 0. Gas is paid in ETH by the sweep wallet, on Base and on Arbitrum
+ * alike, and converting it to micro-USDC needs a price oracle the PRD does not have (§11,
+ * "deliberately not in V0"). The column exists, FR-26 promises the field on `GET /api/earnings`, and it
  * reports 0 until there is an oracle. Documented rather than guessed.
  */
 export const GAS_MICRO_V0 = 0n;
@@ -67,13 +94,66 @@ const RECEIPT_TIMEOUT_MS = 60_000;
 
 export type SweepOptions = {
   now?: Date;
-  /** Test seam: broadcast the USDC transfer and return its hash. */
-  broadcast?: (args: { to: `0x${string}`; amountMicro: bigint }) => Promise<`0x${string}`>;
+  /**
+   * The EVM rail to sweep. Absent: the primary rail for `sweepCreator`, every rail for
+   * `sweepCreatorRails`. Only `payTo` is ignored — money leaves from the sweep EOA, not
+   * from the receiving address — so `evmChains()` entries serve as well as `evmRails()`.
+   */
+  rail?: EvmRail;
+  /** Test seam: broadcast the token transfer on `rail` and return its hash. */
+  broadcast?: (args: { to: `0x${string}`; amountMicro: bigint; rail: EvmRail }) => Promise<`0x${string}`>;
   /** Test seam: wait for the receipt of a broadcast transfer. */
-  confirm?: (txHash: `0x${string}`) => Promise<{ status: "success" | "reverted" }>;
+  confirm?: (txHash: `0x${string}`, rail: EvmRail) => Promise<{ status: "success" | "reverted" }>;
+  /** Test seam: the sweep EOA's native balance on `rail`'s chain, in wei. */
+  nativeBalance?: (rail: EvmRail) => Promise<bigint>;
 };
 
+/**
+ * The primary EVM rail, from `X402_NETWORK`. `evmChains()` rather than `evmRails()`: the
+ * sweep never reads the receiving address, and a deployment without one must still be
+ * able to say it has nothing to sweep.
+ */
+function primaryRail(): EvmRail {
+  return evmChains()[0];
+}
+
+/**
+ * Every EVM rail, one result each, in `evmChains()` order (primary first). Sequential on
+ * purpose: a rebind promoted by the first rail's `payoutAddressFor` is what the second
+ * rail pays, and the event log reads in the order money moved. A rail that throws — its
+ * RPC down, or serving the wrong chain — is reported as `error` on its own result and the
+ * next rail still runs: a broken Arbitrum endpoint must not hold up Base payouts.
+ */
+export async function sweepCreatorRails(creator: CreatorRow, options: SweepOptions = {}): Promise<SweepResult[]> {
+  const rails = options.rail ? [options.rail] : evmChains();
+  const results: SweepResult[] = [];
+  for (const rail of rails) {
+    try {
+      results.push(await sweepCreator(creator, { ...options, rail }));
+    } catch (e) {
+      results.push({
+        ...railFields(rail),
+        creatorId: creator.id,
+        payoutId: null,
+        amountMicro: 0n,
+        gasMicro: GAS_MICRO_V0,
+        toAddress: creator.payout_address,
+        status: null,
+        txHash: null,
+        purchasesSwept: 0,
+        error: e instanceof Error ? e.message : String(e),
+      });
+    }
+  }
+  return results;
+}
+
+function railFields(rail: EvmRail): Pick<SweepResult, "network" | "chainId" | "asset" | "symbol"> {
+  return { network: rail.network, chainId: rail.chainId, asset: rail.asset, symbol: rail.symbol };
+}
+
 export async function sweepCreator(creator: CreatorRow, options: SweepOptions = {}): Promise<SweepResult> {
+  const rail = options.rail ?? primaryRail();
   const now = options.now ?? new Date();
   // FR-5 / §7.6: a rebind takes effect 48h after it was signed, and sweeps continue to
   // the old address until then. Nothing else in the system promotes the pending
@@ -81,6 +161,7 @@ export async function sweepCreator(creator: CreatorRow, options: SweepOptions = 
   // first sweep after `rebind_effective_at`.
   const toAddress = await payoutAddressFor(creator, now);
   const empty: SweepResult = {
+    ...railFields(rail),
     creatorId: creator.id,
     payoutId: null,
     amountMicro: 0n,
@@ -97,7 +178,7 @@ export async function sweepCreator(creator: CreatorRow, options: SweepOptions = 
   //    Nothing is written: the purchases stay unswept and the next unpaused run takes
   //    them, which is the same path a creator with no released balance already follows.
   if (await isPaused("sweeps")) {
-    await record({ name: "sweep_skipped", props: { creator_id: creator.id, reason: "paused" } });
+    await record({ name: "sweep_skipped", network: rail.network, props: { creator_id: creator.id, reason: "paused" } });
     return { ...empty, skipped: "paused" };
   }
 
@@ -108,7 +189,7 @@ export async function sweepCreator(creator: CreatorRow, options: SweepOptions = 
   //     would fail the payout CHECK, and before the CHECK it would have reached
   //     `writeContract` and stuck.
   if (addressFamily(toAddress) !== "evm") {
-    await record({ name: "sweep_skipped", props: { creator_id: creator.id, reason: "no_evm_payout_address" } });
+    await record({ name: "sweep_skipped", network: rail.network, props: { creator_id: creator.id, reason: "no_evm_payout_address" } });
     return { ...empty, skipped: "no_evm_payout_address" };
   }
 
@@ -121,34 +202,53 @@ export async function sweepCreator(creator: CreatorRow, options: SweepOptions = 
   //     `broadcast` never touches the configured RPC, and a deployment with no signer
   //     (§14.8) stops before it would. In both cases asking the RPC which chain it
   //     serves is a network call to answer a question that does not arise.
+  //
+  //     Per rail since 25 Oct 2026: the Arbitrum RPC is asked about Arbitrum.
   if (!options.broadcast && sweepPrivateKey()) {
-    await assertRpcServesChain(publicClient(), x402Config().chainId, "sweep");
+    await assertRpcServesChain(railClient(rail), rail.chainId, `sweep ${rail.network}`);
   }
 
   // 1. FR-38: screen before every sweep. A hit freezes and raises a ticket; it never pays.
   const screening = await screen(toAddress, "sweep");
   if (screening.hit) {
-    await record({ name: "sweep_skipped", props: { creator_id: creator.id, reason: "sanctioned", frozen: true } });
+    await record({ name: "sweep_skipped", network: rail.network, props: { creator_id: creator.id, reason: "sanctioned", frozen: true } });
     return { ...empty, skipped: "sanctioned" };
   }
 
-  // 2. FR-28: a non-confirmed payout row blocks further sweeps for that creator.
-  const inFlight = await inFlightPayout(creator.id);
+  // 2. FR-28: a non-confirmed payout row blocks further sweeps for that creator, on this rail.
+  const inFlight = await inFlightPayout(creator.id, rail);
   if (inFlight) {
-    await record({ name: "sweep_skipped", props: { creator_id: creator.id, reason: "payout_in_flight", payout_id: inFlight.id } });
+    await record({ name: "sweep_skipped", network: rail.network, props: { creator_id: creator.id, reason: "payout_in_flight", payout_id: inFlight.id } });
     return { ...empty, payoutId: inFlight.id, status: inFlight.status, txHash: inFlight.tx_hash, skipped: "payout_in_flight" };
   }
 
-  // 3. The sweep set.
+  // 3. The sweep set: this rail's sales in this rail's token, and nothing else. A Base
+  //    USDC sale is never paid in Arbitrum USDT0, and a testnet row is never swept by a
+  //    mainnet deployment (20260906010000), because `network` names the chain.
   const listings = await creatorListings(creator.id);
-  const purchases = await sweepablePurchases(listings.map((l) => l.id), now);
+  const purchases = await sweepablePurchasesOn(rail.network, rail.asset, listings.map((l) => l.id), now);
   const amountMicro = purchases.reduce<bigint>((sum, p) => sum + toMicro(p.net_micro), 0n);
   if (amountMicro <= 0n) return { ...empty, skipped: "nothing_to_sweep" };
+
+  // 3a. Gas on this chain, before the row (see the header). Read only when this run would
+  //     broadcast with the real signer, for the same reason as the chain check in 0b; a
+  //     test that injects `broadcast` injects `nativeBalance` when it means to test this.
+  if (options.nativeBalance || (!options.broadcast && sweepPrivateKey())) {
+    const float = await (options.nativeBalance ?? defaultNativeBalance)(rail);
+    if (float <= 0n) {
+      await record({
+        name: "sweep_skipped",
+        network: rail.network,
+        props: { creator_id: creator.id, reason: "no_gas_float", amount_micro: amountMicro.toString() },
+      });
+      return { ...empty, amountMicro, skipped: "no_gas_float" };
+    }
+  }
 
   // 4. The pending row, before any broadcast. The key is derived from the exact set of
   //    purchases, so a retry of the same sweep collides and a different set does not.
   const idempotencyKey = sweepKey(creator.id, purchases.map((p) => p.id));
-  const opened = await openPayout(creator.id, toAddress, amountMicro, idempotencyKey);
+  const opened = await openPayout(creator.id, toAddress, amountMicro, idempotencyKey, rail);
   const payout = opened.payout;
   // The unique index on `idempotency_key` is the lock. Losing the insert means another
   // sweep for this exact purchase set is already running (the cron and a manual
@@ -158,7 +258,7 @@ export async function sweepCreator(creator: CreatorRow, options: SweepOptions = 
     // Colliding with a `failed` row means every retry key is spent: the address
     // reverts transfers and an operator has to look. Anything else is a running sweep.
     const reason: SweepSkip = payout.status === "failed" ? "payout_retries_exhausted" : "payout_in_flight";
-    await record({ name: "sweep_skipped", props: { creator_id: creator.id, reason, payout_id: payout.id } });
+    await record({ name: "sweep_skipped", network: rail.network, props: { creator_id: creator.id, reason, payout_id: payout.id } });
     return { ...empty, payoutId: payout.id, amountMicro, status: payout.status, txHash: payout.tx_hash, skipped: reason };
   }
 
@@ -166,7 +266,7 @@ export async function sweepCreator(creator: CreatorRow, options: SweepOptions = 
   //    `pending` and the reason is on the event log; nothing is invented.
   const key = sweepPrivateKey();
   if (!options.broadcast && !key) {
-    await record({ name: "sweep_skipped", props: { creator_id: creator.id, reason: "no_signer", payout_id: payout.id } });
+    await record({ name: "sweep_skipped", network: rail.network, props: { creator_id: creator.id, reason: "no_signer", payout_id: payout.id } });
     return {
       ...empty,
       payoutId: payout.id,
@@ -182,7 +282,7 @@ export async function sweepCreator(creator: CreatorRow, options: SweepOptions = 
 
   let txHash: `0x${string}`;
   try {
-    txHash = await broadcast({ to: toAddress as `0x${string}`, amountMicro });
+    txHash = await broadcast({ to: toAddress as `0x${string}`, amountMicro, rail });
   } catch {
     // W1.2: a broadcast throw (e.g. an RPC timeout after the tx was accepted) is
     // *indeterminate* — the transfer may have landed. Recording it terminal `failed`
@@ -193,15 +293,15 @@ export async function sweepCreator(creator: CreatorRow, options: SweepOptions = 
     // is invented. Only a positively confirmed non-inclusion (an ops/reconcile action in
     // V0; there is no automated `broadcast/pending` → `failed` promotion) may move it to
     // `failed`.
-    await record({ name: "sweep_indeterminate", props: { creator_id: creator.id, payout_id: payout.id, stage: "broadcast" } });
+    await record({ name: "sweep_indeterminate", network: rail.network, props: { creator_id: creator.id, payout_id: payout.id, stage: "broadcast" } });
     return { ...empty, payoutId: payout.id, amountMicro, status: "pending", purchasesSwept: 0 };
   }
   await setPayoutStatus(payout.id, "broadcast", txHash);
 
-  const receipt = await confirm(txHash);
+  const receipt = await confirm(txHash, rail);
   if (receipt.status !== "success") {
     await setPayoutStatus(payout.id, "failed", txHash);
-    await record({ name: "sweep_failed", props: { creator_id: creator.id, payout_id: payout.id, stage: "receipt" } });
+    await record({ name: "sweep_failed", network: rail.network, props: { creator_id: creator.id, payout_id: payout.id, stage: "receipt" } });
     return { ...empty, payoutId: payout.id, amountMicro, status: "failed", txHash, purchasesSwept: 0 };
   }
 
@@ -216,10 +316,12 @@ export async function sweepCreator(creator: CreatorRow, options: SweepOptions = 
 
   await record({
     name: "sweep",
+    network: rail.network,
     props: { creator_id: creator.id, payout_id: payout.id, amount_micro: amountMicro.toString(), purchases: purchases.length },
   });
 
   return {
+    ...railFields(rail),
     creatorId: creator.id,
     payoutId: payout.id,
     amountMicro,
@@ -231,17 +333,26 @@ export async function sweepCreator(creator: CreatorRow, options: SweepOptions = 
   };
 }
 
-/** Every creator with something to sweep. The cron's outer loop. */
-export async function creatorsWithBalance(now: Date): Promise<CreatorRow[]> {
+/**
+ * Every creator with something to sweep on any of `rails` (every EVM rail by default).
+ * The cron's outer loop. A creator whose whole balance is on Arbitrum is in it, which
+ * a Base-only reading of the ledger would have missed for ever.
+ */
+export async function creatorsWithBalance(now: Date, rails: EvmRail[] = evmChains()): Promise<CreatorRow[]> {
   const { data, error } = await db().from("creator").select("*").eq("wallet_mode", "linked");
   if (error) throw error;
   const creators = (data ?? []) as CreatorRow[];
 
   const out: CreatorRow[] = [];
   for (const creator of creators) {
-    const listings = await creatorListings(creator.id);
-    const purchases = await sweepablePurchases(listings.map((l) => l.id), now);
-    if (purchases.reduce<bigint>((sum, p) => sum + toMicro(p.net_micro), 0n) > 0n) out.push(creator);
+    const listingIds = (await creatorListings(creator.id)).map((l) => l.id);
+    for (const rail of rails) {
+      const purchases = await sweepablePurchasesOn(rail.network, rail.asset, listingIds, now);
+      if (purchases.reduce<bigint>((sum, p) => sum + toMicro(p.net_micro), 0n) > 0n) {
+        out.push(creator);
+        break;
+      }
+    }
   }
   return out;
 }
@@ -254,15 +365,19 @@ export function sweepKey(creatorId: string, purchaseIds: string[]): string {
   return `sweep:${creatorId}:${digest}`;
 }
 
-async function inFlightPayout(creatorId: string): Promise<PayoutRow | null> {
-  // Per creator *per chain*: a Sepolia payout stuck at `pending` must not block a
-  // mainnet sweep, and vice versa. One database serves both (20260906010000).
+async function inFlightPayout(creatorId: string, rail: EvmRail): Promise<PayoutRow | null> {
+  // Per creator *per rail*: a Sepolia payout stuck at `pending` must not block a mainnet
+  // sweep (20260906010000), and an Arbitrum one must not block Base (25 Oct 2026). Read by
+  // `network`, which is what the `payout_one_in_flight_per_creator_network` index holds,
+  // and by `chain_id` as well, which every EVM row also carries. `in_transit` is in
+  // flight to that index, so it is in flight here too.
   const { data, error } = await db()
     .from("payout")
     .select("*")
     .eq("creator_id", creatorId)
-    .eq("chain_id", paymentChain().chainId)
-    .in("status", ["pending", "broadcast"]);
+    .eq("network", rail.network)
+    .eq("chain_id", rail.chainId)
+    .in("status", ["pending", "broadcast", "in_transit"]);
   if (error) throw error;
   return (((data ?? []) as PayoutRow[])[0] as PayoutRow | undefined) ?? null;
 }
@@ -304,6 +419,7 @@ async function openPayout(
   toAddress: string,
   amountMicro: bigint,
   idempotencyKey: string,
+  rail: EvmRail,
 ): Promise<{ payout: PayoutRow; created: boolean }> {
   // `:r2`, `:r3`… suffixes retry a purchase set whose previous payout *reverted on
   // chain*. Any other terminal state keeps the original key and therefore keeps
@@ -322,9 +438,11 @@ async function openPayout(
         // The rail, in both spellings (20261025090100). Written explicitly rather than
         // left to the `payout_set_network` trigger: the mock has no trigger, and a row
         // the in-flight index cannot see is a sweep test that passes whatever it does.
-        chain_id: paymentChain().chainId,
-        network: paymentChain().network,
-        asset: paymentChain().asset,
+        // The trigger knows only the two Base assets in any case; an Arbitrum row
+        // would reach it with no asset to fill in.
+        chain_id: rail.chainId,
+        network: rail.network,
+        asset: rail.asset,
       })
       .select("*")
       .single();
@@ -357,33 +475,46 @@ export async function stampPayout(purchaseIds: string[], payoutId: string): Prom
 
 // --- chain ------------------------------------------------------------------
 
-function chain() {
-  const { chainId } = x402Config();
+/**
+ * The viem chain for a rail. Every chain this codebase names (Base, Arbitrum, Ethereum)
+ * pays gas in ETH; Polygon's POL is the exception worth spelling, since a wrong symbol
+ * is what an operator reads in a viem error.
+ */
+function chainOf(rail: EvmRail) {
   return {
-    id: chainId,
-    name: `eip155:${chainId}`,
-    nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 },
-    rpcUrls: { default: { http: [rpcUrl()] } },
+    id: rail.chainId,
+    name: rail.network,
+    nativeCurrency: rail.chainId === 137 ? { name: "POL", symbol: "POL", decimals: 18 } : { name: "Ether", symbol: "ETH", decimals: 18 },
+    rpcUrls: { default: { http: [rail.rpcUrl] } },
   } as const;
 }
 
-/** A plain ERC-20 `transfer` from the sweep wallet. No router, no allowance, no `to` input. */
-async function defaultBroadcast({ to, amountMicro }: { to: `0x${string}`; amountMicro: bigint }): Promise<`0x${string}`> {
+/** The sweep EOA. Accepts a key written with or without `0x`, as `sweepSignerAddress` does. */
+function sweepAccount() {
   const key = sweepPrivateKey();
   if (!key) throw new Error("no sweep signer configured");
-  const account = privateKeyToAccount(key as `0x${string}`);
-  const { asset } = x402Config();
-  const wallet = createWalletClient({ account, chain: chain(), transport: http(rpcUrl()) });
-  return await wallet.writeContract({ address: asset as `0x${string}`, abi: erc20Abi, functionName: "transfer", args: [to, amountMicro] });
+  return privateKeyToAccount((key.startsWith("0x") ? key : `0x${key}`) as `0x${string}`);
 }
 
-/** A read-only client on the configured RPC. Used for the chain check and the receipt. */
-function publicClient() {
-  return createPublicClient({ chain: chain(), transport: http(rpcUrl()) });
+/** A plain ERC-20 `transfer` of the rail's token from the sweep EOA. No router, no allowance, no `to` input. */
+async function defaultBroadcast({ to, amountMicro, rail }: { to: `0x${string}`; amountMicro: bigint; rail: EvmRail }): Promise<`0x${string}`> {
+  const wallet = createWalletClient({ account: sweepAccount(), chain: chainOf(rail), transport: http(rail.rpcUrl) });
+  return await wallet.writeContract({ address: rail.asset as `0x${string}`, abi: erc20Abi, functionName: "transfer", args: [to, amountMicro] });
 }
 
-async function defaultConfirm(txHash: `0x${string}`): Promise<{ status: "success" | "reverted" }> {
-  const client = publicClient();
-  const receipt = await client.waitForTransactionReceipt({ hash: txHash, timeout: RECEIPT_TIMEOUT_MS });
+/**
+ * A read-only client on a rail's RPC: the chain check, the gas float, the receipt, and
+ * the reconcile cron's balance reads (app/api/cron/reconcile), which is why it is exported.
+ */
+export function railClient(rail: EvmRail) {
+  return createPublicClient({ chain: chainOf(rail), transport: http(rail.rpcUrl) });
+}
+
+async function defaultNativeBalance(rail: EvmRail): Promise<bigint> {
+  return await railClient(rail).getBalance({ address: sweepAccount().address });
+}
+
+async function defaultConfirm(txHash: `0x${string}`, rail: EvmRail): Promise<{ status: "success" | "reverted" }> {
+  const receipt = await railClient(rail).waitForTransactionReceipt({ hash: txHash, timeout: RECEIPT_TIMEOUT_MS });
   return { status: receipt.status };
 }

@@ -87,8 +87,9 @@ describe("GET /api/earnings (FR-29)", () => {
 
     const body = JSON.parse(text);
     expect(body.sales[0]).toMatchObject({ slug: "humanizer", version: "1.1.0", kind: "new", paid_out: false });
+    // The rail (network, token) joined on 25 Oct 2026: where the money is, not who sent it.
     expect(Object.keys(body.sales[0]).sort()).toEqual(
-      ["fee_micro", "gross_micro", "holdback_until", "kind", "net_micro", "paid_out", "settled_at", "slug", "version"],
+      ["asset_symbol", "fee_micro", "gross_micro", "holdback_until", "kind", "net_micro", "network", "paid_out", "settled_at", "slug", "version"],
     );
   });
 

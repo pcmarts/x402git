@@ -6,6 +6,11 @@
  * amount and the time and **never** the buyer address or the transaction hash (FR-40):
  * a creator learns that a sale happened, not who made it. `lib/payouts/ledger.ts#toSale`
  * is the single place that shape is built, and `route.test.ts` asserts the absence.
+ *
+ * 25 Oct 2026 (HackMeridian W6b): `by_rail` splits the totals by network and token, and
+ * each sale names its `network` and `asset_symbol` — where it landed, so a creator paid
+ * on Base and on Arbitrum can tell the two apart. Payouts and their hashes stay off this
+ * response; the dashboard shows them.
  */
 
 import { type NextRequest, NextResponse } from "next/server";
@@ -40,6 +45,16 @@ export const GET = handle(async (req: NextRequest) => {
     next_release_at: ledger.nextReleaseAt ? ledger.nextReleaseAt.toISOString() : null,
     // FR-26: the bound address, echoed so the creator can see where a sweep will go.
     payout_address: normaliseAddress(creator.payout_address),
+    by_rail: ledger.byRail.map((rail) => ({
+      network: rail.network,
+      asset_symbol: rail.assetSymbol,
+      gross_micro: micro.serialize(rail.grossMicro),
+      fee_micro: micro.serialize(rail.feeMicro),
+      net_micro: micro.serialize(rail.netMicro),
+      withdrawable_micro: micro.serialize(rail.withdrawableMicro),
+      held_micro: micro.serialize(rail.heldMicro),
+      paid_out_micro: micro.serialize(rail.paidOutMicro),
+    })),
     sales: ledger.sales.map((sale) => ({
       slug: sale.slug,
       version: sale.version,
@@ -50,6 +65,8 @@ export const GET = handle(async (req: NextRequest) => {
       settled_at: sale.settledAt.toISOString(),
       holdback_until: sale.holdbackUntil.toISOString(),
       paid_out: sale.paidOut,
+      network: sale.network,
+      asset_symbol: sale.assetSymbol,
     })),
     next_cursor: ledger.nextCursor,
   });
