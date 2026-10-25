@@ -177,6 +177,7 @@ function fakeKit(over: Partial<WalletKit> & { id?: string; name?: string } = {})
     authModal: async () => ({ address: G }),
     getNetwork: async () => ({ network: "TESTNET", networkPassphrase: CONFIG.passphrase }),
     signAuthEntry: async () => ({ signedAuthEntry: SIGNED }),
+    signMessage: async () => ({ signedMessage: SIGNED }),
     disconnect: async () => undefined,
     selectedModule: { productId: over.id ?? "freighter", productName: over.name ?? "Freighter" },
     ...over,
@@ -328,5 +329,22 @@ describe("buyWithStellarWallet", () => {
     expect(paid.calls[1].headers["x-quote-id"]).toBe("q1");
     expect(paid.calls[1].headers["payment-signature"]).toBeTruthy();
     vi.doUnmock("@x402/stellar");
+  });
+});
+
+import { kitExclusions } from "./stellar-checkout";
+
+describe("the picker is filtered for what it is for (25 Oct 2026, 23:05)", () => {
+  it("paying leaves out every wallet that cannot sign an auth entry", () => {
+    const out = kitExclusions("pay");
+    for (const id of ["albedo", "xbull", "lobstr", "rabet", "LEDGER", "TREZOR"]) expect(out.has(id)).toBe(true);
+    expect(out.has("freighter")).toBe(false);
+  });
+
+  it("binding an address needs only signMessage, so xBull and Lobstr stay and Albedo, Rabet, Ledger, Trezor go", () => {
+    const out = kitExclusions("sign");
+    expect(out.has("xbull")).toBe(false);
+    expect(out.has("lobstr")).toBe(false);
+    for (const id of ["albedo", "rabet", "LEDGER", "TREZOR"]) expect(out.has(id)).toBe(true);
   });
 });

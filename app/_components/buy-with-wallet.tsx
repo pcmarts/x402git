@@ -29,6 +29,7 @@
 
 import { track } from "@vercel/analytics";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { hasTokenMark, TokenMark } from "@/app/_components/rail-marks";
 import { withRail } from "@/lib/web/checkout-copy";
 import type { CheckoutResult, Eip1193Provider, Ownership } from "@/lib/web/wallet-checkout";
 
@@ -268,6 +269,9 @@ export function BuyWithWallet(props: BuyWithWalletProps) {
   // "with MetaMask" only when the block saw it: naming a wallet that is not there would
   // promise a sheet that never opens.
   const withWallet = props.walletName ? ` with ${props.walletName}` : "";
+  // The token's mark on the committing button (founder, 25 Oct 2026: "if usdc or usdt0
+  // lets use their logos on the Payment button too"); none on a free copy or a download.
+  const mark = !free && hasTokenMark(symbol) ? <TokenMark symbol={symbol} /> : null;
 
   return (
     <div className="buy-state">
@@ -294,7 +298,16 @@ export function BuyWithWallet(props: BuyWithWalletProps) {
       {/* One committing control. Which one it is depends on what this wallet owns. */}
       {!wallet ? (
         <button type="button" data-variant="primary" onClick={connect} disabled={!forSale || busy}>
-          {busy ? "Opening your wallet…" : free ? `Get it free${withWallet}` : `Buy — ${props.priceLabel}${withWallet}`}
+          {busy ? (
+            "Opening your wallet…"
+          ) : free ? (
+            `Get it free${withWallet}`
+          ) : (
+            <>
+              {mark}
+              {`Buy — ${props.priceLabel}${withWallet}`}
+            </>
+          )}
         </button>
       ) : settled ? (
         <button type="button" data-variant="primary" onClick={redownload} disabled={busy}>
@@ -302,7 +315,14 @@ export function BuyWithWallet(props: BuyWithWalletProps) {
         </button>
       ) : (
         <button type="button" data-variant="primary" onClick={buy} disabled={!forSale || busy}>
-          {busy ? "Waiting for your wallet…" : payLabel}
+          {busy ? (
+            "Waiting for your wallet…"
+          ) : (
+            <>
+              {mark}
+              {payLabel}
+            </>
+          )}
         </button>
       )}
 

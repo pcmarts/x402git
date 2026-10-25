@@ -33,6 +33,7 @@
 
 import { track } from "@vercel/analytics";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { hasTokenMark, TokenMark } from "@/app/_components/rail-marks";
 import { withRail } from "@/lib/web/checkout-copy";
 import type { CheckoutResult } from "@/lib/web/wallet-checkout";
 import type { StellarAccount, StellarCheckoutConfig } from "@/lib/web/stellar-checkout";
@@ -196,11 +197,29 @@ export function BuyWithStellar(props: Props) {
       {/* One committing control, like the Base button: connect, then pay. */}
       {!wallet ? (
         <button type="button" data-variant="primary" onClick={connect} disabled={!forSale || busy}>
-          {busy ? "Choose a wallet…" : free ? "Get it free with a Stellar wallet" : `Buy — ${props.priceLabel} with a Stellar wallet`}
+          {busy ? (
+            "Choose a wallet…"
+          ) : free ? (
+            "Get it free with a Stellar wallet"
+          ) : (
+            <>
+              {hasTokenMark(symbol) ? <TokenMark symbol={symbol} /> : null}
+              {`Buy — ${props.priceLabel} with a Stellar wallet`}
+            </>
+          )}
         </button>
       ) : (
         <button type="button" data-variant="primary" onClick={buy} disabled={!forSale || busy || !wallet.canPay}>
-          {busy ? `Waiting for ${wallet.walletName}…` : free ? "Get it — free" : `Pay ${props.priceLabel} in ${symbol}`}
+          {busy ? (
+            `Waiting for ${wallet.walletName}…`
+          ) : free ? (
+            "Get it — free"
+          ) : (
+            <>
+              {hasTokenMark(symbol) ? <TokenMark symbol={symbol} /> : null}
+              {`Pay ${props.priceLabel} in ${symbol}`}
+            </>
+          )}
         </button>
       )}
 

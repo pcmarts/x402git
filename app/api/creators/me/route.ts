@@ -133,7 +133,7 @@ export const PATCH = handle(async (req: NextRequest) => {
     if (!body.stellar_proof) {
       throw new ApiError("payout_address_unverified", {
         message: "stellar_proof is required: a SEP-53 signature from the Stellar account being bound.",
-        details: { how: "GET /api/auth/challenge?address=<G…>&purpose=address_proof, sign `message` with that account (Freighter signMessage), resend as stellar_proof: { nonce, signature }." },
+        details: { how: "GET /api/auth/challenge?address=<G…>&purpose=address_proof, sign `message` with that account (your wallet's SEP-43 signMessage, e.g. Freighter), resend as stellar_proof: { nonce, signature }." },
       });
     }
     // Horizon before the proof: a missing trustline is the creator's to fix in Freighter,

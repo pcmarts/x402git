@@ -141,14 +141,22 @@ export function BindWallet(props: Props) {
   );
 }
 
-// --- Stellar wallet (Freighter) ------------------------------------------------------------
+// --- Stellar wallet (any wallet the Stellar Wallets Kit knows) ----------------------------
 //
 // 25 Oct 2026 (HACKMERIDIAN-JOURNEYS C2, C3, C5). The same discipline as `BindWallet`:
 // nothing renders before mount, the wallet is reached at click time, and what reaches the
 // server is the ordinary form — a `G…`, a nonce and a base64 SEP-53 signature, the three
-// strings a person could have pasted. `@stellar/freighter-api` (v6) is imported on click,
-// like the EVM helpers, so it never runs on the server; its functions answer with
-// `{ …, error? }` rather than throwing, so every answer is checked before it is used.
+// strings a person could have pasted.
+//
+// Later that evening (founder: "right now we only 'support' freighter when i'd like to
+// have all stellar wallets supported"): the press opens the Stellar Wallets Kit's picker,
+// the same kit the listing page pays through (lib/web/stellar-checkout.ts), so Freighter,
+// Hana, HOT, xBull, Lobstr and the rest can bind. Binding needs a SEP-43 `signMessage`,
+// not an auth entry, so the picker here is filtered on that (`loadKit(…, "sign")`):
+// Albedo, Rabet, Ledger and Trezor refuse it in their own code and are left out. The kit
+// is imported on the press, like the EVM helpers, so it never runs on the server; a wallet
+// that is not installed is the kit's modal's business (it links to the install page), so
+// this file no longer has an install panel of its own.
 //
 // Adding is one button (25 Oct 2026, ~21:30, HackMeridian; the founder: "lets not have
 // the confirm the last 6 digits of your evm wallet - a lot of hassle. Do we need to have
@@ -159,49 +167,29 @@ export function BindWallet(props: Props) {
 // header has the accepted risk. Changing an address (C5) keeps the three steps: the new
 // wallet proves itself, the wallet bound now signs off, and the creator types the last six.
 
-type FreighterError = { message?: string; code?: number } | undefined;
+type KitModule = typeof import("@/lib/web/stellar-checkout");
+type Kit = Awaited<ReturnType<KitModule["loadKit"]>>;
 
-function freighterMessage(error: FreighterError, fallback: string): string {
-  return error && typeof error.message === "string" && error.message.length > 0 ? error.message : fallback;
-}
+/** The wallets the picker offers for signing, named where a refusal needs an alternative. */
+const SIGNING_WALLETS = "Freighter, Hana, HOT Wallet, xBull or Lobstr";
 
-const FREIGHTER_URL = "https://www.freighter.app/";
-
-/** The words a person sees in Freighter's network menu, from the passphrase it reports. */
-function networkLabel(passphrase: string, name?: string): string {
-  if (passphrase === "Public Global Stellar Network ; September 2015") return "Mainnet";
-  if (passphrase === "Test SDF Network ; September 2015") return "Testnet";
-  return name && name.length > 0 ? name : "another network";
-}
-
-type Freighter = typeof import("@stellar/freighter-api");
-
-/** Installed and unlocked, or an error sentence with the install link's job done by the caller. */
-async function loadFreighter(): Promise<{ api: Freighter } | { missing: true }> {
-  const api = await import("@stellar/freighter-api");
-  const connected = await api.isConnected();
-  if (connected.error || !connected.isConnected) return { missing: true };
-  return { api };
+function messageOf(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  const m = (error as { message?: unknown } | null)?.message;
+  return typeof m === "string" ? m : typeof error === "string" ? error : "";
 }
 
 /**
- * Freighter must be on the network this deployment pays on (`stellarRail().network`),
- * or the account it offers exists on the wrong ledger and the trustline check below
- * would read the wrong place. Said in the words of Freighter's own menu.
+ * The picker, then the chosen wallet's account, then the network check: the wallet must be
+ * on the network this deployment pays on (`stellarRail().network`), or the account it
+ * offers exists on the wrong ledger and the trustline check would read the wrong place.
  */
-async function requireNetwork(api: Freighter, expectedPassphrase: string): Promise<void> {
-  const net = await api.getNetwork();
-  if (net.error) throw new Error(freighterMessage(net.error, "Freighter did not say which network it is on."));
-  if (net.networkPassphrase !== expectedPassphrase) {
-    throw new Error(`Freighter is on ${networkLabel(net.networkPassphrase, net.network)}; switch it to ${networkLabel(expectedPassphrase)} in its network menu, then try again.`);
-  }
-}
-
-async function freighterAddress(api: Freighter): Promise<string> {
-  const access = await api.requestAccess();
-  if (access.error) throw new Error(freighterMessage(access.error, "Freighter refused to share an account."));
-  if (!access.address) throw new Error("Freighter did not share an account. Unlock it, allow this site, and try again.");
-  return access.address;
+async function openStellarWallet(mod: KitModule, passphrase: string): Promise<{ kit: Kit; address: string; walletName: string }> {
+  const kit = await mod.loadKit(passphrase, "sign");
+  const { address } = await kit.authModal();
+  const walletName = kit.selectedModule.productName;
+  await mod.requireNetwork(kit, passphrase, walletName);
+  return { kit, address, walletName };
 }
 
 function toBase64(bytes: Uint8Array): string {
@@ -210,19 +198,26 @@ function toBase64(bytes: Uint8Array): string {
   return btoa(binary);
 }
 
-/** v4+ hands back base64; a v3 extension hands back a Buffer. The server wants base64 either way. */
-async function freighterSign(api: Freighter, address: string, message: string, networkPassphrase: string): Promise<string> {
-  const result = await api.signMessage(message, { networkPassphrase, address });
-  if (result.error) throw new Error(freighterMessage(result.error, "Freighter refused to sign."));
-  // Freighter says which key signed. A different account is refused here, in words, rather
+/** SEP-43 `signMessage` through the kit. The server wants base64; a stray byte array is encoded. */
+async function signWithWallet(kit: Kit, walletName: string, address: string, message: string, networkPassphrase: string): Promise<string> {
+  let result: { signedMessage: unknown; signerAddress?: string };
+  try {
+    result = await kit.signMessage(message, { networkPassphrase, address });
+  } catch (error) {
+    if (/\b(?:does|do) not support the "?signMessage"? (?:function|method)/i.test(messageOf(error))) {
+      throw new Error(`${walletName} can't sign a message yet. Use ${SIGNING_WALLETS}, or bind by hand below.`);
+    }
+    throw error;
+  }
+  // The wallet says which key signed. A different account is refused here, in words, rather
   // than as a 401 from the server after the nonce is spent.
   if (result.signerAddress && result.signerAddress !== address) {
-    throw new Error(`Freighter signed with ${result.signerAddress}, not ${address}. Switch to that account and try again.`);
+    throw new Error(`${walletName} signed with ${result.signerAddress}, not ${address}. Switch to that account and try again.`);
   }
   const signed = result.signedMessage;
   if (typeof signed === "string" && signed.length > 0) return signed;
   if (signed && typeof signed === "object" && typeof (signed as { length?: unknown }).length === "number") return toBase64(Uint8Array.from(signed as unknown as ArrayLike<number>));
-  throw new Error("Freighter did not return a signature. Try again, and approve the signing prompt.");
+  throw new Error(`${walletName} did not return a signature. Try again, and approve the signing prompt.`);
 }
 
 async function fetchChallenge(address: string, purpose: string, newPayoutAddress?: string): Promise<{ nonce: string; message: string }> {
@@ -240,17 +235,18 @@ type StellarProps =
   /** First bind, no account yet (C2): one button, then POST to the bind route. */
   | { mode: "bind"; action: string; networkPassphrase: string }
   /**
-   * Beside an existing identity. Adding (C3, `change: false`): one button, Freighter's proof
-   * alone, then POST. Changing (C5, `change: true`): Freighter proves the new G…, the wallet
-   * bound now signs off, type to confirm.
+   * Beside an existing identity. Adding (C3, `change: false`): one button, the new wallet's
+   * proof alone, then POST. Changing (C5, `change: true`): the new wallet proves the G…, the
+   * wallet bound now signs off, type to confirm.
    */
   | { mode: "add"; action: string; networkPassphrase: string; identity: string; identityFamily: "evm" | "stellar"; change: boolean };
 
 export function StellarWallet(props: StellarProps) {
   const [mounted, setMounted] = useState(false);
-  const [busy, setBusy] = useState<null | "freighter" | "step_up">(null);
+  const [busy, setBusy] = useState<null | "wallet" | "step_up">(null);
   const [error, setError] = useState<string | null>(null);
-  const [noFreighter, setNoFreighter] = useState(false);
+  /** The picked wallet's name, for "Waiting for Hana…" and the trustline words. */
+  const [walletName, setWalletName] = useState<string | null>(null);
   const [noEvmWallet, setNoEvmWallet] = useState(false);
   const [proved, setProved] = useState<string | null>(null);
   const [steppedUp, setSteppedUp] = useState(false);
@@ -275,17 +271,14 @@ export function StellarWallet(props: StellarProps) {
 
   const connectAndProve = useCallback(async () => {
     setError(null);
-    setBusy("freighter");
+    setBusy("wallet");
+    let mod: KitModule | null = null;
     try {
-      const loaded = await loadFreighter();
-      if ("missing" in loaded) {
-        setNoFreighter(true);
-        return;
-      }
-      await requireNetwork(loaded.api, props.networkPassphrase);
-      const address = await freighterAddress(loaded.api);
+      mod = await import("@/lib/web/stellar-checkout");
+      const { kit, address, walletName: name } = await openStellarWallet(mod, props.networkPassphrase);
+      setWalletName(name);
       const { nonce, message } = await fetchChallenge(address, "address_proof");
-      const signature = await freighterSign(loaded.api, address, message, props.networkPassphrase);
+      const signature = await signWithWallet(kit, name, address, message, props.networkPassphrase);
       if (!alive.current) return;
       if (props.mode === "bind") {
         setField("address", address);
@@ -307,7 +300,9 @@ export function StellarWallet(props: StellarProps) {
       if (proved && proved !== address) setSteppedUp(false);
       setProved(address);
     } catch (e) {
-      if (alive.current) setError(e instanceof Error ? e.message : String(e));
+      // The picker's ✕: a change of mind, not an error.
+      if (mod?.isPickerClosed(e)) return;
+      if (alive.current) setError(messageOf(e) || String(e));
     } finally {
       if (alive.current) setBusy(null);
     }
@@ -317,6 +312,7 @@ export function StellarWallet(props: StellarProps) {
     if (props.mode !== "add" || !props.change || !proved) return;
     setError(null);
     setBusy("step_up");
+    let mod: KitModule | null = null;
     try {
       // FR-5: the wallet bound *now* authorises the change, and its challenge names the
       // incoming G… so the signature is good for this one change and nothing else.
@@ -332,20 +328,20 @@ export function StellarWallet(props: StellarProps) {
         const { signAs } = await import("@/lib/web/wallet-bind");
         signature = await signAs(provider, props.identity, message);
       } else {
-        const loaded = await loadFreighter();
-        if ("missing" in loaded) {
-          setNoFreighter(true);
-          return;
+        mod = await import("@/lib/web/stellar-checkout");
+        const { kit, address, walletName: name } = await openStellarWallet(mod, props.networkPassphrase);
+        if (address !== props.identity) {
+          throw new Error(`${name} offered ${address}, not the wallet you are paid at (${props.identity}). Switch to that account and try again.`);
         }
-        await requireNetwork(loaded.api, props.networkPassphrase);
-        signature = await freighterSign(loaded.api, props.identity, message, props.networkPassphrase);
+        signature = await signWithWallet(kit, name, props.identity, message, props.networkPassphrase);
       }
       if (!alive.current) return;
       setField("step_up_nonce", nonce);
       setField("step_up_signature", signature);
       setSteppedUp(true);
     } catch (e) {
-      if (alive.current) setError(e instanceof Error ? e.message : String(e));
+      if (mod?.isPickerClosed(e)) return;
+      if (alive.current) setError(messageOf(e) || String(e));
     } finally {
       if (alive.current) setBusy(null);
     }
@@ -353,15 +349,8 @@ export function StellarWallet(props: StellarProps) {
 
   if (!mounted) return null;
 
-  const installFreighter = noFreighter ? (
-    <p className="written" role="status">
-      Freighter is not in this browser, or is locked.{" "}
-      <a href={FREIGHTER_URL} rel="noopener noreferrer" target="_blank">
-        Install Freighter
-      </a>
-      , unlock it, then reload this page. Or bind by hand below.
-    </p>
-  ) : null;
+  const waiting = `Waiting for ${walletName ?? "your wallet"}…`;
+  const pickLine = "Pick a wallet (Freighter, Hana, HOT, xBull, Lobstr…), connect, then sign a short message. Nothing is sent on-chain and nothing costs XLM.";
 
   if (props.mode === "bind") {
     return (
@@ -371,13 +360,12 @@ export function StellarWallet(props: StellarProps) {
           <input type="hidden" name="nonce" />
           <input type="hidden" name="signature" />
           <button type="button" data-variant="primary" onClick={connectAndProve} disabled={busy !== null}>
-            {busy ? "Waiting for Freighter…" : "Connect Freighter and sign"}
+            {busy ? waiting : "Connect a Stellar wallet and sign"}
           </button>
         </form>
         <p role="status" className="buy-status">
-          {busy === null && !noFreighter ? "Freighter will ask you to connect, then to sign a short message. Nothing is sent on-chain and nothing costs XLM." : null}
+          {busy === null ? pickLine : null}
         </p>
-        {installFreighter}
         {error ? (
           <p role="alert" data-status="fail" className="written">
             {error}
@@ -395,13 +383,12 @@ export function StellarWallet(props: StellarProps) {
           <input type="hidden" name="proof_nonce" />
           <input type="hidden" name="proof_signature" />
           <button type="button" data-variant="primary" onClick={connectAndProve} disabled={busy !== null || sent}>
-            {busy ? "Waiting for Freighter…" : sent ? "Adding…" : "Connect Freighter and sign"}
+            {busy ? waiting : sent ? "Adding…" : "Connect a Stellar wallet and sign"}
           </button>
         </form>
         <p role="status" className="buy-status">
-          {busy === null && !sent && !noFreighter ? "Freighter will ask you to connect, then to sign a short message. Nothing is sent on-chain and nothing costs XLM." : null}
+          {busy === null && !sent ? pickLine : null}
         </p>
-        {installFreighter}
         {error ? (
           <p role="alert" data-status="fail" className="written">
             {error}
@@ -413,7 +400,7 @@ export function StellarWallet(props: StellarProps) {
 
   const confirmOk = confirm.trim().length === 6 || (proved !== null && confirm.trim().toUpperCase() === proved);
   const ready = proved !== null && steppedUp && confirmOk;
-  const currentWalletLabel = props.identityFamily === "evm" ? "Sign with your current wallet" : "Sign with your current Stellar wallet (Freighter)";
+  const currentWalletLabel = props.identityFamily === "evm" ? "Sign with your current wallet" : "Sign with your current Stellar wallet";
 
   return (
     <div className="buy-state">
@@ -426,7 +413,7 @@ export function StellarWallet(props: StellarProps) {
 
         <p className="actions">
           <button type="button" data-variant={proved ? undefined : "primary"} onClick={connectAndProve} disabled={busy !== null}>
-            {busy === "freighter" ? "Waiting for Freighter…" : proved ? "Use a different Stellar wallet" : "1. Connect Freighter and sign"}
+            {busy === "wallet" ? waiting : proved ? "Use a different Stellar wallet" : "1. Connect the new Stellar wallet and sign"}
           </button>
           <button type="button" data-variant={proved && !steppedUp ? "primary" : undefined} onClick={stepUp} disabled={busy !== null || proved === null || steppedUp}>
             {busy === "step_up" ? "Waiting for your wallet…" : steppedUp ? "Signed off" : `2. ${currentWalletLabel}`}
@@ -460,11 +447,8 @@ export function StellarWallet(props: StellarProps) {
         </p>
       </form>
       <p role="status" className="buy-status">
-        {proved === null && !noFreighter
-          ? "Freighter proves the new wallet; then the wallet you are paid at now signs off on the change. Nothing is sent on-chain."
-          : null}
+        {proved === null ? "The new wallet proves itself (Freighter, Hana, HOT, xBull, Lobstr…); then the wallet you are paid at now signs off on the change. Nothing is sent on-chain." : null}
       </p>
-      {installFreighter}
       {noEvmWallet ? (
         <p className="written" role="status">
           No EVM wallet in this browser to sign with. Open this page in the browser that holds <span className="computed">{props.identity}</span>.

@@ -4744,6 +4744,19 @@ tr:target {
   margin-left: var(--space-1);
 }
 
+/* A token's mark inside the one committing button (25 Oct 2026; founder: "if usdc or
+   usdt0 lets use their logos on the Payment button too"): the chip's 1rem disc, sat on
+   the words' baseline and a space off them. Only a held file is drawn here, never the
+   letter fallback — the words already name the token. */
+
+button .mark {
+  width: 1rem;
+  height: 1rem;
+  border-radius: 50%;
+  vertical-align: -0.1875rem;
+  margin-right: var(--space-1);
+}
+
 /* A chip under an amount in a table (the Paid cell on /purchases): the cell's nowrap is
    for the number, and a phone's four columns cannot also hold "USDT0 on Arbitrum" on one
    line, so the chip's words may wrap there and nowhere else. */

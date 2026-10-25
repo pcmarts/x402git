@@ -33,7 +33,7 @@ export const FAQ: { group: string; items: QA[] }[] = [
       },
       {
         q: "Do I need a crypto wallet?",
-        a: "You need an address to be paid at: an EVM wallet that holds USDC on Base, a Stellar wallet (Freighter) that holds USDT0, or one of each. You prove you control it by signing one message; no funds move. The server never sees a private key, yours or anyone's.",
+        a: "You need an address to be paid at: an EVM wallet that holds USDC on Base, a Stellar wallet (Freighter, Hana, HOT, xBull, Lobstr and others) that holds USDT0, or one of each. You prove you control it by signing one message; no funds move. The server never sees a private key, yours or anyone's.",
       },
       {
         q: "Do I need to do KYC or file tax forms to get paid?",

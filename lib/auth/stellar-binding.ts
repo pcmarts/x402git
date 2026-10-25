@@ -51,7 +51,7 @@ export const HORIZON_TIMEOUT_MS = 5000;
  * the testnet asset. The same words go in the API error and on the wallet page.
  */
 export function trustlineCopy(asset: { code: string; issuer: string }): string {
-  return `Your wallet needs to allow ${asset.code} before we can pay you. In Freighter: Manage assets → Add manually, then paste: Asset code ${asset.code}, Issuer ${asset.issuer}. Then come back and press Refresh.`;
+  return `Your wallet needs to allow ${asset.code} before we can pay you. Add the asset in your wallet (in Freighter: Manage assets → Add manually), then paste: Asset code ${asset.code}, Issuer ${asset.issuer}. Then come back and press Refresh.`;
 }
 
 type HorizonAccount = { balances?: { asset_type?: string; asset_code?: string; asset_issuer?: string; is_authorized?: boolean }[] };

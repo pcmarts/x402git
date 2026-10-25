@@ -71,6 +71,8 @@ export type WalletKit = {
   authModal(): Promise<{ address: string }>;
   getNetwork(): Promise<{ network: string; networkPassphrase: string }>;
   signAuthEntry(authEntry: string, opts?: { networkPassphrase?: string; address?: string }): Promise<{ signedAuthEntry: string; signerAddress?: string }>;
+  /** SEP-43 `signMessage`: what binding a payout address needs (bind-wallet.tsx), base64 back. */
+  signMessage(message: string, opts?: { networkPassphrase?: string; address?: string }): Promise<{ signedMessage: string; signerAddress?: string }>;
   disconnect(): Promise<void>;
   readonly selectedModule: { productId: string; productName: string };
 };
@@ -84,7 +86,24 @@ export const AUTH_ENTRY_WALLETS = "Freighter, Hana or HOT Wallet";
  */
 const NO_AUTH_ENTRY: ReadonlySet<string> = new Set(["albedo", "xbull", "lobstr", "rabet", "fordefi", "BitgetWallet", "LEDGER", "TREZOR"]);
 
-let kitFor: { passphrase: string; kit: Promise<WalletKit> } | null = null;
+/**
+ * Kit module ids whose `signMessage` is a hard-coded refusal in 2.7.1 (same reading). A
+ * payout address is bound with a SEP-53 message, not an auth entry, so the wallet page's
+ * picker is filtered on this set and keeps xBull, Lobstr, Fordefi and Bitget, which can
+ * sign a message but not approve a payment (founder, 25 Oct 2026, 23:05: "I'd like to
+ * have all Stellar wallets supported").
+ */
+const NO_SIGN_MESSAGE: ReadonlySet<string> = new Set(["albedo", "rabet", "LEDGER", "TREZOR"]);
+
+/** What the picker is for: paying (needs `signAuthEntry`) or binding an address (needs `signMessage`). */
+export type KitPurpose = "pay" | "sign";
+
+/** The module ids left out of the picker for a purpose. Exported for the test; the kit reads it through `loadKit`. */
+export function kitExclusions(purpose: KitPurpose): ReadonlySet<string> {
+  return purpose === "sign" ? NO_SIGN_MESSAGE : NO_AUTH_ENTRY;
+}
+
+let kitFor: { key: string; kit: Promise<WalletKit> } | null = null;
 
 /**
  * The kit, initialised once per page for this deployment's network. `defaultModules()` is
@@ -95,8 +114,10 @@ let kitFor: { passphrase: string; kit: Promise<WalletKit> } | null = null;
  * fails to load costs that one row of the picker and not the picker. It is also the
  * heaviest chunk the press fetches (~92 KB gzipped of ~167 KB, 25 Oct 2026 build).
  */
-export function loadKit(passphrase: string): Promise<WalletKit> {
-  if (kitFor && kitFor.passphrase === passphrase) return kitFor.kit;
+export function loadKit(passphrase: string, purpose: KitPurpose = "pay"): Promise<WalletKit> {
+  const key = `${purpose}:${passphrase}`;
+  if (kitFor && kitFor.key === key) return kitFor.kit;
+  const excluded = kitExclusions(purpose);
   const kit = (async () => {
     const [{ StellarWalletsKit }, { defaultModules }, hot] = await Promise.all([
       import("@creit.tech/stellar-wallets-kit"),
@@ -109,12 +130,12 @@ export function loadKit(passphrase: string): Promise<WalletKit> {
       // approve this kind of payment" is a worse first minute than a shorter list. The
       // refusing set is the kit's own, read from each module's code; the per-connect
       // check below stays as the belt to this brace.
-      modules: [...defaultModules({ filterBy: (m) => !NO_AUTH_ENTRY.has(m.productId) }), ...(hot ? [hot] : [])],
+      modules: [...defaultModules({ filterBy: (m) => !excluded.has(m.productId) }), ...(hot ? [hot] : [])],
       network: passphrase as Parameters<typeof StellarWalletsKit.setNetwork>[0],
     });
     return StellarWalletsKit as WalletKit;
   })();
-  kitFor = { passphrase, kit };
+  kitFor = { key, kit };
   // A failed load is not cached: the next press tries again.
   kit.catch(() => {
     if (kitFor?.kit === kit) kitFor = null;

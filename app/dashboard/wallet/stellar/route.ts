@@ -40,7 +40,7 @@ export const POST = handle(async (req: Request) => {
   const stepUpSignature = field("step_up_signature");
   const confirm = field("confirm_address");
 
-  if (!address || !proofNonce || !proofSignature) return back("/dashboard/wallet", { error: "Connect Freighter and sign first." });
+  if (!address || !proofNonce || !proofSignature) return back("/dashboard/wallet", { error: "Connect a Stellar wallet and sign first." });
   const change = currentStellarPayoutAddress(actor.creator) !== null;
   if (change && (!stepUpNonce || !stepUpSignature)) return back("/dashboard/wallet", { error: "Sign with the wallet bound now to authorise the change." });
   if (change && !confirm) return back("/dashboard/wallet", { error: "Type the last six characters of the Stellar address to confirm." });

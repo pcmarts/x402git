@@ -158,7 +158,7 @@ export default async function WalletPage({
               />
               <small id="signature-help">
                 {addressFamily(address) === "stellar"
-                  ? "A SEP-53 signature over the message above from that Stellar account, base64-encoded (Freighter's signMessage, or the x402git-stellar CLI)."
+                  ? "A SEP-53 signature over the message above from that Stellar account, base64-encoded (your wallet's signMessage, or the x402git-stellar CLI)."
                   : "An EIP-191 personal_sign signature over the message above, from that address."}
               </small>
             </div>
@@ -238,10 +238,10 @@ export default async function WalletPage({
               <BindWallet mode="bind" action="/dashboard/wallet/bind" />
               {rail ? (
                 <>
-                  <h3>Stellar wallet (Freighter), paid on Stellar</h3>
+                  <h3>Stellar wallet, paid on Stellar</h3>
                   <p className="written measure">
-                    Paid in {rail.asset.code}. Your wallet has to allow {rail.asset.code} first; if it does not yet, the next step tells you exactly what to add in
-                    Freighter.
+                    Freighter, Hana, HOT, xBull, Lobstr and more. Paid in {rail.asset.code}. Your wallet has to allow {rail.asset.code} first; if it does not yet,
+                    the next step tells you exactly what to add.
                   </p>
                   <StellarWallet mode="bind" action="/dashboard/wallet/bind" networkPassphrase={rail.passphrase} />
                 </>
@@ -259,7 +259,7 @@ export default async function WalletPage({
 
       {bound && rail && boundFamily ? (
         <section>
-          <h2>Stellar wallet (Freighter)</h2>
+          <h2>Stellar wallet</h2>
           {stellarBound ? (
             <dl>
               <dt>Paid on Stellar at</dt>
@@ -295,9 +295,9 @@ export default async function WalletPage({
             </summary>
             <p className="written measure">
               {stellarBound
-                ? `A change takes ${REBIND_DELAY_HOURS} hours to land, and Stellar payouts keep going to the current wallet until then. Freighter signs for the new wallet, then the wallet you are paid at now signs off, then you type the last six characters.`
-                : "Connect Freighter and sign one message. It is live at once, and nothing already bound moves."}{" "}
-              The new wallet must already allow {rail.asset.code}; if it does not, you will be told exactly what to add in Freighter.
+                ? `A change takes ${REBIND_DELAY_HOURS} hours to land, and Stellar payouts keep going to the current wallet until then. The new wallet signs, then the wallet you are paid at now signs off, then you type the last six characters.`
+                : "Connect a Stellar wallet and sign one message. It is live at once, and nothing already bound moves."}{" "}
+              The new wallet must already allow {rail.asset.code}; if it does not, you will be told exactly what to add.
             </p>
             <StellarWallet
               mode="add"
@@ -334,7 +334,7 @@ function TrustlineSteps({
     return (
       <section>
         <p role="status" data-status="pass" className="written measure">
-          <span className="computed">{address}</span> now allows {asset.code}. Connect Freighter and sign below to finish binding it.
+          <span className="computed">{address}</span> now allows {asset.code}. Connect your Stellar wallet and sign below to finish binding it.
         </p>
       </section>
     );
@@ -343,7 +343,7 @@ function TrustlineSteps({
     <section aria-labelledby="trustline-heading">
       <h2 id="trustline-heading">Allow {asset.code} in your wallet</h2>
       <p role="alert" data-status="warn" className="written measure">
-        Your wallet needs to allow {asset.code} before we can pay you. In Freighter: <strong>Manage assets → Add manually</strong>, then paste: Asset code{" "}
+        Your wallet needs to allow {asset.code} before we can pay you. Add the asset in your wallet (in Freighter: <strong>Manage assets → Add manually</strong>), then paste: Asset code{" "}
         <strong>{asset.code}</strong>, Issuer <code className="wrap">{asset.issuer}</code>. Then come back and press Refresh.
       </p>
       <div className="copyline">
