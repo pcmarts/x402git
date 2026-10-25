@@ -266,7 +266,7 @@ registerRoute({
   path: "/api/mcp",
   summary: "Buy-side MCP server (Streamable HTTP)",
   description:
-    "FR-31. JSON-RPC 2.0 over Streamable HTTP, stateless. Six tools: `search_listings` (free, no wallet: live listings by what they do, each result carrying the `owner` and `slug` the other tools take), `how_to_buy` (free, no wallet: whether the listing is for sale, the price, the listing page, the skill and the endpoint — the tool a client that cannot sign answers with), `get_listing` (wraps `GET /api/label/:owner/:slug`), `check_version` (wraps `GET /api/v/:owner/:slug`), `purchase` (wraps `GET /api/r/:owner/:slug`; takes a pre-signed `PAYMENT-SIGNATURE` and returns the 402 body as structured content when unpaid) and `fetch_release` (wraps `GET /api/r/:owner/:slug/v/:version`). The last four call the same core module (§11); purchases are recorded with `source: mcp`. A request body may be at most 64 KiB (413 above that) and a JSON-RPC batch at most 10 messages (400 above that); each message in a batch counts against the rate limit, and a batch that does not fit is refused whole. `GET` is 405: the server is stateless and offers no server-to-client stream. Connect with `npx @modelcontextprotocol/inspector --transport http --server-url ${APP_URL}/api/mcp`.",
+    "FR-31. JSON-RPC 2.0 over Streamable HTTP, stateless. Six tools: `search_listings` (free, no wallet: live listings by what they do, each result carrying the `owner` and `slug` the other tools take and its `payment_options` — the networks and tokens it can be paid in, so an agent can filter to what it can pay), `how_to_buy` (free, no wallet: whether the listing is for sale, the price, its `payment_options`, the listing page, the skill and the endpoint — the tool a client that cannot sign answers with; pass `network` and it answers `cannot_pay: true` with the options that exist when none is yours), `get_listing` (wraps `GET /api/label/:owner/:slug`), `check_version` (wraps `GET /api/v/:owner/:slug`), `purchase` (wraps `GET /api/r/:owner/:slug`; takes a pre-signed `PAYMENT-SIGNATURE` and returns the 402 body as structured content when unpaid) and `fetch_release` (wraps `GET /api/r/:owner/:slug/v/:version`). The last four call the same core module (§11); purchases are recorded with `source: mcp`. A request body may be at most 64 KiB (413 above that) and a JSON-RPC batch at most 10 messages (400 above that); each message in a batch counts against the rate limit, and a batch that does not fit is refused whole. `GET` is 405: the server is stateless and offers no server-to-client stream. Connect with `npx @modelcontextprotocol/inspector --transport http --server-url ${APP_URL}/api/mcp`.",
   params: [
     { name: "Accept", in: "header", required: true, description: "Must list both `application/json` and `text/event-stream`." },
     { name: "MCP-Protocol-Version", in: "header", description: "Sent by the client on every request after `initialize`." },
@@ -327,7 +327,7 @@ registerRoute({
   path: "/api/listings",
   summary: "Create a listing",
   description:
-    "Rail B (`source: hosted`) provisions a private repo and adds `ssh_public_key` as a write deploy key for that repo only (FR-7, §14.6); the 201 carries the remote, the default branch and github.com's SSH host key fingerprints so the next call is `git push`. Rail A (`source: github`) needs `installation_id` plus either `github_repo_id` or `repo: \"owner/name\"`, and the repository must be **private** — a public one is refused with `422 public_repo` (FR-10). Caps: 3 unpublished listings per creator (D2c).",
+    "Rail B (`source: hosted`) provisions a private repo and adds `ssh_public_key` as a write deploy key for that repo only (FR-7, §14.6); the 201 carries the remote, the default branch and github.com's SSH host key fingerprints so the next call is `git push`. Rail A (`source: github`) needs `installation_id` plus either `github_repo_id` or `repo: \"owner/name\"`, and the repository must be **private** — a public one is refused with `422 public_repo` (FR-10). Caps: 3 unpublished listings per creator (D2c). Open releases (25 Oct 2026): `open_release: true` with `public_repo_url` and `next_opens_at` sells the next release early from this private repository and promises it goes public in that other, public one by that date; the repository being sold is still private and still refused if public.",
   auth: "apiKey",
   request: CreateListingRequest,
   responses: [{ status: 201, description: "Created, in `draft`.", schema: CreateListingResponse }],
@@ -360,13 +360,14 @@ registerRoute({
 registerRoute({
   method: "patch",
   path: "/api/listings/{id}",
-  summary: "Change price, update price, description or trigger hint",
-  description: "FR-16: price changes apply to future purchases only. Explicit API values are never rounded (FR-12).",
+  summary: "Change price, update price, description, trigger hint or the open-release promise",
+  description:
+    "FR-16: price changes apply to future purchases only. Explicit API values are never rounded (FR-12). Open releases (25 Oct 2026): `open_release: true` with `public_repo_url` (a different, public repository — never the one being sold) and `next_opens_at` (at most 90 days ahead; a bare `YYYY-MM-DD` is midnight UTC) makes the next cut an open release. Once set, `next_opens_at` can only move earlier — a later date is `409 opens_at_only_earlier` — and an earlier date also brings forward every pending release.",
   auth: "apiKey",
   params: [id],
   request: PatchListingRequest,
   response: ListingResponse,
-  errors: ["invalid_request", "invalid_key", "insufficient_scope", "not_found", "retired", "rate_limited"],
+  errors: ["invalid_request", "invalid_key", "insufficient_scope", "not_found", "retired", "opens_at_only_earlier", "rate_limited"],
 });
 
 registerRoute({
@@ -499,6 +500,16 @@ registerRoute({
   description: "FR-26 / FR-28. Vercel Cron.",
   tags: ["internal"],
   responses: [{ status: 200, description: "Swept" }],
+});
+
+registerRoute({
+  method: "get",
+  path: "/api/cron/promises",
+  summary: "Daily open-release promise check",
+  description:
+    "Open releases (25 Oct 2026). Every release whose `opens_at` has passed and whose promise is still `pending` is checked once against its public repository: the release commit must be reachable there under the same licence. The verdict is written with evidence. The same check also runs when a listing is read, so this covers the pages nobody visits. Vercel Cron.",
+  tags: ["internal"],
+  responses: [{ status: 200, description: "Checked" }],
 });
 
 registerRoute({

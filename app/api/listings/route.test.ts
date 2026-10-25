@@ -559,3 +559,49 @@ describe("the route context helper", () => {
     expect(TEST_API_KEY).toMatch(/^x4c_live_[0-9A-Za-z]{32}$/);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Open releases (25 Oct 2026, HackMeridian)
+// ---------------------------------------------------------------------------
+
+describe("POST /api/listings — creating an open release", () => {
+  const inDays = (n: number) => new Date(Date.now() + n * 86_400_000).toISOString();
+
+  it("stores the promise on a private Rail A repo that opens into a different public one (H6)", async () => {
+    const opensAt = inDays(30);
+    const res = await POST(req("/api/listings", { method: "POST", body: { ...railA, open_release: true, public_repo_url: "https://github.com/adrian/humanizer-public", next_opens_at: opensAt } }));
+    expect(res.status).toBe(201);
+    const row = mock.rows("listing")[0];
+    expect(row.open_release).toBe(true);
+    expect(row.public_repo_url).toBe("https://github.com/adrian/humanizer-public");
+    expect(row.next_opens_at).toBe(opensAt);
+  });
+
+  it("still refuses a public source repo: there is no 'already open' listing (JOURNEYS C2, BATTLE-TEST 21)", async () => {
+    github.repoById.mockResolvedValue({ repoId: 777, owner: "adrian", name: "humanizer", private: false, defaultBranch: "main" });
+    const res = await POST(req("/api/listings", { method: "POST", body: { ...railA, open_release: true, public_repo_url: "https://github.com/adrian/humanizer-public", next_opens_at: inDays(30) } }));
+    expect(res.status).toBe(422);
+    expect((await res.json()).code).toBe("public_repo");
+  });
+
+  it("refuses the repository being sold as the one it opens in", async () => {
+    const res = await POST(req("/api/listings", { method: "POST", body: { ...railA, open_release: true, public_repo_url: "https://github.com/adrian/humanizer", next_opens_at: inDays(30) } }));
+    expect(res.status).toBe(400);
+    expect((await res.json()).details.field).toBe("public_repo_url");
+    expect(mock.rows("listing")).toHaveLength(0);
+  });
+
+  it("refuses an open release missing its date or its repo, and writes nothing", async () => {
+    expect((await POST(req("/api/listings", { method: "POST", body: { ...railA, open_release: true, public_repo_url: "https://github.com/adrian/humanizer-public" } }))).status).toBe(400);
+    expect((await POST(req("/api/listings", { method: "POST", body: { ...railA, open_release: true, next_opens_at: inDays(30) } }))).status).toBe(400);
+    expect((await POST(req("/api/listings", { method: "POST", body: { ...railA, open_release: true, public_repo_url: "https://github.com/adrian/humanizer-public", next_opens_at: inDays(91) } }))).status).toBe(400);
+    expect(mock.rows("listing")).toHaveLength(0);
+  });
+
+  it("rolls back a provisioned hosted repo when the open-release fields are refused", async () => {
+    const res = await POST(req("/api/listings", { method: "POST", body: { ...railB, open_release: true, next_opens_at: inDays(30) } }));
+    expect(res.status).toBe(400);
+    expect(hosted.deleteHostedRepo).toHaveBeenCalledTimes(1);
+    expect(mock.rows("listing")).toHaveLength(0);
+  });
+});

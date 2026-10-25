@@ -17,7 +17,7 @@
 import { db } from "@/lib/db";
 import type { ApiKeyRow, CreatorRow, ListingRow, PurchaseRow, ReleaseRow } from "@/lib/db/types";
 import { toMicro } from "@/lib/db/types";
-import { appUrl, holdbackDays, paymentChain, platformFeeBps } from "@/lib/env";
+import { appUrl, holdbackDays, paymentNetworks, platformFeeBps } from "@/lib/env";
 import { earningsFor } from "@/lib/payouts/ledger";
 import { micro, RESERVED_HANDLES } from "@/lib/schemas/common";
 import { Manifest, type ManifestOutput } from "@/lib/schemas";
@@ -298,7 +298,9 @@ export async function installCounts(listingIds: string[]): Promise<Map<string, n
     .from("purchase")
     .select("listing_id, buyer_address, kind, revoked_at")
     .in("listing_id", unique)
-    .eq("chain_id", paymentChain().chainId)
+    // Every rail this deployment serves (25 Oct 2026): a Stellar install is an install.
+    // Partitioned on `network`, not `chain_id`, which a Stellar row does not have.
+    .in("network", paymentNetworks())
     .in("kind", ["new", "free"])
     .is("revoked_at", null);
   if (error) throw error;
@@ -310,11 +312,17 @@ export async function installCounts(listingIds: string[]): Promise<Map<string, n
     if (row.revoked_at) continue;
     if (row.kind !== "new" && row.kind !== "free") continue;
     const wallets = seen.get(row.listing_id) ?? new Set<string>();
-    wallets.add(String(row.buyer_address ?? "").toLowerCase());
+    // Distinct wallets, one spelling each: an EVM address folds to lower-case, a Stellar
+    // strkey to upper-case (lower-casing one would not be an address at all, BUILD H11).
+    wallets.add(foldAddress(String(row.buyer_address ?? "")));
     seen.set(row.listing_id, wallets);
   }
   for (const [listingId, wallets] of seen) counts.set(listingId, wallets.size);
   return counts;
+}
+
+function foldAddress(address: string): string {
+  return /^[GC][A-Z2-7]{55}$/i.test(address) ? address.toUpperCase() : address.toLowerCase();
 }
 
 /** One listing's installs. The plural form is the one to reach for; this wraps it. */

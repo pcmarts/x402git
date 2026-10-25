@@ -4,6 +4,7 @@ import { resetEnv } from "@/lib/env";
 import { makeMockDb } from "@/lib/test/mock-db";
 import { hashApiKey } from "@/lib/auth/api-key";
 import { ctx, OTHER_API_KEY, req, seedApiKey, seedCreator, seedListing, seedRelease, TEST_SESSION_KEY } from "@/lib/test/listings-fixtures";
+import { repoById } from "@/lib/github/installations";
 
 const hosted = vi.hoisted(() => ({ archiveHostedRepo: vi.fn(async () => undefined) }));
 vi.mock("@/lib/github/hosted", async (importOriginal) => ({
@@ -211,5 +212,195 @@ describe("DELETE /api/listings/:id — retire (FR-43)", () => {
     const res = await DELETE(req("/x", { method: "DELETE" }), ctx(theirs.id));
     expect(res.status).toBe(404);
     expect(mock.rows("listing").find((l) => l.id === theirs.id)?.retired_at).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Open releases (25 Oct 2026, HackMeridian; docs/HACKMERIDIAN-STRATEGY.md §6a)
+// ---------------------------------------------------------------------------
+
+describe("PATCH /api/listings/:id — the open-release promise", () => {
+  const PUBLIC = "https://github.com/adrian/humanizer-public";
+  const inDays = (n: number) => new Date(Date.now() + n * 86_400_000).toISOString();
+  const patch = (body: Record<string, unknown>, id = listing.id) => PATCH(req("/x", { method: "PATCH", body }), ctx(id));
+
+  it("sets the switch, the public repo and the date, and echoes the standing offer", async () => {
+    const opensAt = inDays(30);
+    const res = await patch({ open_release: true, public_repo_url: PUBLIC, next_opens_at: opensAt });
+    expect(res.status).toBe(200);
+
+    const body = await res.json();
+    expect(body.open_release).toEqual({
+      opens_at: opensAt,
+      public_repo_url: PUBLIC,
+      licence: null,
+      status: "pending",
+      opened_at: null,
+      checked_at: null,
+      evidence_url: null,
+      checks: [],
+    });
+    const row = mock.rows("listing")[0];
+    expect(row.open_release).toBe(true);
+    expect(row.public_repo_url).toBe(PUBLIC);
+    expect(row.next_opens_at).toBe(opensAt);
+  });
+
+  it("is null on an ordinary listing, and the fields never leak out of the block", async () => {
+    const body = await (await GET(req("/x"), ctx(listing.id))).json();
+    expect(body.open_release).toBeNull();
+    expect(body).not.toHaveProperty("next_opens_at");
+  });
+
+  it("reads a bare YYYY-MM-DD as midnight UTC, the way the dashboard's date field posts it", async () => {
+    const day = inDays(10).slice(0, 10);
+    const body = await (await patch({ open_release: true, public_repo_url: PUBLIC, next_opens_at: day })).json();
+    expect(body.open_release.opens_at).toBe(`${day}T00:00:00.000Z`);
+  });
+
+  it("keeps an instant already set on that day when the form re-posts the same day", async () => {
+    const instant = inDays(10).slice(0, 10) + "T17:00:00.000Z";
+    await patch({ open_release: true, public_repo_url: PUBLIC, next_opens_at: instant });
+    const body = await (await patch({ next_opens_at: instant.slice(0, 10) })).json();
+    expect(body.open_release.opens_at).toBe(instant);
+  });
+
+  it("refuses an open release with no public repo, naming the field", async () => {
+    const res = await patch({ open_release: true, next_opens_at: inDays(10) });
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.code).toBe("invalid_request");
+    expect(body.details.field).toBe("public_repo_url");
+    expect(mock.rows("listing")[0].open_release).toBeUndefined();
+  });
+
+  it("refuses an open release with no date, naming the field", async () => {
+    const res = await patch({ open_release: true, public_repo_url: PUBLIC });
+    expect(res.status).toBe(400);
+    expect((await res.json()).details.field).toBe("next_opens_at");
+  });
+
+  it("refuses a public repo URL that is not https://github.com/owner/name", async () => {
+    for (const bad of ["https://gitlab.com/o/r", "https://github.com/o", "https://github.com/o/r/tree/main", "github.com/o/r"]) {
+      const res = await patch({ public_repo_url: bad });
+      expect(res.status, bad).toBe(400);
+    }
+  });
+
+  it("refuses a date more than 90 days ahead", async () => {
+    const res = await patch({ open_release: true, public_repo_url: PUBLIC, next_opens_at: inDays(91) });
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.details.field).toBe("next_opens_at");
+    expect(body.message).toMatch(/within 90 days/);
+  });
+
+  it("allows a date in the past: a backdated promise is checked at once (BATTLE-TEST §4)", async () => {
+    const res = await patch({ open_release: true, public_repo_url: PUBLIC, next_opens_at: "2026-10-01T00:00:00.000Z" });
+    expect(res.status).toBe(200);
+  });
+
+  it("refuses the repository being sold as the place it opens (H6)", async () => {
+    vi.mocked(repoById).mockResolvedValue({ repoId: 777, owner: "adrian", name: "humanizer", private: true, defaultBranch: "main" } as never);
+    const res = await patch({ open_release: true, public_repo_url: "https://github.com/Adrian/Humanizer", next_opens_at: inDays(10) });
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.details.field).toBe("public_repo_url");
+    expect(body.message).toMatch(/repository being sold/);
+  });
+
+  it("refuses the hosted repo as the place it opens, without asking GitHub", async () => {
+    const hosted = seedListing(mock, creator, { slug: "agent-pack", source: "hosted", hosted_org: "x402git-hosted-01", github_repo_id: "987654" });
+    const res = await patch({ open_release: true, public_repo_url: "https://github.com/x402git-hosted-01/a1b2c3--agent-pack", next_opens_at: inDays(10) }, hosted.id);
+    expect(res.status).toBe(400);
+    expect(vi.mocked(repoById)).not.toHaveBeenCalled();
+  });
+
+  it("refuses pushing the date back with 409 opens_at_only_earlier", async () => {
+    await patch({ open_release: true, public_repo_url: PUBLIC, next_opens_at: inDays(10) });
+    const res = await patch({ next_opens_at: inDays(20) });
+    expect(res.status).toBe(409);
+    const body = await res.json();
+    expect(body.code).toBe("opens_at_only_earlier");
+    expect(body.message).toMatch(/brought forward, never pushed back/);
+    expect(body.details.field).toBe("next_opens_at");
+    expect(mock.rows("listing")[0].next_opens_at.slice(0, 10)).toBe(inDays(10).slice(0, 10));
+  });
+
+  it("refuses clearing the date once set, for the same reason", async () => {
+    await patch({ open_release: true, public_repo_url: PUBLIC, next_opens_at: inDays(10) });
+    const res = await patch({ open_release: false, next_opens_at: null });
+    expect(res.status).toBe(409);
+    expect((await res.json()).code).toBe("opens_at_only_earlier");
+  });
+
+  it("lets the switch go off while the date stays, so a promise already made is not forgotten", async () => {
+    await patch({ open_release: true, public_repo_url: PUBLIC, next_opens_at: inDays(10) });
+    const body = await (await patch({ open_release: false })).json();
+    expect(body.open_release).toBeNull();
+    expect(mock.rows("listing")[0].next_opens_at).toBeTruthy();
+  });
+
+  it("brings every pending release forward with an earlier date, and leaves verdicts alone", async () => {
+    const was = inDays(30);
+    await patch({ open_release: true, public_repo_url: PUBLIC, next_opens_at: was });
+    const pending = seedRelease(mock, listing, { version: "1.1.0", promise_status: "pending", opens_at: was });
+    const already = seedRelease(mock, listing, { version: "1.0.5", promise_status: "pending", opens_at: inDays(2) });
+    const kept = seedRelease(mock, listing, { version: "1.0.0", promise_status: "opened_on_time", opens_at: was });
+
+    const sooner = inDays(5);
+    const res = await patch({ next_opens_at: sooner });
+    expect(res.status).toBe(200);
+
+    const rows = mock.rows("release");
+    expect(rows.find((r) => r.id === pending.id)!.opens_at).toBe(sooner);
+    // Already earlier than the new date: not touched (only ever forward).
+    expect(rows.find((r) => r.id === already.id)!.opens_at).toBe(already.opens_at);
+    expect(rows.find((r) => r.id === kept.id)!.opens_at).toBe(was);
+  });
+
+  it("does not ask GitHub about the sold repo for a price-only patch", async () => {
+    await patch({ price_micro: "12000000" });
+    expect(vi.mocked(repoById)).not.toHaveBeenCalled();
+  });
+});
+
+describe("GET /api/listings/:id — the open-release block on a stamped release", () => {
+  const PUBLIC = "https://github.com/adrian/humanizer-public";
+
+  it("reads the promise off the release that sells, with its verdict and evidence", async () => {
+    Object.assign(mock.rows("listing")[0], { open_release: true, public_repo_url: PUBLIC, next_opens_at: "2026-12-01T00:00:00.000Z" });
+    seedRelease(mock, listing, {
+      version: "1.1.0",
+      promise_status: "opened_on_time",
+      opens_at: "2026-10-20T00:00:00.000Z",
+      open_licence_spdx: "MIT",
+      opened_at: "2026-10-20T00:05:00.000Z",
+      promise_checked_at: "2026-10-20T00:05:00.000Z",
+      promise_evidence: { ref: "v1.1.0", html_url: "https://github.com/adrian/humanizer-public/commit/abc", licence: "MIT", checked_url: "https://api.github.com/x" },
+      open_eligibility: [{ id: "licence", ok: true, detail: "MIT permits resale." }],
+    });
+
+    const body = await (await GET(req("/x"), ctx(listing.id))).json();
+    expect(body.open_release).toEqual({
+      opens_at: "2026-10-20T00:00:00.000Z",
+      public_repo_url: PUBLIC,
+      licence: "MIT",
+      status: "opened_on_time",
+      opened_at: "2026-10-20T00:05:00.000Z",
+      checked_at: "2026-10-20T00:05:00.000Z",
+      evidence_url: "https://github.com/adrian/humanizer-public/commit/abc",
+      checks: [{ id: "licence", ok: true, detail: "MIT permits resale." }],
+    });
+  });
+
+  it("shows the standing offer, not the old release, when the release that sells predates the promise", async () => {
+    Object.assign(mock.rows("listing")[0], { open_release: true, public_repo_url: PUBLIC, next_opens_at: "2026-12-01T00:00:00.000Z" });
+    seedRelease(mock, listing, { version: "1.0.0", promise_status: null, opens_at: null });
+
+    const body = await (await GET(req("/x"), ctx(listing.id))).json();
+    expect(body.open_release.status).toBe("pending");
+    expect(body.open_release.opens_at).toBe("2026-12-01T00:00:00.000Z");
+    expect(body.latest_release.version).toBe("1.0.0");
   });
 });

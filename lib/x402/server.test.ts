@@ -31,7 +31,7 @@ const header = (amountMicro: bigint, nonce: string) => signatureHeader({ from: P
 describe("decodeAuthorization", () => {
   it("reads the EIP-3009 nonce, payer and value — the three facts FR-22 needs", () => {
     const payload = decodeSignature(header(9_000_000n, nonceHex("01")))!;
-    expect(decodeAuthorization(payload)).toEqual({ nonce: nonceHex("01"), payer: PAYER, amountMicro: 9_000_000n });
+    expect(decodeAuthorization(payload)).toEqual({ network: "eip155:84532", nonce: nonceHex("01"), payer: PAYER, amountMicro: 9_000_000n });
   });
 
   it("is null for a payload with no recognisable authorization", () => {
@@ -180,7 +180,7 @@ describe("parsePaymentSignature (CORE-5)", () => {
     const parsed = parsePaymentSignature(tampered((p) => (p.someFutureField = { kept: true })));
     expect(parsed.kind).toBe("ok");
     if (parsed.kind !== "ok") return;
-    expect(parsed.authorization).toEqual({ nonce: nonceHex("c5"), payer: PAYER, amountMicro: 9_000_000n });
+    expect(parsed.authorization).toEqual({ network: "eip155:84532", nonce: nonceHex("c5"), payer: PAYER, amountMicro: 9_000_000n });
     expect((parsed.payload as unknown as Record<string, unknown>).someFutureField).toEqual({ kept: true });
     expect(parsed.payload.accepted.extra).toEqual({ name: "USDC", version: "2" });
   });
@@ -209,7 +209,7 @@ describe("parsePaymentSignature (CORE-5)", () => {
       });
 
     const parsed = parsePaymentSignature(permit2());
-    expect(parsed.kind === "ok" && parsed.authorization).toEqual({ nonce: "123456789012345678901234567890", payer: PAYER, amountMicro: 9_000_000n });
+    expect(parsed.kind === "ok" && parsed.authorization).toEqual({ network: "eip155:84532", nonce: "123456789012345678901234567890", payer: PAYER, amountMicro: 9_000_000n });
 
     const bad = parsePaymentSignature(permit2({ nonce: 5 }));
     expect(bad.kind).toBe("invalid");

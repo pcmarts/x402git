@@ -16,6 +16,7 @@ import { mirrorToVercel } from "@/lib/analytics/vercel";
 import { db } from "@/lib/db";
 import type { PurchaseSource } from "@/lib/db/types";
 import { paymentChain } from "@/lib/env";
+import { notifyAdmin } from "@/lib/notify";
 
 /**
  * The chain this deployment takes payments on, stamped on every event it writes
@@ -29,7 +30,30 @@ export function recordedChainId(): number | null {
     return null;
   }
 }
-import { notifyAdmin } from "@/lib/notify";
+
+/**
+ * The rail an event belongs to and its EVM spelling (migration 20261025090100). An event
+ * that names its network — a Stellar settlement — is stamped with it and a null
+ * `chain_id`; one that does not is the deployment's EVM chain, as every event was until
+ * the second rail. Same never-throw rule as `recordedChainId`.
+ */
+function recordedRail(network: string | null | undefined): { network: string | null; chain_id: number | null } {
+  if (network) {
+    const m = /^eip155:(\d+)$/.exec(network);
+    return { network, chain_id: m ? Number(m[1]) : null };
+  }
+  try {
+    const chain = paymentChain();
+    return { network: chain.network, chain_id: chain.chainId };
+  } catch {
+    return { network: null, chain_id: null };
+  }
+}
+
+/** A strkey keeps its case (lower-casing one breaks it, BUILD H11); an EVM address is stored lower. */
+function canonicalBuyer(address: string): string {
+  return /^[GCM][A-Z2-7]{55,68}$/i.test(address) ? address.toUpperCase() : address.toLowerCase();
+}
 
 /**
  * The names worth spelling out. `(string & {})` keeps the union open — the table takes any
@@ -64,6 +88,8 @@ export type EventInput = {
   listingId?: string | null;
   buyerAddress?: string | null;
   source?: PurchaseSource | null;
+  /** CAIP-2 rail the event is about. Absent means this deployment's EVM chain. */
+  network?: string | null;
   props?: Record<string, unknown>;
 };
 
@@ -83,8 +109,8 @@ const ADMIN_ALERTS: Record<string, { severity: "error" | "alert"; message: strin
   release_scan_socket_quota: { severity: "alert", message: "Socket answered 403/429 or the 10% floor stopped the call" },
 };
 
-/** An address-shaped string never travels to a Telegram channel (FR-40, lib/notify/index.ts). */
-const ADDRESS_SHAPED = /^0x[0-9a-fA-F]{40}$/;
+/** An address-shaped string — EVM or Stellar strkey — never travels to a Telegram channel (FR-40, lib/notify/index.ts). */
+const ADDRESS_SHAPED = /^(0x[0-9a-fA-F]{40}|[GCM][A-Z2-7]{55,68})$/;
 
 /**
  * The scalar half of `props`, for the alert body: `version`, `release_id`, `package`,
@@ -109,10 +135,10 @@ export async function record(event: EventInput): Promise<void> {
       .insert({
         name: event.name,
         listing_id: event.listingId ?? null,
-        buyer_address: event.buyerAddress ? event.buyerAddress.toLowerCase() : null,
+        buyer_address: event.buyerAddress ? canonicalBuyer(event.buyerAddress) : null,
         source: event.source ?? null,
         props: event.props ?? null,
-        chain_id: recordedChainId(),
+        ...recordedRail(event.network),
       });
     if (error) throw error;
   } catch (e) {

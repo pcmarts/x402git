@@ -1,5 +1,6 @@
 /**
- * GET /api/auth/challenge?address=0x… — FR-20.
+ * GET /api/auth/challenge?address=0x… — FR-20. `?address=G…` mints the same challenge
+ * for a Stellar account, to be signed as SEP-53 (25 Oct 2026, BUILD F3/B12).
  *
  * One nonce, one use, five minutes. The same challenge backs `address_proof` on
  * registration, `step_up` on a payout change, `POST /api/auth/rotate-key`, and the
@@ -17,7 +18,7 @@ import { dbAddress, issueChallenge, normaliseAddress } from "@/lib/auth/challeng
 import { challengeLimit, clientIp, enforceAddressLimit } from "@/lib/auth/rate-limit";
 import { rebindContext } from "@/lib/auth/step-up";
 import { ApiError, handle } from "@/lib/errors";
-import { ChallengePurpose, ChallengeResponse } from "@/lib/schemas";
+import { AnyAddress, ChallengePurpose, ChallengeResponse } from "@/lib/schemas";
 
 export const dynamic = "force-dynamic";
 
@@ -48,5 +49,12 @@ export const GET = handle(async (req: NextRequest) => {
   await enforceAddressLimit(challengeLimit(purposeResult.data), clientIp(req), dbAddress(address));
 
   const issued = await issueChallenge(address, purposeResult.data, context);
-  return NextResponse.json(ChallengeResponse.parse(issued), { headers: { "cache-control": "no-store" } });
+  return NextResponse.json(IssuedChallengeResponse.parse(issued), { headers: { "cache-control": "no-store" } });
 });
+
+/**
+ * `ChallengeResponse.address` is the EVM shape in lib/schemas/challenge.ts; a `G…`
+ * challenge is the same body with either address family. Widened here rather than there
+ * so the OpenAPI component is unchanged until that schema file is revised.
+ */
+const IssuedChallengeResponse = ChallengeResponse.extend({ address: AnyAddress });

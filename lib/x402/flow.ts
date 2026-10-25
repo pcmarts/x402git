@@ -31,6 +31,7 @@ import type { PaymentPayload } from "@x402/core/types";
 import { verifyTypedData } from "viem";
 import type * as z from "zod";
 import {
+  canonicalAddress,
   findPurchaseByNonce,
   grant,
   grantFree,
@@ -41,7 +42,7 @@ import {
 } from "@/lib/core/access";
 import type { SettleResponse } from "@x402/core/types";
 import type { PurchaseSource } from "@/lib/db/types";
-import { paymentChain, replayGrantWindowSec, x402Config } from "@/lib/env";
+import { replayGrantWindowSec, x402Config } from "@/lib/env";
 import { ApiError, type ErrorCode } from "@/lib/errors";
 import { notifyAdmin } from "@/lib/notify";
 import { isPaused } from "@/lib/ops/switches";
@@ -51,7 +52,8 @@ import { screen } from "@/lib/screening";
 import { assetDomain } from "@/lib/x402/asset";
 import { type Jurisdiction, requirePermittedJurisdiction } from "./jurisdiction";
 import { grantBody, grantContext } from "./resource";
-import { decodeAuthorization, decodeSignature, paymentResponseHeader, verifyAndSettle } from "./server";
+import { type DecodedAuthorization, decodeAuthorization, decodeSignature, paymentResponseHeader, selectRequirement, verifyAndSettle } from "./server";
+import { verifyPayerAuthEntry } from "./stellar";
 
 export type Grant = z.infer<typeof ResourceGrantResponse>;
 
@@ -150,7 +152,9 @@ export async function purchaseFlow(input: PurchaseInput): Promise<PurchaseOutcom
   // --- gates that must all pass before a single facilitator call -------------
 
   // FR-20: "The payer in a PAYMENT-SIGNATURE must match the signed address when both are present."
-  if (buyer && authorization.payer.toLowerCase() !== buyer.toLowerCase()) {
+  // Compared canonically (lower-case EVM, upper-case strkey), so a Stellar payer with an
+  // EVM X-Wallet-Signature — or the reverse — is correctly a mismatch (JOURNEYS rule 7).
+  if (buyer && canonicalAddress(authorization.payer) !== canonicalAddress(buyer)) {
     throw new ApiError("authorization_mismatch", {
       message: "The payer in the payment authorization is not the wallet that signed X-Wallet-Signature.",
     });
@@ -167,12 +171,15 @@ export async function purchaseFlow(input: PurchaseInput): Promise<PurchaseOutcom
   // from public data and be handed a fresh 5-minute download URL. The check has three
   // gates, then a bounded window: verify the signature, require it to be the purchasing
   // wallet, and only serve the grant inside the crash-retry window.
-  const prior = await findPurchaseByNonce(authorization.nonce);
+  // Partitioned on the payload's own rail (BATTLE-TEST finding 1): a Stellar row has no
+  // chain id, and a lookup on one missed every Stellar replay.
+  const prior = await findPurchaseByNonce(authorization.nonce, authorization.network);
   if (prior) {
-    // 1. Load-bearing: the presented EIP-3009 authorization must cryptographically verify
-    //    against its own `payer`. A captured header re-presented is fine (it still
+    // 1. Load-bearing: the presented authorization must cryptographically verify against
+    //    its own `payer` — the EIP-3009 signature on Base, the payer's auth-entry
+    //    signature on Stellar. A captured header re-presented is fine (it still
     //    verifies); a forgery assembled from public payer/nonce/amount is not.
-    const verified = await verifyAuthorizationSignature(payload);
+    const verified = await verifyAuthorizationSignature(payload, authorization);
     if (!verified) {
       throw new ApiError("authorization_mismatch", {
         message: "The replayed payment authorization did not verify against its payer.",
@@ -182,12 +189,12 @@ export async function purchaseFlow(input: PurchaseInput): Promise<PurchaseOutcom
     // 2. Belt-and-braces: the verified payer must be the wallet that made the purchase,
     //    and when the caller also signed X-Wallet-Signature, that must be the same wallet
     //    — otherwise a captured header would hand someone else's entitlement to a stranger.
-    if (authorization.payer.toLowerCase() !== prior.buyerAddress.toLowerCase()) {
+    if (canonicalAddress(authorization.payer) !== canonicalAddress(prior.buyerAddress)) {
       throw new ApiError("authorization_mismatch", {
         message: "That payment authorization belongs to a different wallet.",
       });
     }
-    if (buyer && prior.buyerAddress.toLowerCase() !== buyer.toLowerCase()) {
+    if (buyer && canonicalAddress(prior.buyerAddress) !== canonicalAddress(buyer)) {
       throw new ApiError("authorization_mismatch", {
         message: "That payment authorization belongs to a different wallet.",
       });
@@ -249,19 +256,37 @@ export async function purchaseFlow(input: PurchaseInput): Promise<PurchaseOutcom
   }
 
   // --- verify → settle → grant -----------------------------------------------
-  const result = await verifyAndSettle(paymentSignature, requirements.accepts[0]);
+  // The accept this payload is paying against is the one whose network and scheme the
+  // client echoed, never `accepts[0]` (BUILD §4 W1 pitfalls): with two rails on the wire
+  // the first entry is Base whatever the payer chose. No match — a network this listing
+  // does not sell on, or one this deployment does not run — is a mismatch with a fresh
+  // 402 attached, so the agent can read which rails there are.
+  const requirement = selectRequirement(requirements.accepts, payload);
+  if (!requirement) {
+    await record({ name: "settle_failed", listingId: q.listingId, source, network: authorization.network, props: { code: "authorization_mismatch", reason: "no_matching_accept", version: q.release.version } });
+    return {
+      kind: "payment_error",
+      code: "authorization_mismatch",
+      requirements,
+      message: `This listing cannot be paid on ${authorization.network}. The attached 402 lists the networks it can be paid on.`,
+      details: { accepted_network: authorization.network, offered: requirements.accepts.map((a) => a.network) },
+    };
+  }
+
+  const result = await verifyAndSettle(paymentSignature, requirement);
   if (!result.ok) {
-    await record({ name: "settle_failed", listingId: q.listingId, source, props: { code: result.code, version: q.release.version } });
+    await record({ name: "settle_failed", listingId: q.listingId, source, network: requirement.network, props: { code: result.code, version: q.release.version } });
     return { kind: "payment_error", code: result.code, requirements, message: result.message, details: result.details };
   }
 
-  const purchase = await grant(q, result.payer, { txHash: result.txHash, nonce: result.nonce, amountMicro: result.amountMicro }, { source });
+  const purchase = await grant(q, result.payer, { txHash: result.txHash, nonce: result.nonce, amountMicro: result.amountMicro, network: result.network }, { source });
 
   await record({
     name: "settled",
     listingId: q.listingId,
     buyerAddress: purchase.buyerAddress,
     source,
+    network: purchase.network,
     props: { kind: purchase.kind, version: q.release.version, gross_micro: purchase.grossMicro.toString() },
   });
 
@@ -270,9 +295,8 @@ export async function purchaseFlow(input: PurchaseInput): Promise<PurchaseOutcom
   // a transaction hash behind every message (FR-22). The buyer's address is deliberately
   // not passed: FR-40, and `AdminEvent` has nowhere to put one. `serveFree` does not
   // notify — a $0 hand-over is not a payment — and neither does `refetchVersion`.
-  // The chain is named because one Supabase project serves Base and Base Sepolia;
-  // `Purchase` carries no chain id, so it comes from the same `paymentChain()` the
-  // purchase row was stamped from (lib/core/access.ts).
+  // The rail is named because one Supabase project serves Base, Base Sepolia and Stellar;
+  // it is the one the purchase row was stamped with, so the message and the ledger agree.
   await notifyAdmin({
     kind: "payment_settled",
     listingId: q.listingId,
@@ -282,7 +306,7 @@ export async function purchaseFlow(input: PurchaseInput): Promise<PurchaseOutcom
     grossMicro: purchase.grossMicro,
     purchaseKind: purchase.kind,
     source,
-    chainId: paymentChain().chainId,
+    network: purchase.network,
     txHash: result.txHash,
   });
 
@@ -292,6 +316,7 @@ export async function purchaseFlow(input: PurchaseInput): Promise<PurchaseOutcom
       listingId: q.listingId,
       buyerAddress: purchase.buyerAddress,
       source,
+      network: purchase.network,
       props: { from: q.ownedVersion, to: q.release.version, price_micro: purchase.grossMicro.toString() },
     });
   }
@@ -353,14 +378,32 @@ async function serveFree(
 }
 
 /**
- * DA / W1.4: verify an EIP-3009 `TransferWithAuthorization` signature locally, against the
- * `from` it claims. The domain is the asset's own EIP-712 domain — the same
- * `name`/`version` the 402 advertised (`assetDomain`) plus the chain id and the token
- * contract (`x402Config`) — so a signature that verifies here is one the token contract
- * would also honour. Permit2 payloads are not verifiable this way; in V0 the only scheme
- * is `exact`/EIP-3009, so a payload without a full EIP-3009 authorization + signature is
- * treated as unverifiable (fail closed).
+ * DA / W1.4: verify the replayed authorization locally, against the payer it claims.
+ *
+ * On Stellar the authorization is the payer's signed auth entry inside the transaction
+ * envelope, checked against the network passphrase (`verifyPayerAuthEntry`). A `G…`
+ * payer's ed25519 signature verifies offline; a `C…` contract wallet's does not (its
+ * `__check_auth` is code only the network runs), so it is `false` and the replay path
+ * fails closed — BATTLE-TEST finding 15 is the follow-up. A byte-identical resend of a
+ * settled transaction verifies, which is the crash-retry this path exists for.
+ *
+ * On Base it is the EIP-3009 `TransferWithAuthorization` signature. The domain is the
+ * asset's own EIP-712 domain — the same `name`/`version` the 402 advertised
+ * (`assetDomain`) plus the chain id and the token contract (`x402Config`) — so a
+ * signature that verifies here is one the token contract would also honour. Permit2
+ * payloads are not verifiable this way; in V0 the only EVM scheme is `exact`/EIP-3009,
+ * so a payload without a full EIP-3009 authorization + signature is treated as
+ * unverifiable (fail closed).
  */
+async function verifyAuthorizationSignature(payload: PaymentPayload, authorization: DecodedAuthorization): Promise<boolean> {
+  if (authorization.network.startsWith("stellar:")) {
+    const transaction = (payload.payload as { transaction?: unknown } | undefined)?.transaction;
+    if (typeof transaction !== "string") return false;
+    return verifyPayerAuthEntry(transaction, authorization.network);
+  }
+  return await verifyEip3009Signature(payload);
+}
+
 const EIP3009_TYPES = {
   TransferWithAuthorization: [
     { name: "from", type: "address" },
@@ -372,7 +415,7 @@ const EIP3009_TYPES = {
   ],
 } as const;
 
-async function verifyAuthorizationSignature(payload: PaymentPayload): Promise<boolean> {
+async function verifyEip3009Signature(payload: PaymentPayload): Promise<boolean> {
   const raw = payload.payload as Record<string, unknown> | undefined;
   if (!raw) return false;
   const auth = raw.authorization as

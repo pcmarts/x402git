@@ -105,6 +105,34 @@ export const Address = z
   .meta({ id: "Address", description: "An EVM address, 0x-prefixed and 40 hex characters.", examples: ["0x0000000000000000000000000000000000000001"] });
 
 /**
+ * Either rail's account address (25 Oct 2026, the Stellar rail): an EVM `0x…` or a
+ * Stellar `G…` account. Contracts (`C…`) are deliberately not payees — a classic
+ * payment cannot reach one — so this is the payout shape, matching the `payout` CHECK.
+ */
+export const AnyAddressRegex = /^(0x[0-9a-fA-F]{40}|G[A-Z2-7]{55})$/;
+
+export const AnyAddress = z
+  .string()
+  .regex(AnyAddressRegex, "must be an EVM address (0x…) or a Stellar account (G…)")
+  .meta({
+    id: "AnyAddress",
+    description: "An EVM address (0x-prefixed, 40 hex characters) or a Stellar account (G…, 56 base32 characters).",
+    examples: ["0x0000000000000000000000000000000000000001", "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5"],
+  });
+
+/** A Stellar account alone: the shape of `creator.stellar_payout_address` (migration 20261025090100). */
+export const StellarAccountRegex = /^G[A-Z2-7]{55}$/;
+
+export const StellarAccount = z
+  .string()
+  .regex(StellarAccountRegex, "must be a Stellar account (G…, 56 base32 characters)")
+  .meta({
+    id: "StellarAccount",
+    description: "A Stellar account address: G followed by 55 base32 characters. Contract (C…) and muxed (M…) addresses are not payout addresses.",
+    examples: ["GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5"],
+  });
+
+/**
  * FR-3: handles that would collide with a platform path. Shared by both rails.
  *
  * The list grew on 2026-08-30 when `/:owner` became a real page (the author page). Until
@@ -181,9 +209,24 @@ export const HexSignature = z
   .max(4096, "signature is too long")
   .meta({ id: "HexSignature", description: "An EIP-191 personal_sign signature, or an ERC-1271 payload for a contract wallet." });
 
+/**
+ * SEP-53 over the challenge message from a Stellar `G…` account: the 64 ed25519
+ * signature bytes as base64 (standard or URL-safe), which is what Freighter's
+ * `signMessage` and the SDK's `Keypair.signMessage` produce (25 Oct 2026, BUILD F3).
+ */
+export const Sep53Signature = z
+  .string()
+  .regex(/^[A-Za-z0-9+/_-]{86,88}={0,2}$/, "must be a base64 SEP-53 signature (64 bytes)")
+  .meta({ id: "Sep53Signature", description: "A SEP-53 signature from a Stellar account over the challenge message, base64-encoded." });
+
+/** Whichever family signed: hex for an EVM wallet, base64 for a Stellar account. Verification decides which one applies. */
+export const WalletSignature = z
+  .union([HexSignature, Sep53Signature])
+  .meta({ id: "WalletSignature", description: "An EIP-191 signature (0x-hex) from an EVM address, or a SEP-53 signature (base64) from a Stellar account." });
+
 /** The `address_proof` of FR-2 and the `step_up` of FR-5: one nonce, one signature. */
 export const SignedChallenge = z
-  .object({ nonce: Nonce, signature: HexSignature })
+  .object({ nonce: Nonce, signature: WalletSignature })
   .meta({ id: "SignedChallenge", description: "A signature over the message returned by GET /api/auth/challenge for the address in question." });
 
 export type SignedChallengeInput = z.infer<typeof SignedChallenge>;

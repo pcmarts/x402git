@@ -30,7 +30,18 @@ export type ChallengePurpose = "address_proof" | "step_up" | "rotate_key" | "wal
 export type ScanStatus = "pending" | "pass" | "fail";
 export type PurchaseKind = "new" | "update" | "free";
 export type PurchaseSource = "web" | "api" | "mcp";
-export type PayoutStatus = "pending" | "broadcast" | "confirmed" | "failed";
+/**
+ * `in_transit` (migration 20261025090000): the transfer has left our account and has not
+ * yet arrived. Only a bridged payout uses it; it counts as in flight for the FR-28 guard.
+ */
+export type PayoutStatus = "pending" | "broadcast" | "in_transit" | "confirmed" | "failed";
+
+/**
+ * CAIP-2 network id, the ledger's partition key since migration 20261025090100
+ * (`eip155:8453`, `eip155:84532`, `stellar:testnet`, `stellar:pubnet`). Every read that
+ * sums, counts or looks up purchases or payouts for *this* deployment filters on it.
+ */
+export type NetworkId = `eip155:${number}` | "stellar:testnet" | "stellar:pubnet" | (string & {});
 
 /** PRD §8.1 FR-4. */
 export type ApiScope = "listings:write" | "earnings:read";
@@ -81,6 +92,18 @@ export type CreatorRow = {
   terms_version: string;
   terms_accepted_at: Timestamptz;
   created_at: Timestamptz;
+  /**
+   * The Stellar rail (migration 20261025090100). `payout_address` may itself be a `G…`
+   * for a Stellar-only creator (BUILD H5); these hold a *second* address when a creator
+   * has both. Same 48-hour rebind rule as the EVM one. Optional in the type only because
+   * pre-migration fixtures construct rows without them.
+   */
+  stellar_payout_address?: string | null;
+  pending_stellar_payout_address?: string | null;
+  stellar_rebind_effective_at?: Timestamptz | null;
+  /** `{ network, trustline: { code, issuer, authorized }, checked_at }` from bind time. */
+  stellar_payout_meta?: unknown | null;
+  stellar_payout_verified_at?: Timestamptz | null;
 };
 
 export type ListingRow = {
@@ -102,7 +125,20 @@ export type ListingRow = {
   published_at: Timestamptz | null;
   retired_at: Timestamptz | null;
   created_at: Timestamptz;
+  /**
+   * Open releases (migration 20261025160000). The listing-level offer: the code opens in
+   * `public_repo_url` on `next_opens_at`, copied onto each release at cut time.
+   * `open_eligibility` is the last listing-time check. Optional in the type only because
+   * pre-migration fixtures construct rows without them.
+   */
+  open_release?: boolean;
+  public_repo_url?: string | null;
+  next_opens_at?: Timestamptz | null;
+  open_eligibility?: unknown | null;
 };
+
+/** Migration 20261025160000. What the promise-kept check concluded for one release. */
+export type PromiseStatus = "pending" | "opened_on_time" | "overdue" | "not_open" | "ineligible";
 
 export type ReleaseRow = {
   id: Uuid;
@@ -131,6 +167,18 @@ export type ReleaseRow = {
    */
   licence_verdict?: LicenceVerdict | null;
   created_at: Timestamptz;
+  /**
+   * Open releases (migration 20261025160000): the promise stamped at cut. `opens_at` is at
+   * most 90 days after `created_at` and can only move earlier (both enforced in the
+   * database). `promise_evidence` is `{ ref, html_url, licence, checked_url }`.
+   */
+  opens_at?: Timestamptz | null;
+  open_licence_spdx?: string | null;
+  promise_status?: PromiseStatus | null;
+  promise_checked_at?: Timestamptz | null;
+  opened_at?: Timestamptz | null;
+  promise_evidence?: unknown | null;
+  open_eligibility?: unknown | null;
 };
 
 export type PurchaseRow = {
@@ -152,13 +200,25 @@ export type PurchaseRow = {
   payout_id: Uuid | null;
   revoked_at: Timestamptz | null;
   /**
-   * Which chain this settled on (migration 20260906010000). One Supabase project serves
-   * Base Sepolia and Base mainnet, so *every* query that sums or counts purchases must
-   * filter on it — an unfiltered sum reads testnet traffic as revenue, and the sweep
-   * would pay real USDC for it. Optional in the type only because pre-migration code
-   * paths construct rows without it; the column is NOT NULL.
+   * Which rail this settled on (migration 20261025090100). One Supabase project serves
+   * Base Sepolia, Base mainnet and now Stellar, so *every* query that sums, counts or
+   * looks up purchases must filter on it — an unfiltered sum reads testnet traffic as
+   * revenue, and the sweep would pay real money for it. NOT NULL; a BEFORE INSERT
+   * trigger fills it from `chain_id` for code that predates the column.
    */
-  chain_id?: BigIntWire;
+  network: NetworkId;
+  /**
+   * Which token was paid: the ERC-20 or SAC contract address (USDT0 T5). USDC and USDT0
+   * are both $1 here and never converted; a payout is always in the asset received.
+   * Nullable only for EVM rows the trigger could not attribute.
+   */
+  asset?: string | null;
+  /**
+   * The EVM spelling of `network` (migration 20260906010000), kept for the admin and
+   * reconcile reads that still filter on it. **Null on Stellar.** Optional in the type
+   * only because pre-migration code paths construct rows without it.
+   */
+  chain_id?: BigIntWire | null;
 };
 
 export type PayoutRow = {
@@ -171,8 +231,11 @@ export type PayoutRow = {
   tx_hash: string | null;
   status: PayoutStatus;
   created_at: Timestamptz;
-  /** As on `purchase` — see the note there. Migration 20260906010000. */
-  chain_id?: BigIntWire;
+  /** As on `purchase` — see the notes there. Migration 20261025090100. */
+  network: NetworkId;
+  asset?: string | null;
+  /** Null on Stellar. Migration 20260906010000. */
+  chain_id?: BigIntWire | null;
 };
 
 export type EventRow = {
@@ -184,6 +247,8 @@ export type EventRow = {
   props: unknown | null;
   /** Migration 20260914010000. Null on operator events written by scripts. */
   chain_id: BigIntWire | null;
+  /** Migration 20261025090100. The rail; null where `chain_id` is null. */
+  network?: NetworkId | null;
   at: Timestamptz;
 };
 
@@ -209,6 +274,8 @@ export type ChallengeRow = {
   purpose?: ChallengePurpose;
   /** The operand the signature authorises — `rebind:<new address>` on a payout rebind. */
   context?: string | null;
+  /** Migration 20261025090100: the key that signed (a `G…` for SEP-53). Equals `address` for EVM. */
+  signer?: string | null;
   expires_at: Timestamptz;
   used_at: Timestamptz | null;
   created_at: Timestamptz;

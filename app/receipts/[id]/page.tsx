@@ -18,14 +18,15 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { SiteFooter, SiteHeader } from "@/app/_components/chrome";
+import { chainLabel, stellarExplorerTxUrl } from "@/lib/buy-links";
+import { paymentOptionsFor, resolveListing } from "@/lib/core/access";
 import { toMicro } from "@/lib/db/types";
-import { paymentChain } from "@/lib/env";
 import { loadReceipt, verifyReceiptToken } from "@/lib/receipts";
 import { termsInfo } from "@/lib/terms";
 import { currentSession } from "@/lib/web/current";
 import { formatBytes, formatDateTime } from "@/lib/web/manifest-view";
 import { formatAmount, formatPrice } from "@/lib/web/money";
-import { chainInfo, explorerTxUrl } from "@/lib/web/wallet-checkout";
+import { explorerTxUrl } from "@/lib/web/wallet-checkout";
 
 export const dynamic = "force-dynamic";
 
@@ -51,9 +52,22 @@ export default async function ReceiptPage({ params, searchParams }: Props) {
 
   const session = await currentSession();
   const { purchase, owner, slug, release, licenceSpdx } = receipt;
-  const chain = paymentChain();
-  const chainName = chainInfo(chain.chainId).name;
-  const txUrl = purchase.txHash ? explorerTxUrl(chain.chainId, purchase.txHash) : null;
+
+  // The network is the purchase's own (BATTLE-TEST finding 24, 25 Oct 2026), never the
+  // deployment's chain: a receipt for a Stellar payment on a deployment that also takes
+  // Base must say Stellar and link stellar.expert. The token's name comes from the same
+  // function that offers it on the listing, so no symbol is spelled here; a network the
+  // creator no longer takes prints as "paid on …" with the amount in dollars.
+  const network = purchase.network;
+  const chainName = chainLabel(network);
+  const stellar = network.startsWith("stellar:");
+  const txUrl = purchase.txHash
+    ? stellar
+      ? stellarExplorerTxUrl(network, purchase.txHash)
+      : explorerTxUrl(Number(network.split(":")[1]), purchase.txHash)
+    : null;
+  const resolved = await resolveListing({ owner, slug });
+  const symbol = resolved ? (paymentOptionsFor(resolved.creator, resolved.listing).find((o) => o.network === network)?.asset_symbol ?? null) : null;
   const terms = termsInfo();
   const listingPath = `/${owner}/${slug}`;
 
@@ -81,7 +95,7 @@ export default async function ReceiptPage({ params, searchParams }: Props) {
           <dl>
             <dt>Paid</dt>
             <dd>
-              {formatAmount(purchase.grossMicro)} <span className="muted">USDC on {chainName}</span>
+              {formatAmount(purchase.grossMicro)} <span className="muted">{symbol ? `${symbol} on ${chainName}` : `paid on ${chainName}`}</span>
             </dd>
             <dt>Transaction</dt>
             <dd className="wrap">
@@ -136,8 +150,13 @@ export default async function ReceiptPage({ params, searchParams }: Props) {
 
         <p className="written measure">
           The bytes behind that sha256 are what you can fetch, at any time, from <a href="/purchases">your purchases</a> with the wallet
-          that paid — or from <code>GET /api/r/{owner}/{slug}/v/{release.version}</code> with its signature. The serve is the exact
-          artifact that was scanned; a later release is a separate version.
+          that paid — or from <code>GET /api/r/{owner}/{slug}/v/{release.version}</code> with its signature
+          {stellar ? (
+            <>
+              , or from the command line with <code>npx x402git-stellar fetch {owner}/{slug}</code> and the same Stellar key
+            </>
+          ) : null}
+          . The serve is the exact artifact that was scanned; a later release is a separate version.
         </p>
 
         <p className="written measure">

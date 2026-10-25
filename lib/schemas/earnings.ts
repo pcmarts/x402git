@@ -7,7 +7,7 @@
  */
 
 import * as z from "zod";
-import { Address, IsoDateTime, MicroUsdc, SemVer, Slug } from "./common";
+import { AnyAddress, IsoDateTime, MicroUsdc, SemVer, Slug } from "./common";
 
 export const SaleKind = z.enum(["new", "update", "free"]).meta({ id: "SaleKind" });
 
@@ -40,21 +40,27 @@ export const EarningsResponse = z
     holdback_days: z.number().int(),
     /** When the next tranche leaves the holdback. */
     next_release_at: IsoDateTime.nullable(),
-    payout_address: Address,
+    /** FR-26: the bound identity address — an EVM `0x…`, or a `G…` for a Stellar-only creator (BUILD H5). */
+    payout_address: AnyAddress,
     sales: z.array(EarningsSale),
     next_cursor: z.string().nullable(),
   })
   .meta({ id: "Earnings" });
 
-export const PayoutStatus = z.enum(["pending", "broadcast", "confirmed", "failed"]).meta({ id: "PayoutStatus" });
+/** `in_transit` (migration 20261025090000): left our account, not yet arrived. Bridged payouts only. */
+export const PayoutStatus = z.enum(["pending", "broadcast", "in_transit", "confirmed", "failed"]).meta({ id: "PayoutStatus" });
 
 export const SweepResponse = z
   .object({
     payout_id: z.uuid().nullable(),
     amount_micro: MicroUsdc,
     gas_micro: MicroUsdc,
-    /** FR-26: always the bound payout address. No `to` parameter exists. */
-    to_address: Address,
+    /**
+     * FR-26: always the bound payout address. No `to` parameter exists. A `G…` on a
+     * Stellar sweep (`?network=stellar:…`); null only when that sweep was skipped
+     * because the creator has no Stellar address to pay.
+     */
+    to_address: AnyAddress.nullable(),
     status: PayoutStatus.nullable(),
     tx_hash: z.string().nullable(),
     purchases_swept: z.number().int().nonnegative(),

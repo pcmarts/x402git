@@ -211,9 +211,9 @@ describe("purchaseFlow — what the operator hears (ADMIN-NOTIFICATIONS.md)", ()
       grossMicro: 9_000_000n,
       purchaseKind: "new",
       source: "api",
-      // X402_NETWORK is base-sepolia in this file's env; the message names the chain
+      // X402_NETWORK is base-sepolia in this file's env; the message names the network
       // because one project serves both (lib/admin/feed.ts §"One chain").
-      chainId: 84532,
+      network: "eip155:84532",
       txHash: `0x${"cd".repeat(32)}`,
     });
     // FR-40: the wallet that paid is on the purchase row and never in the message.

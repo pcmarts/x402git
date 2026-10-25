@@ -66,7 +66,8 @@ import { PLATFORM_FEE_BPS } from "@/lib/core/access";
 import { RESALE_COMPATIBLE_SPDX } from "@/lib/licence";
 import { toMicro } from "@/lib/db/types";
 import { appUrl } from "@/lib/env";
-import { MIN_PRICE_MICRO, PRICE_PRESETS_MICRO, UPDATE_PRICE_PRESETS_MICRO } from "@/lib/schemas";
+import { MIN_PRICE_MICRO, OPEN_RELEASE_MAX_DAYS, PRICE_PRESETS_MICRO, UPDATE_PRICE_PRESETS_MICRO } from "@/lib/schemas";
+import { openReleaseChecks } from "@/lib/listings/view";
 import { DESCRIPTION_LIMIT, requireDashboard, TRIGGER_HINT_LIMIT } from "@/lib/web/dashboard";
 import { normalizeReport, type ScanReport } from "@/lib/scan/report";
 import { blockingReasons, loadListingById, manifestFor, repoUrlFor } from "@/lib/web/loaders";
@@ -349,6 +350,13 @@ type Check = {
   fix?: string;
 };
 
+/** `YYYY-MM-DD` in UTC for `<input type="date">`, or empty. */
+function dateInput(iso: string | null | undefined): string {
+  if (!iso) return "";
+  const date = new Date(iso);
+  return Number.isNaN(date.getTime()) ? "" : date.toISOString().slice(0, 10);
+}
+
 export default async function ListingDashboardPage({
   params,
   searchParams,
@@ -412,6 +420,8 @@ export default async function ListingDashboardPage({
    */
   const scanReport = readReport(newest?.scan_report);
   const osvStalled = Boolean(scanReport?.osv_error) && newest?.scan === "pending";
+  // Open releases: the checks the newest cut ran, else the listing's last copy of them.
+  const openChecks = openReleaseChecks(newest?.open_eligibility ?? listing.open_eligibility);
   // The repository this listing sells, as somewhere a creator can go (2026-09-01,
   // founder). Null when GitHub cannot be asked, and then there is no link — the same
   // rule the avatar follows: a placeholder for a fact is worse than the fact's absence.
@@ -844,6 +854,68 @@ export default async function ListingDashboardPage({
                 is inside `#listing-form` like the two fields above it, so the page's one
                 Save changes it; a second button here was a second answer to "did that
                 take?" and the reason this file's header says there is one Save. */}
+          </section>
+
+          {/* Open releases (25 Oct 2026, HackMeridian; docs/HACKMERIDIAN-STRATEGY.md §6a).
+              Inside the one form, so the one Save carries it in the same PATCH as the
+              price. A checkbox, a URL and a date, and one sentence saying what they
+              promise. The checks under it are read off the newest cut — computed, never
+              declared — so a maintainer sees what a buyer will see. */}
+          <section id="open-release">
+            <h2>Open release</h2>
+            <fieldset>
+              <legend>Early access, then open</legend>
+              <div className="field">
+                <label htmlFor="open_release">
+                  <input type="checkbox" id="open_release" name="open_release" value="1" defaultChecked={listing.open_release === true} /> Sell the
+                  next release early, then open it
+                </label>
+                <small>
+                  The code goes public in this repo on this date. You can bring the date forward later, never push it back. Sell from a
+                  private mirror of the project; the public repo is where it opens.
+                </small>
+              </div>
+              <div className="field">
+                <div className="field-head">
+                  <label htmlFor="public_repo_url">Public repository</label>
+                </div>
+                <input
+                  type="url"
+                  id="public_repo_url"
+                  name="public_repo_url"
+                  placeholder="https://github.com/owner/name"
+                  pattern="https://github\.com/[A-Za-z0-9-]{1,39}/[A-Za-z0-9._-]{1,100}"
+                  title="https://github.com/owner/name, nothing after the repository name"
+                  defaultValue={listing.public_repo_url ?? ""}
+                />
+              </div>
+              <div className="field">
+                <div className="field-head">
+                  <label htmlFor="next_opens_at">Opens on</label>
+                </div>
+                {/* A plain date: a maintainer promises a day. The API also takes an instant,
+                    and re-saving the day it shows keeps the instant (lib/listings/service.ts). */}
+                <input type="date" id="next_opens_at" name="next_opens_at" defaultValue={dateInput(listing.next_opens_at)} max={dateInput(new Date(Date.now() + OPEN_RELEASE_MAX_DAYS * 86_400_000).toISOString())} />
+                <small>
+                  At most {OPEN_RELEASE_MAX_DAYS} days ahead.
+                  {listing.next_opens_at ? ` Currently ${formatDateTime(listing.next_opens_at)}.` : ""}
+                </small>
+              </div>
+              {openChecks.length > 0 ? (
+                <div className="field">
+                  <span className="field-label">
+                    Checked at the last cut{newest?.promise_status ? ` (v${newest.version} · ${newest.promise_status.replace(/_/g, " ")})` : ""}
+                  </span>
+                  <ul className="facts">
+                    {openChecks.map((check) => (
+                      <li key={check.id} data-status={check.ok ? "pass" : "fail"}>
+                        {check.detail}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+            </fieldset>
           </section>
         </form>
 

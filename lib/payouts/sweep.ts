@@ -30,6 +30,7 @@ import { assertRpcServesChain } from "@/lib/chain";
 import { isPaused } from "@/lib/ops/switches";
 import { record } from "@/lib/events";
 import { screen } from "@/lib/screening";
+import { addressFamily } from "@/lib/x402/stellar";
 import { creatorListings, sweepablePurchases } from "./ledger";
 
 export type SweepSkip =
@@ -38,6 +39,7 @@ export type SweepSkip =
   | "payout_retries_exhausted"
   | "nothing_to_sweep"
   | "no_sweep_signer"
+  | "no_evm_payout_address"
   | "paused";
 
 export type SweepResult = {
@@ -97,6 +99,17 @@ export async function sweepCreator(creator: CreatorRow, options: SweepOptions = 
   if (await isPaused("sweeps")) {
     await record({ name: "sweep_skipped", props: { creator_id: creator.id, reason: "paused" } });
     return { ...empty, skipped: "paused" };
+  }
+
+  // 0a. This is the EVM sweep, and it pays an EVM address. A creator whose identity
+  //     address is a Stellar `G…` (BUILD H5, since 20261025090100) is paid by
+  //     `sweepStellarCreator` from their Stellar purchases; their EVM purchases, if any,
+  //     have nowhere to go on this rail. Nothing is written: a `pending` row to a `G…`
+  //     would fail the payout CHECK, and before the CHECK it would have reached
+  //     `writeContract` and stuck.
+  if (addressFamily(toAddress) !== "evm") {
+    await record({ name: "sweep_skipped", props: { creator_id: creator.id, reason: "no_evm_payout_address" } });
+    return { ...empty, skipped: "no_evm_payout_address" };
   }
 
   // 0b. The RPC must serve the chain the ledger describes — a mainnet endpoint on a
@@ -284,7 +297,7 @@ export async function payoutAddressFor(creator: CreatorRow, now: Date): Promise<
  * funds moved, so a retry can never double-pay — but an address that reverts every
  * transfer (e.g. USDC-blacklisted) must not burn gas on every cron tick forever.
  */
-const MAX_FAILED_RETRIES = 3;
+export const MAX_FAILED_RETRIES = 3;
 
 async function openPayout(
   creatorId: string,
@@ -306,7 +319,12 @@ async function openPayout(
         to_address: toAddress,
         idempotency_key: key,
         status: "pending",
+        // The rail, in both spellings (20261025090100). Written explicitly rather than
+        // left to the `payout_set_network` trigger: the mock has no trigger, and a row
+        // the in-flight index cannot see is a sweep test that passes whatever it does.
         chain_id: paymentChain().chainId,
+        network: paymentChain().network,
+        asset: paymentChain().asset,
       })
       .select("*")
       .single();
@@ -323,14 +341,15 @@ async function openPayout(
   throw new Error("openPayout: exhausted retry keys");
 }
 
-async function setPayoutStatus(payoutId: string, status: PayoutRow["status"], txHash: string | null): Promise<void> {
+/** Shared with the Stellar sweep (lib/payouts/stellar.ts): one status writer, one stamp. */
+export async function setPayoutStatus(payoutId: string, status: PayoutRow["status"], txHash: string | null): Promise<void> {
   const patch: Record<string, unknown> = { status };
   if (txHash) patch.tx_hash = txHash;
   const { error } = await db().from("payout").update(patch).eq("id", payoutId);
   if (error) throw error;
 }
 
-async function stampPayout(purchaseIds: string[], payoutId: string): Promise<void> {
+export async function stampPayout(purchaseIds: string[], payoutId: string): Promise<void> {
   if (purchaseIds.length === 0) return;
   const { error } = await db().from("purchase").update({ payout_id: payoutId }).in("id", purchaseIds);
   if (error) throw error;

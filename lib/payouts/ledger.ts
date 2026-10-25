@@ -75,6 +75,28 @@ export async function sweepablePurchases(listingIds: string[], now: Date): Promi
   return (data ?? []) as PurchaseRow[];
 }
 
+/**
+ * The same sweep set for one rail and one token (25 Oct 2026, USDT0 T5): the Stellar
+ * sweep pays in the asset it received, so a USDC sale is never paid out in USDT0 or the
+ * reverse, and a `stellar:testnet` row is never swept by a `stellar:pubnet` deployment.
+ * Partitioned on `network`, which a Stellar row has, rather than `chain_id`, which it
+ * does not. The index `purchase_sweepable_by_network` covers exactly this predicate.
+ */
+export async function sweepablePurchasesOn(network: string, asset: string, listingIds: string[], now: Date): Promise<PurchaseRow[]> {
+  if (listingIds.length === 0) return [];
+  const { data, error } = await db()
+    .from("purchase")
+    .select("*")
+    .in("listing_id", listingIds)
+    .eq("network", network)
+    .eq("asset", asset)
+    .lt("holdback_until", now.toISOString())
+    .is("payout_id", null)
+    .is("revoked_at", null);
+  if (error) throw error;
+  return (data ?? []) as PurchaseRow[];
+}
+
 export async function creatorPayouts(creatorId: string): Promise<PayoutRow[]> {
   const { data, error } = await db().from("payout").select("*").eq("creator_id", creatorId);
   if (error) throw error;

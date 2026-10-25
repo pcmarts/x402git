@@ -68,8 +68,9 @@ const UNIQUE: Record<string, string[][]> = {
   api_key: [["id"], ["hash"]],
   listing: [["id"], ["creator_id", "slug"]],
   release: [["id"], ["listing_id", "version"]],
-  // 20261025085950 adds `(chain_id, payment_nonce)` beside the global nonce key (CORE-1).
-  purchase: [["id"], ["payment_nonce"], ["chain_id", "payment_nonce"]],
+  // 20261025085950 adds `(chain_id, payment_nonce)` beside the global nonce key (CORE-1);
+  // 20261025090100 adds `(network, payment_nonce)`, the one the replay lookup reads by.
+  purchase: [["id"], ["payment_nonce"], ["chain_id", "payment_nonce"], ["network", "payment_nonce"]],
   payout: [["id"], ["idempotency_key"]],
   challenge: [["nonce"]],
   idempotency: [["key"]],
@@ -93,7 +94,18 @@ const PARTIAL_UNIQUE: Record<string, { columns: string[]; where: (r: Row) => boo
   // FR-54 `api_key_one_live_agent`: at most one unrevoked agent key per creator, so a
   // rotate that forgets to revoke the old row fails here the way it would in Postgres.
   api_key: [{ columns: ["creator_id"], where: (r) => r.kind === "agent" && (r.revoked_at ?? null) === null }],
+  // FR-28 in flight (20261025090100): one open payout per creator per rail, and — while
+  // one hot account pays every Stellar payout — one per Stellar network overall. Without
+  // these a sweep test passes whatever the predicate (BATTLE-TEST finding 12).
+  payout: [
+    { columns: ["creator_id", "network"], where: (r) => IN_FLIGHT.has(String(r.status)) },
+    { columns: ["network"], where: (r) => typeof r.network === "string" && r.network.startsWith("stellar:") && IN_FLIGHT.has(String(r.status)) },
+  ],
 };
+const IN_FLIGHT = new Set(["pending", "broadcast", "in_transit"]);
+
+/** Base Sepolia USDC, the asset every EVM test row paid (lib/env.ts `usdcAddress`). */
+const TEST_EVM_ASSET = "0x036CbD53842c5426634e7929541eC2318f3dCF7e";
 
 /** Server-side defaults, so a test inserts only what it cares about. */
 function defaultsFor(table: string, now: string): Row {
@@ -142,16 +154,35 @@ function defaultsFor(table: string, now: string): Row {
         created_at: now,
         published_at: null,
         retired_at: null,
+        // Open releases (20261025160000): off unless a test says otherwise.
+        open_release: false,
+        public_repo_url: null,
+        next_opens_at: null,
+        open_eligibility: null,
       };
     case "release":
-      return { id: randomUUID(), scan: "pending", licence_verdict: null, created_at: now };
-    // `chain_id` defaults to Base Sepolia, which is what the tests' X402_NETWORK is.
-    // A seeded row without it would be invisible to the chain-scoped sweep queries
-    // (20260906010000) and the case under test would silently become "nothing to do".
+      return {
+        id: randomUUID(),
+        scan: "pending",
+        licence_verdict: null,
+        created_at: now,
+        // Open releases (20261025160000): no promise unless a test stamps one.
+        opens_at: null,
+        open_licence_spdx: null,
+        promise_status: null,
+        promise_checked_at: null,
+        opened_at: null,
+        promise_evidence: null,
+        open_eligibility: null,
+      };
+    // `chain_id` and `network` default to Base Sepolia, which is what the tests'
+    // X402_NETWORK is. A seeded row without them would be invisible to the chain- and
+    // network-scoped queries (20260906010000, 20261025090100) and the case under test
+    // would silently become "nothing to do". Mirrors the `set_network_from_chain` trigger.
     case "purchase":
-      return { id: randomUUID(), all_versions: false, granted_at: now, payout_id: null, revoked_at: null, chain_id: 84532 };
+      return { id: randomUUID(), all_versions: false, granted_at: now, payout_id: null, revoked_at: null, chain_id: 84532, network: "eip155:84532", asset: TEST_EVM_ASSET };
     case "payout":
-      return { id: randomUUID(), gas_micro: "0", status: "pending", created_at: now, chain_id: 84532 };
+      return { id: randomUUID(), gas_micro: "0", status: "pending", created_at: now, chain_id: 84532, network: "eip155:84532", asset: TEST_EVM_ASSET };
     case "event":
     case "screening":
       return { id: Date.now() + Math.floor(Math.random() * 1000), at: now };

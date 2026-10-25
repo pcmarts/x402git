@@ -25,6 +25,7 @@
 import { db } from "@/lib/db";
 import type { ChallengePurpose } from "@/lib/db/types";
 import { ApiError, describeThrown } from "@/lib/errors";
+import { addressFamily, canonicalAddress } from "@/lib/x402/stellar";
 
 export type LimitName =
   | "registration"
@@ -83,15 +84,16 @@ export function challengeLimit(purpose: ChallengePurpose): AddressLimitName {
   return "challenge";
 }
 
-const EVM_ADDRESS = /^0x[0-9a-fA-F]{40}$/;
-
 /**
- * An EVM address in the only form a bucket key may take: lowercase. Anything that is not
- * `0x` followed by 40 hex characters is null, so a string the caller made up never
+ * An address in the only form a bucket key may take: its stored spelling — an EVM
+ * address lower-case, a Stellar strkey upper-case with its checksum verified
+ * (`canonicalAddress`, BUILD H11; a `G…` payer must not 400 here, BATTLE-TEST finding
+ * 14). Anything that fits neither shape is null, so a string the caller made up never
  * becomes a key, or a `rate_limit` row, as it was sent.
  */
 export function addressKey(address: unknown): string | null {
-  return typeof address === "string" && EVM_ADDRESS.test(address) ? address.toLowerCase() : null;
+  if (typeof address !== "string" || addressFamily(address) === null) return null;
+  return canonicalAddress(address);
 }
 
 export type LimitResult = { allowed: boolean; count: number; limit: number; retryAfterSeconds: number };
@@ -146,7 +148,7 @@ export async function enforceLimit(name: LimitName, key: string, now = new Date(
  */
 export async function enforceAddressLimit(name: AddressLimitName, ip: string, address: string | null, now = new Date()): Promise<LimitResult> {
   const key = address === null ? "anonymous" : addressKey(address);
-  if (key === null) throw new ApiError("invalid_request", { message: "Not a valid EVM address." });
+  if (key === null) throw new ApiError("invalid_request", { message: "Not a valid EVM (0x…) or Stellar (G…) address." });
 
   const cap = IP_CAPS[name];
   const perIp = await hitBucket(`${name}:ip:${ip}`, cap, now);

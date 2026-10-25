@@ -5,7 +5,7 @@
  */
 
 import * as z from "zod";
-import { Address, Email, Handle, HexSignature, HttpsUrl, IsoDateTime, Nonce, SignedChallenge } from "./common";
+import { AnyAddress, Email, Handle, HttpsUrl, IsoDateTime, Nonce, SignedChallenge, StellarAccount, WalletSignature } from "./common";
 
 export const ApiScope = z.enum(["listings:write", "earnings:read"]).meta({ id: "ApiScope" });
 
@@ -20,7 +20,8 @@ export const OnboardedVia = z.enum(["web", "api"]).meta({ id: "OnboardedVia" });
 export const CreateCreatorRequest = z
   .object({
     handle: Handle,
-    payout_address: Address,
+    /** An EVM `0x…` or a Stellar `G…` (25 Oct 2026, BUILD H5): the identity, and the first payout address. */
+    payout_address: AnyAddress,
     /** Proves control of `payout_address`. Unproved addresses are rejected `payout_address_unverified`. */
     address_proof: SignedChallenge,
     /** Must equal the `version` from GET /api/terms, or `terms_version_stale`. */
@@ -42,7 +43,7 @@ export const CreateCreatorResponse = z
     /** Shown once. Replayable for 24h with the same `Idempotency-Key`; otherwise rotate. */
     api_key: z.string(),
     handle: Handle,
-    payout_address: Address,
+    payout_address: AnyAddress,
     api_key_scopes: z.array(ApiScope),
     /** D6. Flat 10%, seller-side. */
     platform_fee_bps: z.number().int(),
@@ -60,10 +61,19 @@ export const CreatorMeResponse = z
   .object({
     creator_id: z.uuid(),
     handle: Handle,
-    payout_address: Address,
+    payout_address: AnyAddress,
     /** FR-5: set by a PATCH; takes effect at `rebind_effective_at` (48h). */
-    pending_payout_address: Address.nullable(),
+    pending_payout_address: AnyAddress.nullable(),
     rebind_effective_at: IsoDateTime.nullable(),
+    /**
+     * The Stellar payout address beside the identity, when the creator has bound one
+     * (JOURNEYS rule 1; migration 20261025090100). Same 48-hour rule on a change.
+     */
+    stellar_payout_address: StellarAccount.nullable().optional(),
+    pending_stellar_payout_address: StellarAccount.nullable().optional(),
+    stellar_rebind_effective_at: IsoDateTime.nullable().optional(),
+    /** When the trustline in the configured asset was last confirmed on Horizon. */
+    stellar_payout_verified_at: IsoDateTime.nullable().optional(),
     wallet_mode: WalletMode,
     onboarded_via: OnboardedVia,
     api_key_scopes: z.array(ApiScope),
@@ -86,13 +96,30 @@ export const CreatorMeResponse = z
  */
 export const UpdateCreatorRequest = z
   .object({
-    payout_address: Address.optional(),
+    payout_address: AnyAddress.optional(),
+    /**
+     * Add or change the Stellar payout address (JOURNEYS C3, C5). Needs `step_up` from the
+     * identity address (minted with `new_payout_address=<this G…>`), `stellar_proof` from
+     * the new account itself, and `confirm_address`. An addition is live at once; a change
+     * takes effect after 48 hours. The account must hold an authorised trustline in the
+     * deployment's Stellar asset, or the request is `invalid_request` with
+     * `details.reason = "no_trustline"`.
+     */
+    stellar_payout_address: StellarAccount.optional(),
+    /** A SEP-53 `address_proof` challenge signed by `stellar_payout_address` itself. */
+    stellar_proof: SignedChallenge.optional(),
+    /** Type-to-confirm: the whole `stellar_payout_address`, or its last six characters. */
+    confirm_address: z.string().min(1).max(64).optional(),
     abuse_contact_url: HttpsUrl.nullable().optional(),
     abuse_contact_email: Email.nullable().optional(),
     step_up: SignedChallenge.optional(),
   })
-  .refine((b) => b.payout_address !== undefined || b.abuse_contact_url !== undefined || b.abuse_contact_email !== undefined, {
-    error: "nothing to change",
+  .refine(
+    (b) => b.payout_address !== undefined || b.stellar_payout_address !== undefined || b.abuse_contact_url !== undefined || b.abuse_contact_email !== undefined,
+    { error: "nothing to change" },
+  )
+  .refine((b) => !(b.payout_address !== undefined && b.stellar_payout_address !== undefined), {
+    error: "change one payout address per request: each needs its own step-up",
   })
   .meta({
     id: "UpdateCreatorRequest",
@@ -102,9 +129,12 @@ export const UpdateCreatorRequest = z
 export const UpdateCreatorResponse = z
   .object({
     creator_id: z.uuid(),
-    payout_address: Address,
-    pending_payout_address: Address.nullable(),
+    payout_address: AnyAddress,
+    pending_payout_address: AnyAddress.nullable(),
     rebind_effective_at: IsoDateTime.nullable(),
+    stellar_payout_address: StellarAccount.nullable().optional(),
+    pending_stellar_payout_address: StellarAccount.nullable().optional(),
+    stellar_rebind_effective_at: IsoDateTime.nullable().optional(),
     abuse_contact_url: z.string().nullable(),
     abuse_contact_email: z.string().nullable(),
     pending_abuse_contact_url: z.string().nullable().optional(),
@@ -119,7 +149,7 @@ export const UpdateCreatorResponse = z
 
 /** FR-4: rotate without the old key. The signature proves the bound payout address. */
 export const RotateKeyRequest = z
-  .object({ handle: Handle, address: Address, nonce: Nonce, signature: HexSignature })
+  .object({ handle: Handle, address: AnyAddress, nonce: Nonce, signature: WalletSignature })
   .meta({
     id: "RotateKeyRequest",
     description:

@@ -33,7 +33,7 @@ export const FAQ: { group: string; items: QA[] }[] = [
       },
       {
         q: "Do I need a crypto wallet?",
-        a: "You need an address on an EVM chain to be paid at — any wallet that holds USDC on Base will do. You prove you control it by signing one message; no funds move. The server never sees a private key, yours or anyone's.",
+        a: "You need an address to be paid at: an EVM wallet that holds USDC on Base, a Stellar wallet (Freighter) that holds USDT0, or one of each. You prove you control it by signing one message; no funds move. The server never sees a private key, yours or anyone's.",
       },
       {
         q: "Do I need to do KYC or file tax forms to get paid?",
@@ -50,7 +50,7 @@ export const FAQ: { group: string; items: QA[] }[] = [
     items: [
       {
         q: "Do I need an account?",
-        a: "No. You need a wallet with USDC on Base. Your purchases are tied to that wallet's address, and you can list and re-download them at any time by signing a message with it.",
+        a: "No. You need a wallet that holds dollars: USDC on Base, or USDT0 on Stellar for listings that take it. Your purchases are tied to that wallet's address, and you can list and re-download them at any time by signing a message with it.",
       },
       {
         q: "What exactly do I get?",
@@ -66,7 +66,7 @@ export const FAQ: { group: string; items: QA[] }[] = [
       },
       {
         q: "Does the creator see who bought?",
-        a: "No. Creators see a sale — the version, the kind, the amount and the time — and never a buyer's address or transaction hash. Payments to the platform address are, like everything on a public chain, visible on Base.",
+        a: "No. Creators see a sale — the version, the kind, the amount and the time — and never a buyer's address or transaction hash. Payments to the platform address are, like everything on a public chain, visible on Base or on Stellar, whichever the buyer paid on.",
       },
       {
         q: "Can my agent buy without me?",
@@ -87,7 +87,7 @@ export const FAQ: { group: string; items: QA[] }[] = [
       },
       {
         q: "Why USDC on Base, and what about gas?",
-        a: "Prices are set in dollars and USDC is a dollar. Base is where x402 settles cheaply, and gas is sponsored, so a buyer needs only USDC and a creator needs only an address. Nobody on either side has to hold ETH.",
+        a: "Prices are set in dollars, and both tokens are a dollar: USDC on Base, USDT0 on Stellar. Base is where x402 settles cheaply, and gas is sponsored, so a buyer needs only USDC and a creator needs only an address. On Stellar the network fee is sponsored the same way, so a buyer needs only USDT0 in a Stellar wallet (Freighter) and a creator needs only a Stellar address. Nobody on either side has to hold ETH.",
       },
       {
         q: "Can I send my earnings somewhere else?",

@@ -29,10 +29,21 @@
  * placeholder would be an address the platform chose for someone else's money. Between
  * signing in with GitHub and binding a wallet, the identity lives in the session cookie
  * and nowhere else.
+ *
+ * ## Why one function binds either kind of wallet
+ *
+ * 25 Oct 2026 (HACKMERIDIAN-JOURNEYS C2, BUILD H5): a creator with only Freighter signs
+ * the same challenge as SEP-53, and the `G…` becomes `payout_address` — the identity —
+ * exactly as an EVM address would. The only Stellar-specific step is the trustline: a
+ * classic payment to an account that has not allowed the asset fails, so Horizon is read
+ * first and the bind is refused, with the Freighter steps spelled out, until the trustline
+ * exists. The `G…` is also written to `stellar_payout_address` so the money core and the
+ * dashboard see one Stellar address wherever they look.
  */
 
 import { DEFAULT_SCOPES, insertApiKey } from "@/lib/auth/api-key";
 import { consumeChallenge, dbAddress, normaliseAddress } from "@/lib/auth/challenge";
+import { type InspectedStellarAccount, inspectStellarPayoutAccount } from "@/lib/auth/stellar-binding";
 import { db } from "@/lib/db";
 import type { CreatorRow } from "@/lib/db/types";
 import { termsVersion } from "@/lib/env";
@@ -41,6 +52,7 @@ import { record } from "@/lib/events";
 import { notifyAdmin } from "@/lib/notify";
 import { isPaused } from "@/lib/ops/switches";
 import { screen } from "@/lib/screening";
+import { addressFamily } from "@/lib/x402/stellar";
 import { handleCandidates } from "./github-oauth";
 import { creatorByHandle } from "./loaders";
 
@@ -79,6 +91,12 @@ export async function createCreatorFromGithub(input: OnboardInput): Promise<Onbo
   }
 
   const address = normaliseAddress(input.address);
+  const stellar = addressFamily(address) === "stellar";
+
+  // The trustline is checked *before* the nonce is spent: a missing trustline is the
+  // common first-time stall (BATTLE-TEST finding 18), and it is the creator's to fix in
+  // Freighter, not a reason to make them sign again. Nothing is written either way.
+  const inspected: InspectedStellarAccount | null = stellar ? await inspectStellarPayoutAccount(address, { now: new Date() }) : null;
 
   // FR-2's rule applies on both rails: an unproved payout address is never bound.
   try {
@@ -105,6 +123,11 @@ export async function createCreatorFromGithub(input: OnboardInput): Promise<Onbo
       wallet_mode: "linked",
       payout_address: dbAddress(address),
       terms_version: termsVersion(),
+      // BUILD §2.5: a Stellar identity is also the Stellar payout address, with the
+      // trustline check that proved it payable.
+      ...(inspected
+        ? { stellar_payout_address: address, stellar_payout_meta: inspected.meta, stellar_payout_verified_at: inspected.verifiedAt }
+        : {}),
     })
     .select("*")
     .single();

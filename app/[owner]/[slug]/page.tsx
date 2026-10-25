@@ -95,14 +95,18 @@ import { CreatorStrip } from "@/app/_components/creator-strip";
 import { Icon, iconFor } from "@/app/_components/icons";
 import { ClipScript, ClipToggle, ReadmeSection, TRUST_BODY_ID } from "@/app/_components/readme-more";
 import { WebMcpTools } from "@/app/_components/webmcp";
-import { type ListingRef, quote, toPaymentRequirements } from "@/lib/core/access";
+import { OpenReleaseBlock } from "./open-release";
+import { StellarPay } from "./stellar-pay";
+import { type ListingRef, paymentOptionsFor, quote, toPaymentRequirements } from "@/lib/core/access";
 import { toMicro } from "@/lib/db/types";
-import { appUrl, paymentChain } from "@/lib/env";
+import { appUrl } from "@/lib/env";
 import { record } from "@/lib/events";
 import { isLikelyBot } from "@/lib/web/user-agent";
 import { optionalSession } from "@/lib/web/current";
 import { type ListingProfile, listingProfile } from "@/lib/web/github-profile";
 import { liveListingCount, loadListingByPath, installCount, manifestFor, type ListingBundle } from "@/lib/web/loaders";
+import { openReleaseView } from "@/lib/listings/view";
+import { refreshPromiseOnRead } from "@/lib/release/promise";
 import {
   cadenceSentence,
   capabilityLines,
@@ -268,9 +272,15 @@ export default async function ListingPage({ params, searchParams }: Params) {
     await record({ name: "manifest_view", listingId: bundle.listing.id, props: { view, bot: isLikelyBot(await requestUserAgent()) } });
   }
 
+  // Open releases (25 Oct 2026): a promise whose date has passed is checked on this
+  // read, so the block below never shows a stale `pending`. Cheap — nothing to do
+  // before the date, two GETs once after it — and it never throws (lib/release/promise.ts).
+  await refreshPromiseOnRead(bundle);
+
   const { creator, listing, latest, releases, endpoints, status } = bundle;
   const ref = `${creator.handle}/${listing.slug}`;
   const manifest = latest ? manifestFor(bundle, latest) : null;
+  const openRelease = openReleaseView(listing, latest);
   const buyShares = manifest ? languageShares(manifest.computed.languages) : [];
   const folderCount = manifest ? folderRows(manifest).filter((f) => f.name !== "(root)").length : 0;
   const price = toMicro(listing.price_micro);
@@ -333,8 +343,17 @@ export default async function ListingPage({ params, searchParams }: Params) {
 
   const releasesNewestFirst = releases;
   const newest = releasesNewestFirst[0];
-  const { chainId } = paymentChain();
-  const chain = chainInfo(chainId);
+
+  // Which networks this listing can be paid on, from the creator's bound addresses
+  // (JOURNEYS B0 *[today, Must]*, BATTLE-TEST finding 4, 25 Oct 2026). The same function
+  // builds the 402's `accepts`, so the box and the paywall cannot disagree. The EVM
+  // button renders only when Base is offered: on a Stellar-only creator's listing it
+  // used to walk a MetaMask visitor to a 402 it could not pay. Stellar renders as text
+  // (stellar-pay.tsx), alone or under the button.
+  const options = paymentOptionsFor(creator, listing);
+  const evmOption = options.find((o) => o.network.startsWith("eip155:")) ?? null;
+  const stellarOption = options.find((o) => o.network.startsWith("stellar:")) ?? null;
+  const chain = evmOption ? chainInfo(Number(evmOption.network.split(":")[1])) : null;
 
   // GitHub's own reading of the repository and the creator. Never throws, never blocks
   // publishing, never feeds a computed field: if this is `{ repo: null, owner: null }`
@@ -392,6 +411,9 @@ export default async function ListingPage({ params, searchParams }: Params) {
             the right column beside the README; on a phone it stays where it is, so
             nobody scrolls a README to find a price. */}
         <aside className="buybox" aria-label="Price and what you get">
+          {/* The promise this release carries, above the price it changes the meaning
+              of (open-release.tsx). Absent on an ordinary listing. */}
+          {openRelease ? <OpenReleaseBlock block={openRelease} /> : null}
           {!latest ? (
             <div className="box" id="buy">
               <p role="status" data-status="pending">
@@ -424,19 +446,36 @@ export default async function ListingPage({ params, searchParams }: Params) {
                 </small>
               </p>
 
-              <BuyWithWallet
-                owner={creator.handle}
-                slug={listing.slug}
-                version={latest.version}
-                priceMicro={price.toString()}
-                updatePriceMicro={updatePrice.toString()}
-                priceLabel={price === 0n ? "free" : formatPrice(price)}
-                updatePriceLabel={updatePrice === 0n ? "free" : formatPrice(updatePrice)}
-                chainId={chainId}
-                chainName={chain.name}
-                forSale={status === "live"}
-                sizeLabel={latest.size_bytes ? formatBytes(Number(latest.size_bytes)) : undefined}
-              />
+              {evmOption && chain ? (
+                <BuyWithWallet
+                  owner={creator.handle}
+                  slug={listing.slug}
+                  version={latest.version}
+                  priceMicro={price.toString()}
+                  updatePriceMicro={updatePrice.toString()}
+                  priceLabel={price === 0n ? "free" : formatPrice(price)}
+                  updatePriceLabel={updatePrice === 0n ? "free" : formatPrice(updatePrice)}
+                  chainId={chain.id}
+                  chainName={chain.name}
+                  forSale={status === "live"}
+                  sizeLabel={latest.size_bytes ? formatBytes(Number(latest.size_bytes)) : undefined}
+                />
+              ) : null}
+              {stellarOption ? (
+                <StellarPay
+                  owner={creator.handle}
+                  slug={listing.slug}
+                  option={stellarOption}
+                  priceLabel={price === 0n ? "free" : formatPrice(price)}
+                  forSale={status === "live"}
+                  alone={!evmOption}
+                />
+              ) : null}
+              {!evmOption && !stellarOption ? (
+                <p className="written buy-fallback">
+                  This listing cannot be bought on this site yet: its creator is paid on a network this deployment does not offer.
+                </p>
+              ) : null}
 
               {/* The other way to buy: hand a prompt to an agent — listing, skill and
                   endpoint. The text is in the server HTML; only its copy button

@@ -42,6 +42,7 @@ import {
   userCanSellRepo,
   userOwnsInstallation,
 } from "@/lib/github/installations";
+import { parseGithubRepoUrl } from "@/lib/github/public";
 import { isAllowedSpdx, type AllowedSpdxId } from "@/lib/licences";
 import { notifyAdmin } from "@/lib/notify";
 import { cutRelease } from "@/lib/release";
@@ -53,6 +54,7 @@ import {
   DEFAULT_UPDATE_PRICE_MICRO,
   MIN_PRICE_MICRO,
   micro,
+  OPEN_RELEASE_MAX_DAYS,
   RESERVED_SLUGS,
   Slug,
   type CreateListingInput,
@@ -224,6 +226,8 @@ export async function createListing(creator: AuthedCreator, input: CreateListing
   let fingerprints: string[] | null = null;
   let defaultBranch: string | null = null;
   let provisioned: { org: string; name: string; deployKeyId: number } | null = null;
+  // The repository being sold, so an open release cannot name it as the place it opens.
+  let own: { owner: string; name: string } | null = null;
 
   if (input.source === "hosted") {
     if (!input.ssh_public_key) {
@@ -245,10 +249,24 @@ export async function createListing(creator: AuthedCreator, input: CreateListing
     remote = repo.remote;
     fingerprints = repo.sshHostKeyFingerprints;
     defaultBranch = repo.defaultBranch;
+    own = { owner: repo.org, name: repo.name };
   } else {
-    const { installationId, repoId } = await resolveRailARepo(creator, input);
+    const { installationId, repoId, owner, name } = await resolveRailARepo(creator, input);
     row.installation_id = String(installationId);
     row.github_repo_id = String(repoId);
+    own = { owner, name };
+  }
+
+  // Open releases (25 Oct 2026): validated against the row about to be written. After
+  // the repo is provisioned, because the check needs to know which repository is being
+  // sold; a refusal here rolls the repo back below like any other failed insert would.
+  if (hasOpenReleaseFields(input)) {
+    try {
+      Object.assign(row, openReleasePatch(null, input, own));
+    } catch (e) {
+      if (provisioned) await rollbackProvisioning(provisioned);
+      throw e;
+    }
   }
 
   const { data, error } = await db().from("listing").insert(row).select("*").single();
@@ -371,7 +389,7 @@ function assertPrices(priceMicro: bigint, updatePriceMicro: bigint): void {
  * answer never says whether a repo the caller cannot read exists. Visibility
  * (`public_repo`) is only reported to someone who passed it.
  */
-async function resolveRailARepo(creator: CreatorRow, input: CreateListingInput): Promise<{ installationId: number; repoId: number }> {
+async function resolveRailARepo(creator: CreatorRow, input: CreateListingInput): Promise<{ installationId: number; repoId: number; owner: string; name: string }> {
   if (creator.github_user_id === null || creator.github_user_id === undefined) {
     throw new ApiError("invalid_request", {
       message:
@@ -419,7 +437,7 @@ async function resolveRailARepo(creator: CreatorRow, input: CreateListingInput):
   }
 
   assertPrivate(resolved);
-  return { installationId, repoId: resolved.repoId };
+  return { installationId, repoId: resolved.repoId, owner: resolved.owner, name: resolved.name };
 }
 
 /**
@@ -490,7 +508,7 @@ async function rollbackProvisioning(provisioned: { org: string; name: string; de
 export async function getListing(creator: CreatorRow, listingId: string) {
   const listing = await loadOwnedListing(creator, listingId);
   const [latest, newest] = await Promise.all([latestPassingRelease(listing.id), newestRelease(listing.id)]);
-  const view = listingView(listing, creator.handle, latest);
+  const view = listingView(listing, creator.handle, latest, creator);
   return {
     ...view,
     latest_release: view.latest_release ? { ...view.latest_release, scan_report: creatorScanReport(latest) } : null,
@@ -526,7 +544,7 @@ export async function listListings(creator: CreatorRow, options: ListListingsOpt
   const releases = await Promise.all(page.map((l) => latestPassingRelease(l.id)));
 
   return {
-    listings: page.map((listing, i) => listingView(listing, creator.handle, releases[i])),
+    listings: page.map((listing, i) => listingView(listing, creator.handle, releases[i], creator)),
     next_cursor: rows.length > limit ? new Date(page[page.length - 1].created_at).toISOString() : null,
   };
 }
@@ -558,15 +576,163 @@ export async function patchListing(creator: CreatorRow, listingId: string, input
   if (input.description !== undefined) patch.description = input.description;
   if (input.trigger_hint !== undefined) patch.trigger_hint = input.trigger_hint;
 
+  // Open releases (25 Oct 2026). Only when one of the three fields is in the request:
+  // the own-repo check may ask GitHub, and a price change should not.
+  if (hasOpenReleaseFields(input)) Object.assign(patch, openReleasePatch(listing, input, await ownSourceRepo(creator, listing)));
+
   if (Object.keys(patch).length === 0) {
-    throw new ApiError("invalid_request", { message: "Nothing to change. Send at least one of price_micro, update_price_micro, description, trigger_hint." });
+    throw new ApiError("invalid_request", {
+      message: "Nothing to change. Send at least one of price_micro, update_price_micro, description, trigger_hint, open_release, public_repo_url, next_opens_at.",
+    });
   }
 
   const { data, error } = await db().from("listing").update(patch).eq("id", listing.id).select("*").single();
   if (error) throw error;
 
   const updated = data as ListingRow;
-  return listingView(updated, creator.handle, await latestPassingRelease(updated.id));
+
+  // An earlier date is a promise to the people who already paid, so every release still
+  // waiting on the old date follows it. "Only earlier" means this can only ever bring a
+  // release forward; the database trigger refuses anything else (migration 20261025160000).
+  if (typeof patch.next_opens_at === "string") {
+    const { error: followError } = await db()
+      .from("release")
+      .update({ opens_at: patch.next_opens_at })
+      .eq("listing_id", listing.id)
+      .eq("promise_status", "pending")
+      .gt("opens_at", patch.next_opens_at);
+    if (followError) throw followError;
+  }
+
+  return listingView(updated, creator.handle, await latestPassingRelease(updated.id), creator);
+}
+
+// ---------------------------------------------------------------------------
+// Open releases (25 Oct 2026, HackMeridian; docs/HACKMERIDIAN-STRATEGY.md §6a)
+// ---------------------------------------------------------------------------
+
+type OpenReleaseInput = Pick<CreateListingInput, "open_release" | "public_repo_url" | "next_opens_at">;
+
+function hasOpenReleaseFields(input: OpenReleaseInput): boolean {
+  return input.open_release !== undefined || input.public_repo_url !== undefined || input.next_opens_at !== undefined;
+}
+
+/**
+ * The open-release columns to write, validated against the row as it will stand after
+ * the write (`current` is null on create). Four rules, each its own sentence:
+ *
+ * - **Only earlier.** Once a date is set it can be brought forward, never pushed back,
+ *   and never cleared: the date is a promise to the people who already paid. The
+ *   database trigger guards the release rows; this guards the listing's own date and
+ *   gives the refusal a code (`409 opens_at_only_earlier`) and a sentence.
+ * - **At most 90 days ahead.** Measured from now, so a cut that follows is always
+ *   inside the database's `created_at + 90 days` cap. A date in the past is allowed —
+ *   a release can be promised to a date that has already come, and is checked at once.
+ * - **Not the repository being sold.** An open release is sold from a private mirror
+ *   and opens into the project's own public repository (BUILD H6). Naming the sold repo
+ *   as the place it opens would promise nothing.
+ * - **Both fields, when it is on.** A promise with no place or no date is not one.
+ */
+export function openReleasePatch(current: ListingRow | null, input: OpenReleaseInput, own: { owner: string; name: string } | null, now = new Date()): Record<string, unknown> {
+  const patch: Record<string, unknown> = {};
+  if (input.open_release !== undefined) patch.open_release = input.open_release;
+  if (input.public_repo_url !== undefined) patch.public_repo_url = input.public_repo_url;
+  if (input.next_opens_at !== undefined) patch.next_opens_at = normaliseOpensAt(input.next_opens_at, current?.next_opens_at ?? null);
+
+  // `in`, not `??`: an explicit null in the request means "clear it", and `??` would read
+  // that as "leave it alone" and quietly keep the old value.
+  const after = {
+    open_release: ("open_release" in patch ? patch.open_release : current?.open_release ?? false) as boolean,
+    public_repo_url: ("public_repo_url" in patch ? patch.public_repo_url : current?.public_repo_url ?? null) as string | null,
+    next_opens_at: ("next_opens_at" in patch ? patch.next_opens_at : current?.next_opens_at ?? null) as string | null,
+  };
+
+  if (current?.next_opens_at && input.next_opens_at !== undefined) {
+    const was = new Date(current.next_opens_at);
+    if (!after.next_opens_at || new Date(after.next_opens_at) > was) {
+      throw new ApiError("opens_at_only_earlier", {
+        message: `The opening date can be brought forward, never pushed back. It is ${was.toISOString()}; send that or an earlier date.`,
+        details: { field: "next_opens_at", was: was.toISOString(), got: after.next_opens_at },
+      });
+    }
+  }
+
+  if (after.next_opens_at) {
+    const cap = new Date(now.getTime() + OPEN_RELEASE_MAX_DAYS * 86_400_000);
+    if (new Date(after.next_opens_at) > cap) {
+      throw new ApiError("invalid_request", {
+        message: `\`next_opens_at\` must be within ${OPEN_RELEASE_MAX_DAYS} days: on or before ${cap.toISOString().slice(0, 10)}.`,
+        details: { field: "next_opens_at", latest: cap.toISOString() },
+      });
+    }
+  }
+
+  if (after.public_repo_url && own) {
+    const target = parseGithubRepoUrl(after.public_repo_url);
+    if (target && target.owner.toLowerCase() === own.owner.toLowerCase() && target.name.toLowerCase() === own.name.toLowerCase()) {
+      throw new ApiError("invalid_request", {
+        message:
+          "`public_repo_url` is the repository being sold. An open release is sold from a private repository and opens into a different, public one — list a private mirror and name the project's public repository here.",
+        details: { field: "public_repo_url" },
+      });
+    }
+  }
+
+  if (after.open_release) {
+    if (!after.public_repo_url) {
+      throw new ApiError("invalid_request", {
+        message: "`public_repo_url` is required for an open release: the https://github.com/owner/name the code goes public in.",
+        details: { field: "public_repo_url" },
+      });
+    }
+    if (!after.next_opens_at) {
+      throw new ApiError("invalid_request", {
+        message: `\`next_opens_at\` is required for an open release: the date the code goes public, at most ${OPEN_RELEASE_MAX_DAYS} days ahead.`,
+        details: { field: "next_opens_at" },
+      });
+    }
+  }
+
+  return patch;
+}
+
+/**
+ * `YYYY-MM-DD` means midnight UTC on that day — except when the row already holds an
+ * instant on that same day, which is kept: the dashboard's date field posts the day it
+ * shows, and re-saving the form must not quietly move a 17:00 promise to 00:00.
+ */
+function normaliseOpensAt(value: string | null, existing: string | null): string | null {
+  if (value === null) return null;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    if (existing && new Date(existing).toISOString().slice(0, 10) === value) return new Date(existing).toISOString();
+    return `${value}T00:00:00.000Z`;
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    throw new ApiError("invalid_request", { message: "`next_opens_at` must be an RFC 3339 timestamp or a `YYYY-MM-DD` date.", details: { field: "next_opens_at" } });
+  }
+  return date.toISOString();
+}
+
+/**
+ * The repository this listing sells, as `owner/name`, or null when it cannot be known
+ * right now. Rail B is the hosted org and the hosted name; Rail A is read from GitHub by
+ * id. Fails open: a creator must be able to save a date while api.github.com is down,
+ * and the cut re-checks the public repository against the sold commit anyway.
+ */
+async function ownSourceRepo(creator: Pick<CreatorRow, "handle">, listing: ListingRow): Promise<{ owner: string; name: string } | null> {
+  if (listing.source === "hosted") {
+    const org = listing.hosted_org;
+    return org ? { owner: org, name: hostedRepoName(creator.handle, listing.slug) } : null;
+  }
+  if (!listing.installation_id || !listing.github_repo_id) return null;
+  try {
+    const repo = await repoById(listing.installation_id, listing.github_repo_id);
+    return repo && typeof repo.owner === "string" && typeof repo.name === "string" ? { owner: repo.owner, name: repo.name } : null;
+  } catch (e) {
+    console.warn(`[listings] could not read the sold repo for ${listing.id}:`, e instanceof Error ? e.message : String(e));
+    return null;
+  }
 }
 
 // ---------------------------------------------------------------------------

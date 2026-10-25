@@ -53,7 +53,8 @@ export type AdminEvent =
       grossMicro: bigint;
       purchaseKind: string;
       source: string | null;
-      chainId: number;
+      /** CAIP-2: `eip155:8453`, `eip155:84532`, `stellar:pubnet`, `stellar:testnet`. */
+      network: string;
       txHash: string | null;
     }
   | {
@@ -177,10 +178,10 @@ export function formatAdminEvent(event: AdminEvent): string {
         `version: ${escapeHtml(event.version)}`,
         `kind: ${escapeHtml(event.purchaseKind)}`,
         `source: ${escapeHtml(event.source ?? "unknown")}`,
-        // Never an unlabelled chain id: see the header, and lib/admin/feed.ts.
-        `chain: ${escapeHtml(chainName(event.chainId))}`,
+        // Never an unlabelled network: see the header, and lib/admin/feed.ts.
+        `chain: ${escapeHtml(chainName(event.network))}`,
       ];
-      if (event.txHash) lines.push(`tx: ${txLink(event.chainId, event.txHash)}`);
+      if (event.txHash) lines.push(`tx: ${txLink(event.network, event.txHash)}`);
       lines.push(link(`/admin/listings/${encodeURIComponent(event.listingId)}`));
       return lines.join("\n");
     }
@@ -238,9 +239,9 @@ function money(micro: bigint): string {
   return `${formatAmount(micro)} USDC`;
 }
 
-/** `Base`, `Base Sepolia`, or the CAIP-2 name of a chain we have no label for. */
-function chainName(chainId: number): string {
-  return chainLabel(`eip155:${chainId}`);
+/** `Base`, `Base Sepolia`, `Stellar`, or the CAIP-2 name of a network we have no label for. */
+function chainName(network: string): string {
+  return chainLabel(network);
 }
 
 /**
@@ -252,10 +253,27 @@ function chainName(chainId: number): string {
  * loading a wallet client. Two lines duplicated against a dependency that size is the
  * cheaper of the two mistakes; `lib/buy-links.ts` exists for the same reason.
  */
-function txLink(chainId: number, txHash: string): string {
+function txLink(network: string, txHash: string): string {
   const short = escapeHtml(txHash.length > 12 ? `${txHash.slice(0, 6)}…${txHash.slice(-4)}` : txHash);
-  const explorer = chainId === 8453 ? "https://basescan.org" : chainId === 84532 ? "https://sepolia.basescan.org" : null;
-  return explorer ? `<a href="${explorer}/tx/${encodeURIComponent(txHash)}">${short}</a>` : short;
+  const explorer = explorerTxBase(network);
+  return explorer ? `<a href="${explorer}/${encodeURIComponent(txHash)}">${short}</a>` : short;
+}
+
+/** The `…/tx/` base per network, or null for one we would only be guessing at. */
+function explorerTxBase(network: string): string | null {
+  switch (network) {
+    case "eip155:8453":
+      return "https://basescan.org/tx";
+    case "eip155:84532":
+      return "https://sepolia.basescan.org/tx";
+    // The Stellar rail (25 Oct 2026): stellar.expert, public and testnet.
+    case "stellar:pubnet":
+      return "https://stellar.expert/explorer/public/tx";
+    case "stellar:testnet":
+      return "https://stellar.expert/explorer/testnet/tx";
+    default:
+      return null;
+  }
 }
 
 function link(path: string): string {

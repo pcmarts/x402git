@@ -17,6 +17,10 @@ import { type Db, resetDb, setDb } from "@/lib/db";
 import { resetEnv } from "@/lib/env";
 import type { ListingProfile } from "@/lib/web/github-profile";
 import { makeMockDb } from "@/lib/test/mock-db";
+import { setPublicGithub } from "@/lib/github/public";
+import { resetPromiseCache } from "@/lib/release/promise";
+import { stubPublicGithub } from "@/lib/test/public-github";
+import { clearStellarEnv, setStellarTestnetEnv, STELLAR_CREATOR } from "@/lib/test/stellar";
 import { type ScanFinding, publishedFindings } from "@/lib/scan";
 import ListingPage, { generateMetadata } from "./page";
 
@@ -1247,5 +1251,198 @@ describe("the trust checklist in the buy column (§5, amended 14 Sep 2026)", () 
 
     expect(column).toContain('<span class="sr-only">no dependency manifests to check</span>');
     expect(column.split('<span class="mark" aria-hidden="true">✓</span>').length - 1).toBe(2);
+  });
+});
+
+describe("the Pay area follows payment_options (JOURNEYS B0 [today, Must], BATTLE-TEST finding 4)", () => {
+  afterEach(() => {
+    clearStellarEnv();
+    resetEnv();
+  });
+
+  it("renders the EVM button alone when the creator is paid on Base only", async () => {
+    seed();
+    const markup = await html();
+    expect(markup).toContain("buy-fallback");
+    expect(markup).toContain("Turn on JavaScript to pay from this page");
+    // The WebMCP script names the CLI in its how-to steps; the Pay area itself must not.
+    expect(markup).not.toContain("<code>npx x402git-stellar");
+  });
+
+  it("hides the EVM button and server-renders the Stellar command for a Stellar-only creator", async () => {
+    setStellarTestnetEnv();
+    resetEnv();
+    seed();
+    mock.rows("creator")[0].payout_address = STELLAR_CREATOR;
+
+    const markup = await html();
+    // No control that cannot work: not the button, not its JavaScript sentence.
+    expect(markup).not.toContain("Turn on JavaScript to pay from this page");
+    // The price in the listing's own token, from the same function as the 402.
+    expect(markup).toContain("<strong>$9</strong> in USDC on Stellar testnet.");
+    expect(markup).toContain("Pay from the command line: ");
+    expect(markup).toContain("<code>npx x402git-stellar buy adrian/humanizer</code>");
+    // The bridge hint is for mainnet USDT0; testnet money does not come from usdt0.to.
+    expect(markup).not.toContain("usdt0.to");
+    // The agent prompt is still there under it.
+    expect(markup).toContain("Buy with your agent");
+  });
+
+  it("shows the button and the command line under it when the creator takes both", async () => {
+    setStellarTestnetEnv();
+    resetEnv();
+    seed();
+    mock.rows("creator")[0].stellar_payout_address = STELLAR_CREATOR;
+
+    const markup = await html();
+    expect(markup).toContain("Turn on JavaScript to pay from this page");
+    expect(markup).toContain("Or pay in USDC on Stellar testnet from the command line: ");
+    expect(markup).toContain("<code>npx x402git-stellar buy adrian/humanizer</code>");
+    expect(markup.indexOf("Turn on JavaScript")).toBeLessThan(markup.indexOf("x402git-stellar buy"));
+  });
+
+  it("points a Stellar holder of a retired listing at fetch, and sells nothing", async () => {
+    setStellarTestnetEnv();
+    resetEnv();
+    seed({ retired: true });
+    mock.rows("creator")[0].payout_address = STELLAR_CREATOR;
+
+    const markup = await html();
+    expect(markup).toContain("No longer sold.");
+    expect(markup).toContain("<code>npx x402git-stellar fetch adrian/humanizer</code>");
+    expect(markup).not.toContain("<code>npx x402git-stellar buy");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Open releases (25 Oct 2026, HackMeridian): the block above the price
+// ---------------------------------------------------------------------------
+
+describe("the open-release block (docs/HACKMERIDIAN-STRATEGY.md §6a, Proof 4)", () => {
+  const PUBLIC = "https://github.com/adrian/humanizer-public";
+  const RELEASE_ID = "33333333-3333-4333-8333-333333333333";
+  const COMMIT = "a".repeat(40);
+
+  /** The seeded listing as an open release, with its selling release stamped as given. */
+  function seedOpen(release: Record<string, unknown>) {
+    seed();
+    Object.assign(mock.rows("listing")[0], { open_release: true, public_repo_url: PUBLIC, next_opens_at: "2026-12-01T00:00:00.000Z" });
+    Object.assign(mock.rows("release").find((r) => r.id === RELEASE_ID)!, {
+      opens_at: "2026-12-01T00:00:00.000Z",
+      open_licence_spdx: "MIT",
+      promise_status: "pending",
+      promise_checked_at: null,
+      opened_at: null,
+      promise_evidence: null,
+      open_eligibility: [
+        { id: "licence", ok: true, detail: "MIT permits resale." },
+        { id: "public_repo", ok: true, detail: "github.com/adrian/humanizer-public exists and is public." },
+      ],
+      ...release,
+    });
+  }
+
+  afterEach(() => {
+    setPublicGithub(null);
+    resetPromiseCache();
+  });
+
+  it("is absent on an ordinary listing", async () => {
+    seed();
+    const markup = await html();
+    expect(markup).not.toContain("Open release");
+    expect(markup).not.toContain('data-open-release="');
+  });
+
+  it("says where and when the code opens, under which licence, above the price (pending)", async () => {
+    seedOpen({ opens_at: "2026-12-01T00:00:00.000Z" });
+    const markup = await html();
+
+    expect(markup).toContain('data-open-release="pending"');
+    expect(markup).toContain("Opens on <time");
+    expect(markup).toContain("2026-12-01");
+    expect(markup).toContain('href="https://github.com/adrian/humanizer-public"');
+    expect(markup).toContain("github.com/adrian/humanizer-public");
+    expect(markup).toContain("<code>MIT</code>");
+    expect(markup).toContain("Not yet open");
+    expect(markup).toContain("We check the public repository after that date");
+    // Above the price: the block precedes the buy box in the document.
+    expect(markup.indexOf('data-open-release="pending"')).toBeLessThan(markup.indexOf('id="buy"'));
+  });
+
+  it("says Opened on time with a link to the public commit", async () => {
+    seedOpen({
+      opens_at: "2026-10-20T00:00:00.000Z",
+      promise_status: "opened_on_time",
+      opened_at: "2026-10-20T00:05:00.000Z",
+      promise_checked_at: "2026-10-20T00:05:00.000Z",
+      promise_evidence: { ref: "v1.2.0", html_url: `https://github.com/adrian/humanizer-public/commit/${COMMIT}`, licence: "MIT", checked_url: "x" },
+    });
+    const markup = await html();
+
+    expect(markup).toContain('data-open-release="opened_on_time"');
+    expect(markup).toContain("Opened on <time");
+    expect(markup).toContain("<strong>Opened on time</strong>");
+    expect(markup).toContain(`href="https://github.com/adrian/humanizer-public/commit/${COMMIT}"`);
+    expect(markup).toContain("see the public commit");
+  });
+
+  it("says Overdue when the date passed and the public repo did not have it", async () => {
+    seedOpen({
+      opens_at: "2026-10-20T00:00:00.000Z",
+      promise_status: "overdue",
+      promise_checked_at: "2026-10-20T00:05:00.000Z",
+      promise_evidence: { ref: null, html_url: null, licence: null, checked_url: "x", reason: "not there" },
+    });
+    const markup = await html();
+    expect(markup).toContain('data-open-release="overdue"');
+    expect(markup).toContain("<strong>Overdue</strong>");
+    expect(markup).toContain("did not have this release under this licence");
+  });
+
+  it("says Not eligible with the failing check in plain words, and that it sells as a normal release", async () => {
+    seedOpen({
+      promise_status: "ineligible",
+      open_eligibility: [
+        { id: "licence", ok: true, detail: "MIT permits resale." },
+        { id: "not_yet_public", ok: false, detail: "Commit aaaaaaaaaaaa is already public in github.com/adrian/humanizer-public, so there is nothing early to sell and nothing to verify." },
+      ],
+    });
+    const markup = await html();
+    expect(markup).toContain('data-open-release="ineligible"');
+    expect(markup).toContain("<strong>Not eligible</strong>");
+    expect(markup).toContain("it sells as a normal release");
+    expect(markup).toContain("is already public in github.com/adrian/humanizer-public");
+    // Passing checks are not printed: a list of reassurances is a badge with nothing behind it.
+    expect(markup).not.toContain("MIT permits resale.");
+  });
+
+  it("flips a backdated pending promise to Opened on time on the first read (backdated allowed)", async () => {
+    seedOpen({ opens_at: "2026-10-01T00:00:00.000Z" });
+    const github = stubPublicGithub({ commits: { "adrian/humanizer-public": [COMMIT] }, licences: { "adrian/humanizer-public": "MIT" } });
+    setPublicGithub(github);
+
+    const markup = await html();
+
+    expect(markup).toContain('data-open-release="opened_on_time"');
+    expect(markup).toContain("see the public commit");
+    expect(mock.rows("release").find((r) => r.id === RELEASE_ID)!.promise_status).toBe("opened_on_time");
+    expect(github.calls[0]).toBe(`repos/adrian/humanizer-public/commits/${COMMIT}`);
+  });
+
+  it("costs no GitHub call before the date, and still renders when GitHub is down after it", async () => {
+    seedOpen({ opens_at: "2099-01-01T00:00:00.000Z" });
+    const idle = stubPublicGithub();
+    setPublicGithub(idle);
+    await html();
+    expect(idle.calls).toEqual([]);
+
+    seedOpen({ opens_at: "2026-10-01T00:00:00.000Z" });
+    setPublicGithub(stubPublicGithub({ fail: true }));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const markup = await html();
+    warn.mockRestore();
+    expect(markup).toContain('data-open-release="pending"');
+    expect(markup).toContain("is being checked");
   });
 });

@@ -82,6 +82,82 @@ export const ListingEndpoints = z
   })
   .meta({ id: "ListingEndpoints", description: "Every public URL for a listing, absolute." });
 
+// ---------------------------------------------------------------------------
+// Open releases (25 Oct 2026, HackMeridian; migration 20261025160000)
+// ---------------------------------------------------------------------------
+
+/**
+ * The public repository an open release opens into. The same pattern as the migration's
+ * CHECK, so a URL the API accepts is a URL the database accepts: `https://github.com/`
+ * then an owner (GitHub caps logins at 39) and a repository name. No trailing slash, no
+ * `.git`, no path below the repository.
+ */
+export const GITHUB_REPO_URL_RE = /^https:\/\/github\.com\/[A-Za-z0-9-]{1,39}\/[A-Za-z0-9._-]{1,100}$/;
+
+export const GithubRepoUrl = z
+  .string()
+  .regex(GITHUB_REPO_URL_RE, "must be https://github.com/owner/name")
+  .meta({ id: "GithubRepoUrl", description: "`https://github.com/owner/name`, nothing after the repository name." });
+
+/**
+ * An opening date. A full RFC 3339 timestamp, or a bare `YYYY-MM-DD`, which the service
+ * reads as midnight UTC on that day: a maintainer types a day, an agent sends an instant.
+ */
+export const OpensAt = z.union([IsoDateTime, z.iso.date()]).meta({ id: "OpensAt", description: "RFC 3339, or `YYYY-MM-DD` for midnight UTC that day." });
+
+/** How many days after a cut the opening date may be, at most. Enforced again by the database. */
+export const OPEN_RELEASE_MAX_DAYS = 90;
+
+export const OpenReleaseStatus = z.enum(["pending", "opened_on_time", "overdue", "not_open", "ineligible"]).meta({
+  id: "OpenReleaseStatus",
+  description:
+    "`pending`: the date has not passed, or the check has not run. `opened_on_time`: the public repo has the release commit under the same licence. `overdue`: the date passed and it did not. `not_open`: the release was already public when it was cut. `ineligible`: a listing-time check failed; the release sells as a normal release.",
+});
+
+/** One eligibility check, in plain words, so the page can say *why* without recomputing. */
+export const OpenReleaseCheck = z
+  .object({
+    id: z.string().describe("`licence`, `public_repo`, `not_yet_public` or `payout_address`."),
+    ok: z.boolean(),
+    detail: z.string().describe("One sentence a maintainer can act on."),
+  })
+  .meta({ id: "OpenReleaseCheck" });
+
+/**
+ * The promise an open release carries, and what became of it. Everything here is
+ * computed from stored columns (never declared by the creator); the on-read check in
+ * `lib/release/promise.ts` is what moves `status` once `opens_at` has passed.
+ */
+export const OpenReleaseBlock = z
+  .object({
+    opens_at: IsoDateTime.nullable().describe("When the code goes public. Can only ever move earlier."),
+    public_repo_url: z.string().describe("Where it goes public: a different repository from the one being sold."),
+    licence: z.string().nullable().describe("The SPDX id the release ships under, read from the sold snapshot."),
+    status: OpenReleaseStatus,
+    opened_at: IsoDateTime.nullable(),
+    checked_at: IsoDateTime.nullable().describe("When the public repo was last asked."),
+    evidence_url: z.string().nullable().describe("On `opened_on_time`: the public commit the check found."),
+    checks: z.array(OpenReleaseCheck).describe("The eligibility checks run at cut, pass and fail alike."),
+  })
+  .meta({
+    id: "OpenRelease",
+    description:
+      "An open release: sold early from a private repository, promised to go public in `public_repo_url` on `opens_at` under `licence`. After the date the platform checks the promise and `status` says whether it was kept. On the creator's own listing, before any release has been stamped, this is the standing offer the next cut will stamp.",
+  });
+
+export type OpenReleaseBlockOutput = z.infer<typeof OpenReleaseBlock>;
+export type OpenReleaseCheckOutput = z.infer<typeof OpenReleaseCheck>;
+
+/** The three listing fields behind an open release, shared by create and patch. */
+const OpenReleaseFields = {
+  /** Sell the next release early and promise a public opening. Both fields below are then required. */
+  open_release: z.boolean().optional(),
+  /** Where the code goes public. Must not be the repository being sold (BUILD H6). */
+  public_repo_url: GithubRepoUrl.nullable().optional(),
+  /** At most 90 days ahead. Once set it can be brought forward, never pushed back (`409 opens_at_only_earlier`). */
+  next_opens_at: OpensAt.nullable().optional(),
+};
+
 export const CreateListingRequest = z
   .object({
     slug: Slug,
@@ -103,8 +179,13 @@ export const CreateListingRequest = z
     update_price_micro: UpdatePriceMicro.optional(),
     description: z.string().min(1).max(4000).optional(),
     trigger_hint: z.string().min(1).max(500).optional(),
+    ...OpenReleaseFields,
   })
-  .meta({ id: "CreateListingRequest", description: "Rail B needs `ssh_public_key`; Rail A needs `installation_id` and `github_repo_id`." });
+  .meta({
+    id: "CreateListingRequest",
+    description:
+      "Rail B needs `ssh_public_key`; Rail A needs `installation_id` and `github_repo_id`. `open_release: true` needs `public_repo_url` and `next_opens_at` too.",
+  });
 
 export const CreateListingResponse = z
   .object({
@@ -149,6 +230,29 @@ export const LatestRelease = z
   })
   .meta({ id: "LatestRelease" });
 
+/**
+ * One way to pay a listing (JOURNEYS B4a, BUILD §0b B4): a network, the token on it, the
+ * exact wire amount the 402's `accepts` entry for that network will carry, and one
+ * sentence saying how. Built only by `lib/core/access.ts#paymentOptionsFor`, so the
+ * listing JSON, the MCP tools and the 402 cannot disagree about which networks a listing
+ * takes. A listing offers a network only when its creator can be paid on it.
+ */
+export const PaymentOption = z
+  .object({
+    network: z.string().describe("CAIP-2: `eip155:8453` is Base, `stellar:pubnet` is Stellar."),
+    asset: z.string().describe("The token on that network: an ERC-20 address on Base, a `C…` contract on Stellar."),
+    asset_symbol: z.string().describe("What the token is called: `USDC` on Base, `USDT0` on Stellar."),
+    amount: z.string().describe("The `amount` the 402's accepts entry for this network carries, in the token's smallest unit (micro-USDC on Base, stroops on Stellar)."),
+    how: z.string().describe("One sentence: how a wallet on this network pays. Never \"sign accepts[0]\"; sign the entry whose `network` is yours."),
+  })
+  .meta({
+    id: "PaymentOption",
+    description:
+      "One way to pay a listing. A listing lists only the networks its creator can be paid on; an agent picks the entry whose `network` it can sign for, never by position.",
+  });
+
+export const PaymentOptions = z.array(PaymentOption).meta({ id: "PaymentOptions", description: "Every way to pay this listing, Base first when offered." });
+
 export const ListingResponse = z
   .object({
     listing_id: z.uuid(),
@@ -171,6 +275,10 @@ export const ListingResponse = z
      */
     newest_release: LatestRelease.nullable().optional(),
     pricing: PricingBlock,
+    /** The networks this listing can be paid on, from the creator's bound addresses (25 Oct 2026). */
+    payment_options: PaymentOptions.optional(),
+    /** The open-release promise on the release that sells, or the standing offer; null on an ordinary listing. */
+    open_release: OpenReleaseBlock.nullable(),
     endpoints: ListingEndpoints,
     /** Rail B only: the git remote to push to. `null` once the repo is deleted (FR-44). */
     remote: z.string().nullable(),
@@ -194,10 +302,12 @@ export const PatchListingRequest = z
     update_price_micro: UpdatePriceMicro.optional(),
     description: z.string().min(1).max(4000).optional(),
     trigger_hint: z.string().min(1).max(500).optional(),
+    ...OpenReleaseFields,
   })
   .meta({
     id: "PatchListingRequest",
-    description: "FR-16: price changes apply to future purchases only. Existing holders keep their stamped terms.",
+    description:
+      "FR-16: price changes apply to future purchases only. Existing holders keep their stamped terms. An earlier `next_opens_at` also brings forward every pending release of this listing; a later one is refused.",
   });
 
 /** FR-8. `version` is required when the ref is untagged. */

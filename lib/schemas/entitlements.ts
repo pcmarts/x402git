@@ -6,7 +6,7 @@
  */
 
 import * as z from "zod";
-import { Address, Handle, IsoDateTime, MicroUsdc, SemVer, Slug } from "./common";
+import { AnyAddress, Handle, IsoDateTime, MicroUsdc, SemVer, Slug } from "./common";
 
 /**
  * A newer release than the one this row owns. Present on at most one row per listing —
@@ -48,7 +48,8 @@ export const Entitlement = z
 
 export const EntitlementsResponse = z
   .object({
-    address: Address,
+    /** The wallet that asked: an EVM `0x…` or a Stellar `G…` (F3). */
+    address: AnyAddress,
     entitlements: z.array(Entitlement),
     next_cursor: z.string().nullable(),
   })

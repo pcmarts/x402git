@@ -42,7 +42,7 @@ export const POST = handle(async (req: Request) => {
       target = normaliseAddress(raw);
     }
   } catch {
-    return back("/dashboard/wallet", { error: "That is not an EVM address. It is 0x followed by 40 hex characters." });
+    return back("/dashboard/wallet", { error: "That is not a wallet address. An EVM address is 0x followed by 40 hex characters; a Stellar account is G followed by 55 characters." });
   }
   const address = target;
 

@@ -17,6 +17,7 @@
  */
 
 import { NextResponse } from "next/server";
+import { stellarBindReason } from "@/lib/auth/stellar-binding";
 import { appUrl } from "@/lib/env";
 import { ApiError, handle } from "@/lib/errors";
 import { currentSession, signInPath } from "@/lib/web/current";
@@ -66,6 +67,13 @@ export const POST = handle(async (req: Request) => {
       sessionExpiresAt: sessionExpiresAt(now),
     });
   } catch (e) {
+    // A missing trustline (JOURNEYS C2 step 3) is checked before the nonce is spent, and
+    // the page renders the Freighter steps and a Refresh for exactly this account.
+    if (stellarBindReason(e) === "no_trustline") {
+      const url = new URL("/dashboard/wallet", base);
+      url.searchParams.set("trustline", address);
+      return seeOther(url);
+    }
     // A burnt nonce cannot be retried, so send them back to the first step, not the second.
     return back("/dashboard/wallet", {
       error: e instanceof ApiError ? e.message : "That address could not be bound. Start again with a fresh challenge.",

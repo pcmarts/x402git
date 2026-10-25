@@ -52,7 +52,7 @@ describe("formatAdminEvent", () => {
       grossMicro: 9_000_000n,
       purchaseKind: "initial",
       source: "agent",
-      chainId: 84532,
+      network: "eip155:84532",
       txHash: "0x1234567890abcdefabcd",
     };
 
@@ -70,9 +70,14 @@ describe("formatAdminEvent", () => {
 
     // Mainnet gets the mainnet explorer; an unknown chain gets a CAIP-2 name rather than
     // a bare number, and no link we would be guessing at.
-    expect(formatAdminEvent({ ...base, chainId: 8453 })).toContain('<a href="https://basescan.org/tx/0x1234567890abcdefabcd">0x1234…abcd</a>');
-    expect(formatAdminEvent({ ...base, chainId: 1 })).toContain("chain: eip155:1");
-    expect(formatAdminEvent({ ...base, chainId: 1 })).toContain("tx: 0x1234…abcd\n");
+    expect(formatAdminEvent({ ...base, network: "eip155:8453" })).toContain('<a href="https://basescan.org/tx/0x1234567890abcdefabcd">0x1234…abcd</a>');
+    expect(formatAdminEvent({ ...base, network: "eip155:1" })).toContain("chain: eip155:1");
+    expect(formatAdminEvent({ ...base, network: "eip155:1" })).toContain("tx: 0x1234…abcd\n");
+    // The Stellar rail (25 Oct 2026): named, and linked to stellar.expert.
+    const stellarHash = "a".repeat(64);
+    expect(formatAdminEvent({ ...base, network: "stellar:pubnet", txHash: stellarHash })).toContain("chain: Stellar");
+    expect(formatAdminEvent({ ...base, network: "stellar:pubnet", txHash: stellarHash })).toContain(`<a href="https://stellar.expert/explorer/public/tx/${stellarHash}">`);
+    expect(formatAdminEvent({ ...base, network: "stellar:testnet", txHash: stellarHash })).toContain("https://stellar.expert/explorer/testnet/tx/");
     // A settlement with no hash yet still reports, without an empty tx line.
     expect(formatAdminEvent({ ...base, txHash: null, source: null })).toContain("source: unknown");
     expect(formatAdminEvent({ ...base, txHash: null })).not.toContain("tx:");

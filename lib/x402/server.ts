@@ -7,12 +7,17 @@
  * from the §9 catalogue, and none of them writes a row.
  *
  *   const requirements = toPaymentRequirements(q);
- *   const result = await verifyAndSettle(req.headers.get("payment-signature"), requirements.accepts[0]);
+ *   const requirement = selectRequirement(requirements.accepts, payload);   // the rail the payer chose
+ *   const result = await verifyAndSettle(req.headers.get("payment-signature"), requirement);
  *   if (!result.ok) throw new ApiError(result.code, { details: result.details });
  *   await grant(q, result.payer, result);
  *
- * The facilitator client is injectable (`setFacilitator`) so a test never touches the
- * network; `resetFacilitator()` puts the real one back.
+ * Two rails since 25 Oct 2026 (docs/HACKMERIDIAN-BUILD.md): Base, through `@x402/evm`, and
+ * Stellar, through `@x402/stellar`. Each has its own resource server and its own
+ * facilitator (`resourceServerFor`), and the payload's `accepted.network` decides which.
+ *
+ * The facilitator clients are injectable (`setFacilitator`, `setStellarFacilitator`) so a
+ * test never touches the network; `resetFacilitator()` puts the real ones back.
  */
 
 import { createFacilitatorConfig } from "@coinbase/x402";
@@ -22,10 +27,18 @@ import { HTTPFacilitatorClient, x402ResourceServer } from "@x402/core/server";
 import type { FacilitatorClient } from "@x402/core/server";
 import type { PaymentPayload, SettleResponse } from "@x402/core/types";
 import { ExactEvmScheme } from "@x402/evm/exact/server";
+import { ExactStellarScheme } from "@x402/stellar/exact/server";
 import * as z from "zod";
 import type { X402Requirement } from "@/lib/core/access";
-import { env, x402Config } from "@/lib/env";
+import { env, type StellarRail, stellarRail, x402Config } from "@/lib/env";
 import type { ErrorCode } from "@/lib/errors";
+import {
+  canonicalAddress,
+  decodeExactPayload,
+  STELLAR_ACCOUNT_SHAPE,
+  STELLAR_PAYER_SHAPE,
+  stroopsToMicro,
+} from "@/lib/x402/stellar";
 
 /** The header names of x402 v2 (§13, FR-21). Lowercase: `Headers.get` is case-insensitive. */
 export const PAYMENT_SIGNATURE_HEADER = "payment-signature";
@@ -44,26 +57,52 @@ export type PaymentFailureCode = Extract<
 >;
 
 export type VerifyAndSettleResult =
-  | { ok: true; txHash: string; nonce: string; payer: `0x${string}`; amountMicro: bigint; settlement: SettleResponse }
+  | {
+      ok: true;
+      txHash: string;
+      nonce: string;
+      /** The payer the authorization names, canonical. Never the facilitator's word alone (BATTLE-TEST finding 10). */
+      payer: string;
+      amountMicro: bigint;
+      /** The requirement's network, never the facilitator's. */
+      network: string;
+      settlement: SettleResponse;
+    }
   | { ok: false; code: PaymentFailureCode; message: string; details?: unknown; payer?: string; nonce?: string };
 
-/** The authorization the payer signed, whichever transfer method the scheme used. */
-export type DecodedAuthorization = { nonce: string; payer: `0x${string}`; amountMicro: bigint };
+/**
+ * The authorization the payer signed, whichever rail and transfer method the scheme
+ * used: the replay key, the payer, the amount in micro-dollars and the rail it is for.
+ * On Stellar the nonce is `stellar:<network>:<payer>:<auth nonce>` — the auth-entry
+ * nonce Soroban consumes, prefixed so it can never collide with an EIP-3009 nonce under
+ * the global unique index — and the payer is the upper-case strkey (BUILD H11).
+ */
+export type DecodedAuthorization = { network: string; nonce: string; payer: string; amountMicro: bigint };
 
 // --- the injectable facilitator ------------------------------------------------
 
 let facilitator: FacilitatorClient | null = null;
 let server: x402ResourceServer | null = null;
+let stellarFacilitator: FacilitatorClient | null = null;
+let stellarServer: x402ResourceServer | null = null;
 
-/** Test seam. Pass a stub implementing `verify`/`settle`/`getSupported`. */
+/** Test seam for the EVM rail. Pass a stub implementing `verify`/`settle`/`getSupported`. */
 export function setFacilitator(client: FacilitatorClient | null): void {
   facilitator = client;
   server = null;
 }
 
+/** Test seam for the Stellar rail. The two are separate so a test can prove which one was asked. */
+export function setStellarFacilitator(client: FacilitatorClient | null): void {
+  stellarFacilitator = client;
+  stellarServer = null;
+}
+
 export function resetFacilitator(): void {
   facilitator = null;
   server = null;
+  stellarFacilitator = null;
+  stellarServer = null;
 }
 
 /**
@@ -124,6 +163,64 @@ export function resourceServer(): x402ResourceServer {
   if (server) return server;
   server = new x402ResourceServer(facilitatorClient()).register("eip155:*", new ExactEvmScheme());
   return server;
+}
+
+/**
+ * The Stellar facilitator (25 Oct 2026, BUILD §2.1). Its own `HTTPFacilitatorClient`
+ * because the two rails may use different hosts and the credential is different: OZ
+ * Channels on pubnet wants `Authorization: Bearer <key>` on every call, the public
+ * x402.org testnet facilitator wants nothing. `createAuthHeaders` is per path by the
+ * library's contract (a flat headers object throws), and absent when no key is set so a
+ * keyless host is never sent an empty bearer.
+ */
+export function stellarFacilitatorClient(rail: StellarRail = requireStellarRail()): FacilitatorClient {
+  if (stellarFacilitator) return stellarFacilitator;
+  const apiKey = rail.facilitatorApiKey;
+  const config: FacilitatorConfig = apiKey
+    ? {
+        url: rail.facilitatorUrl,
+        createAuthHeaders: async () => {
+          const headers = { Authorization: `Bearer ${apiKey}` };
+          return { verify: headers, settle: headers, supported: headers };
+        },
+      }
+    : { url: rail.facilitatorUrl };
+  stellarFacilitator = new HTTPFacilitatorClient(config);
+  return stellarFacilitator;
+}
+
+/**
+ * One resource server per rail, each with exactly one facilitator (BUILD H4). Without
+ * `initialize()` the library tries its facilitators in order and takes the first
+ * *result*, so a Base facilitator answering `isValid: false` to a Stellar payload would
+ * end the search. Keeping the two servers apart is what keeps the no-`initialize()`
+ * shortcut above valid, and it means the Base facilitator is never asked about a
+ * Stellar payload at all.
+ */
+export function resourceServerFor(network: string): x402ResourceServer {
+  if (!network.startsWith("stellar:")) return resourceServer();
+  if (stellarServer) return stellarServer;
+  stellarServer = new x402ResourceServer(stellarFacilitatorClient()).register("stellar:*", new ExactStellarScheme());
+  return stellarServer;
+}
+
+function requireStellarRail(): StellarRail {
+  const rail = stellarRail();
+  if (!rail) throw new Error("the Stellar rail is not configured on this deployment (STELLAR_NETWORK is unset)");
+  return rail;
+}
+
+/**
+ * The accept a payload is paying against: the one whose `network` and `scheme` the
+ * client echoed in `accepted`. `accepts` is in the 402 body's order and is never indexed
+ * `[0]` again (BUILD §4 W1 pitfalls): with two rails on the wire, `[0]` is the Base entry
+ * whatever the payer chose, and a Stellar payload sent to the Base requirement is a
+ * `network_mismatch` from a facilitator that should never have been asked.
+ */
+export function selectRequirement(accepts: X402Requirement[], payload: PaymentPayload): X402Requirement | null {
+  const accepted = payload?.accepted;
+  if (!accepted || typeof accepted.network !== "string" || typeof accepted.scheme !== "string") return null;
+  return accepts.find((a) => a.network === accepted.network && a.scheme === accepted.scheme) ?? null;
 }
 
 // --- decoding -------------------------------------------------------------------
@@ -219,7 +316,7 @@ export function parsePaymentSignature(header: string | null): ParsedPaymentSigna
   const envelope = PaymentPayloadEnvelope.safeParse(raw);
   if (!envelope.success) return { kind: "invalid", reason: describeIssue(envelope.error) };
 
-  const authorization = authorizationOf(envelope.data.payload);
+  const authorization = authorizationOf(envelope.data.payload, envelope.data.accepted.network);
   if ("reason" in authorization) return { kind: "invalid", reason: authorization.reason };
 
   return { kind: "ok", payload: envelope.data as unknown as PaymentPayload, authorization };
@@ -238,27 +335,88 @@ export function decodeSignature(header: string | null): PaymentPayload | null {
  * here too, so this never throws whoever built the `PaymentPayload` it is handed.
  */
 export function decodeAuthorization(payload: PaymentPayload): DecodedAuthorization | null {
-  const result = authorizationOf(payload?.payload);
+  const network = typeof payload?.accepted?.network === "string" ? payload.accepted.network : "";
+  const result = authorizationOf(payload?.payload, network);
   return "reason" in result ? null : result;
 }
 
 /**
- * The scheme payload's three facts, or why it has none. Permit2 is detected the way
+ * The scheme payload's facts, or why it has none. The rail is the one the client echoed
+ * in `accepted.network`: a Stellar payload (`payload.transaction`, a base64 envelope) is
+ * read by `decodeExactPayload`; everything else is EVM. Permit2 is detected the way
  * `@x402/evm`'s facilitator detects it (`"permit2Authorization" in payload`, checked
  * first). That way the nonce and payer recorded here are the ones that actually settle.
  */
-function authorizationOf(raw: unknown): DecodedAuthorization | { reason: string } {
+function authorizationOf(raw: unknown, network: string): DecodedAuthorization | { reason: string } {
+  if (network.startsWith("stellar:") && typeof raw === "object" && raw !== null && typeof (raw as { transaction?: unknown }).transaction === "string") {
+    return stellarAuthorizationOf((raw as { transaction: string }).transaction, network);
+  }
+
   if (typeof raw === "object" && raw !== null && "permit2Authorization" in raw) {
     const permit2 = ExactPermit2Payload.safeParse(raw);
     if (!permit2.success) return { reason: describeIssue(permit2.error, "payload") };
     const a = permit2.data.permit2Authorization;
-    return { nonce: normaliseNonce(a.nonce), payer: a.from as `0x${string}`, amountMicro: BigInt(a.permitted.amount) };
+    return { network, nonce: normaliseNonce(a.nonce), payer: a.from, amountMicro: BigInt(a.permitted.amount) };
   }
 
   const eip3009 = ExactEip3009Payload.safeParse(raw);
   if (!eip3009.success) return { reason: describeIssue(eip3009.error, "payload") };
   const a = eip3009.data.authorization;
-  return { nonce: normaliseNonce(a.nonce), payer: a.from as `0x${string}`, amountMicro: BigInt(a.value) };
+  return { network, nonce: normaliseNonce(a.nonce), payer: a.from, amountMicro: BigInt(a.value) };
+}
+
+/**
+ * The Stellar branch (BUILD §0b B6, USDT0 W1 items 0–1). Everything the DB CHECK
+ * `purchase_network_shape` will demand is checked here, before any facilitator call, so
+ * a settle can never be followed by a 23514 on insert that charges a buyer and writes
+ * nothing (BATTLE-TEST finding 11):
+ *
+ * - the rail is on, and is the network the payload names;
+ * - the transfer is of this rail's asset contract, to this rail's `payTo`;
+ * - the payer is a `G…` or `C…` strkey; the amount is a positive whole number of
+ *   micro-dollars (stroops ÷ 10, no remainder).
+ *
+ * The facilitator checks the first two as well; this is the local half, and the reason a
+ * payload for the wrong token is refused without a network round trip.
+ */
+function stellarAuthorizationOf(transaction: string, network: string): DecodedAuthorization | { reason: string } {
+  if (network !== "stellar:testnet" && network !== "stellar:pubnet") return { reason: "accepted.network: not a Stellar network this code knows" };
+
+  let decoded;
+  try {
+    decoded = decodeExactPayload(transaction, network);
+  } catch (e) {
+    return { reason: `payload.transaction: ${e instanceof Error ? e.message : String(e)}` };
+  }
+
+  if (!STELLAR_PAYER_SHAPE.test(decoded.from)) return { reason: "payload.transaction: the payer is not a Stellar account or contract" };
+  if (!STELLAR_ACCOUNT_SHAPE.test(decoded.to)) return { reason: "payload.transaction: the recipient is not a Stellar account" };
+
+  // The rail-bound checks apply only when this is the rail we run. A payload for the
+  // other Stellar network, or one arriving with the rail off, still decodes — so the flow
+  // can answer `authorization_mismatch` with the 402 attached (which names the rails this
+  // listing *can* be paid on) rather than a bare 402 — and then matches no accept, so no
+  // facilitator is ever asked about it.
+  const rail = stellarRail();
+  if (rail && network === rail.network) {
+    if (decoded.contract !== rail.asset.contract) return { reason: "payload.transaction: the transfer is not of this rail's asset" };
+    if (decoded.to !== rail.payTo) return { reason: "payload.transaction: the transfer is not to this deployment's receiving account" };
+  }
+
+  let amountMicro: bigint;
+  try {
+    amountMicro = stroopsToMicro(decoded.amount);
+  } catch {
+    return { reason: "payload.transaction: the amount is not a whole number of micro-dollars (stroops must be a multiple of 10)" };
+  }
+  if (amountMicro <= 0n) return { reason: "payload.transaction: the amount must be positive" };
+
+  return {
+    network,
+    nonce: `stellar:${network}:${decoded.from}:${decoded.authNonce}`,
+    payer: decoded.from,
+    amountMicro,
+  };
 }
 
 /** The first issue as `path: message`. Paths are schema keys, so no client input is echoed. */
@@ -308,8 +466,10 @@ export async function verifyAndSettle(paymentSignatureHeader: string | null, req
     };
   }
   const { payload, authorization } = parsed;
+  const stellar = requirement.network.startsWith("stellar:");
 
-  const rs = resourceServer();
+  // One server per rail (H4): the Base facilitator is never asked about a Stellar payload.
+  const rs = resourceServerFor(requirement.network);
   // `requirement` is a plain object shaped like the library's PaymentRequirements; the
   // cast keeps our own narrow type at the call sites.
   const requirements = requirement as unknown as Parameters<typeof rs.verifyPayment>[1];
@@ -336,6 +496,21 @@ export async function verifyAndSettle(paymentSignatureHeader: string | null, req
       message: verify.invalidMessage ?? `The facilitator rejected this payment: ${verify.invalidReason ?? "unknown reason"}.`,
       details: { invalid_reason: verify.invalidReason },
       payer: verify.payer ?? authorization.payer,
+      nonce: authorization.nonce,
+    };
+  }
+
+  // BATTLE-TEST finding 10: the facilitator is not trusted for who paid. A `verify` that
+  // names a different payer than the signed authorization is not a verification of this
+  // payment; stop before settle rather than move money against a payer we would then
+  // have to disbelieve.
+  if (!samePayer(verify.payer, authorization.payer)) {
+    return {
+      ok: false,
+      code: "settlement_pending",
+      message: "The facilitator verified a different payer than the one the authorization names. Access is granted only against the signed payer.",
+      details: { retry_with_same_authorization: true },
+      payer: authorization.payer,
       nonce: authorization.nonce,
     };
   }
@@ -390,16 +565,77 @@ export async function verifyAndSettle(paymentSignatureHeader: string | null, req
     };
   }
 
+  // BATTLE-TEST finding 10, the settle half. A hash is necessary and not sufficient: the
+  // facilitator's `payer` (when it says one) must be the payer the authorization names,
+  // and its `network` must be the requirement's. Otherwise the purchase row would belong
+  // to a wallet that did not sign (after FR-20 checked the one that did), or to a rail we
+  // never quoted. Never a grant; `settlement_pending` with the same-authorization retry,
+  // because the money may well have moved and an operator has to look.
+  if (!samePayer(settlement.payer, authorization.payer)) {
+    return {
+      ok: false,
+      code: "settlement_pending",
+      message: "The facilitator settled against a different payer than the one the authorization names. Access is granted only against the signed payer.",
+      details: { retry_with_same_authorization: true, facilitator_payer: settlement.payer },
+      payer: authorization.payer,
+      nonce: authorization.nonce,
+    };
+  }
+  if (settlement.network !== requirement.network) {
+    return {
+      ok: false,
+      code: "settlement_pending",
+      message: `The facilitator reported settlement on ${settlement.network}, not on ${requirement.network}. Access is granted only on the quoted network.`,
+      details: { retry_with_same_authorization: true, facilitator_network: settlement.network },
+      payer: authorization.payer,
+      nonce: authorization.nonce,
+    };
+  }
+
+  // `amount` is present only for schemes that settle less than authorised; `exact`
+  // settles the authorised value. When it is present on Stellar it is stroops, and a
+  // value that is not a whole number of micro-dollars is not something the ledger can
+  // record — stop, rather than round.
+  let amountMicro = authorization.amountMicro;
+  if (settlement.amount) {
+    try {
+      amountMicro = stellar ? stroopsToMicro(safeBigInt(settlement.amount)) : safeBigInt(settlement.amount);
+    } catch {
+      return {
+        ok: false,
+        code: "settlement_pending",
+        message: "The facilitator reported a settled amount that is not a whole number of micro-dollars.",
+        details: { retry_with_same_authorization: true, facilitator_amount: settlement.amount },
+        payer: authorization.payer,
+        nonce: authorization.nonce,
+      };
+    }
+  }
+
   return {
     ok: true,
     txHash: settlement.transaction,
     nonce: authorization.nonce,
-    payer: (settlement.payer ?? authorization.payer) as `0x${string}`,
-    // `amount` is present only for schemes that settle less than authorised; `exact`
-    // settles the authorised value.
-    amountMicro: settlement.amount ? safeBigInt(settlement.amount) : authorization.amountMicro,
+    payer: authorization.payer,
+    amountMicro,
+    network: requirement.network,
     settlement,
   };
+}
+
+/**
+ * Absent is fine (the facilitator did not say); present must be the signed payer.
+ * Compared canonically, so a checksummed EVM address equals its lower-case self and a
+ * strkey is compared as written. A facilitator value that is not an address at all is a
+ * mismatch, not a 500.
+ */
+function samePayer(reported: string | undefined, signed: string): boolean {
+  if (reported === undefined || reported === null || reported === "") return true;
+  try {
+    return canonicalAddress(reported) === canonicalAddress(signed);
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -419,6 +655,13 @@ export function mapFacilitatorReason(reason: string | undefined): PaymentFailure
   if (r === "settlement_pending" || r.includes("settlement_pending")) return "settlement_pending";
   if (r.includes("timeout")) return "settlement_timeout";
   if (r.includes("transaction_failed") || r.includes("simulation_failed") || r.includes("transaction_state")) return "settlement_pending";
+  // `@x402/stellar` 2.25.0 (`invalid_exact_stellar_*`, `settle_exact_stellar_*`). The
+  // facilitator-side conditions — it will not pay a fee above its ceiling, its signer or
+  // submission failed — are retryable with the same authorization; every structural
+  // refusal (wrong asset, recipient, amount, operation, missing or pending signatures,
+  // too-distant expiration) is the client's to fix and falls through to the default.
+  if (r.includes("fee_exceeds_maximum") || r.includes("signer_selection_failed") || r.includes("transaction_signing_failed")) return "settlement_pending";
+  if (r.includes("transaction_submission_failed") || r.includes("fee_bump_signing_failed")) return "settlement_pending";
   return "authorization_mismatch";
 }
 

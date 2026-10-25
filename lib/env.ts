@@ -20,6 +20,7 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { Asset, Networks } from "@stellar/stellar-sdk";
 import { z } from "zod";
 
 /** Money and counts arrive as strings; coerce explicitly, never with a float. */
@@ -118,6 +119,45 @@ export const envSchema = z.object({
   X402_ASSET_ADDRESS: z.string().optional(),
   /** Read-only JSON-RPC for the sweep and the FR-28 reconcile. Public endpoint by default. */
   EVM_RPC_URL: z.string().optional(),
+
+  // --- the Stellar rail (25 Oct 2026, HackMeridian; docs/HACKMERIDIAN-BUILD.md §3.2) ------
+  /**
+   * `stellar:testnet` or `stellar:pubnet`. **Unset is the rail off**: no Stellar accept
+   * on any 402, no Stellar sweep, and every other key in this block is ignored. The
+   * Base rail is configured by `X402_NETWORK` above and is untouched by any of this.
+   */
+  STELLAR_NETWORK: z.string().optional(),
+  /** The `G…` account buyers pay (the 402 `payTo`), and the account the sweep pays from. */
+  STELLAR_RECEIVING_ADDRESS: z.string().optional(),
+  /** Verifies and settles Stellar payments. Defaults per network in `stellarRail()`. */
+  STELLAR_FACILITATOR_URL: z.string().optional(),
+  /** Sent as `Authorization: Bearer …` to the Stellar facilitator when set (OZ Channels on pubnet). */
+  STELLAR_FACILITATOR_API_KEY: z.string().optional(),
+  /** Soroban RPC. Testnet has a public default; pubnet has none and the key is required. */
+  STELLAR_RPC_URL: z.string().optional(),
+  /** Horizon, for the classic payout payment and the trustline check. Defaults per network. */
+  STELLAR_HORIZON_URL: z.string().optional(),
+  /**
+   * The asset the rail is priced in: the SAC contract (`C…`), the classic code and the
+   * issuer (`G…`). All three or none; a partial set throws. Defaults per network in
+   * `stellarRail()` (testnet USDC, pubnet USDT0). The three are cross-checked at boot:
+   * `Asset(code, issuer).contractId(passphrase)` must equal the contract.
+   */
+  STELLAR_ASSET_ADDRESS: z.string().optional(),
+  STELLAR_ASSET_CODE: z.string().optional(),
+  STELLAR_ASSET_ISSUER: z.string().optional(),
+  /** `1` lets a pubnet deployment price in an issuer other than Tether's (BATTLE-TEST finding 13). */
+  STELLAR_ALLOW_CUSTOM_ASSET: z.string().optional(),
+  /** `S…` secret of `STELLAR_RECEIVING_ADDRESS`. A crown jewel like SWEEP_WALLET_PRIVATE_KEY. */
+  STELLAR_SWEEP_SECRET: z.string().optional(),
+  /**
+   * `on` | `off` (default). Read and reported, never acted on yet: bridged payouts to
+   * EVM-only creators are docs/HACKMERIDIAN-USDT0.md W5 and deferred (BUILD §0b B3).
+   */
+  CROSS_CHAIN_PAYOUTS: z
+    .string()
+    .optional()
+    .transform((v) => (v === "on" ? "on" : "off")),
 
   // --- vercel cron (§9, FR-26/FR-28) ---------------------------------------
   /**
@@ -337,6 +377,208 @@ export function rpcUrl(): string {
 export function sweepPrivateKey(): string | null {
   const v = env().SWEEP_WALLET_PRIVATE_KEY;
   return v && v.length > 0 ? v : null;
+}
+
+// --- the Stellar rail -----------------------------------------------------------------
+//
+// 25 Oct 2026, HackMeridian (docs/HACKMERIDIAN-BUILD.md §3.3, docs/HACKMERIDIAN-USDT0.md
+// §3.2). A second payment rail beside Base. Everything about it is read here and nowhere
+// else, so that "is Stellar on?" has one answer, and a mis-set asset is caught once, at
+// boot, rather than on the first sale.
+
+export type EvmRail = { family: "evm"; network: `eip155:${number}`; chainId: number; asset: string; payTo: string };
+export type StellarNetwork = "stellar:testnet" | "stellar:pubnet";
+export type StellarRail = {
+  family: "stellar";
+  network: StellarNetwork;
+  /** Always null: Stellar has no EVM chain id. Here so a `Rail` can be stamped on a row blind. */
+  chainId: null;
+  /** The token the rail is priced in: the SAC the x402 payment calls, and the classic pair the payout sends. */
+  asset: { code: string; issuer: string; contract: string };
+  /** The `G…` account buyers pay. */
+  payTo: string;
+  passphrase: string;
+  horizonUrl: string;
+  rpcUrl: string;
+  facilitatorUrl: string;
+  facilitatorApiKey: string | null;
+};
+export type Rail = EvmRail | StellarRail;
+
+/**
+ * Per-network defaults. The two tables are the **only** place this codebase names a
+ * Stellar token (USDT0 T4): everything downstream reads `stellarRail().asset`. Testnet
+ * develops against Circle's testnet USDC; pubnet is Tether's USDT0 (`docs/HACKMERIDIAN-USDT0.md`
+ * §1, verified against Horizon on 25 Oct 2026). The SAC is derived from code + issuer,
+ * so a typo in any one of the three fails the boot check below.
+ */
+const STELLAR_DEFAULTS: Record<
+  StellarNetwork,
+  { passphrase: string; horizonUrl: string; rpcUrl: string | null; facilitatorUrl: string; asset: StellarRail["asset"] }
+> = {
+  "stellar:testnet": {
+    passphrase: Networks.TESTNET,
+    horizonUrl: "https://horizon-testnet.stellar.org",
+    rpcUrl: "https://soroban-testnet.stellar.org",
+    facilitatorUrl: "https://x402.org/facilitator",
+    asset: {
+      code: "USDC",
+      issuer: "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
+      contract: "CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA",
+    },
+  },
+  "stellar:pubnet": {
+    passphrase: Networks.PUBLIC,
+    horizonUrl: "https://horizon.stellar.org",
+    // No public Soroban RPC exists for pubnet; a deployment names its own or does not run.
+    rpcUrl: null,
+    facilitatorUrl: "https://channels.openzeppelin.com/x402",
+    asset: {
+      code: "USDT0",
+      issuer: "GATISXX6BZ6NC7IKQBY37CJD4SOZL3CYZJWXEDG6JVIY4WBS6KXJHN6Q",
+      contract: "CBSJZEIO5C7KC2SF3MKSNXXJSW5G3VTNBX4ATMKUI3B2MR4JKM4R26YF",
+    },
+  },
+};
+
+/**
+ * The issuer a pubnet deployment must price in unless it says otherwise. The derivation
+ * check proves the three asset values agree with each other, not that the issuer is
+ * Tether's: set all three to an account of our own and mainnet would sell repos for a
+ * token we minted and pay creators in it (BATTLE-TEST finding 13). This pin is the
+ * difference. `STELLAR_ALLOW_CUSTOM_ASSET=1` lifts it for a deliberate test asset.
+ */
+export const STELLAR_PUBNET_PINNED_ISSUER = STELLAR_DEFAULTS["stellar:pubnet"].asset.issuer;
+
+/** Named so a boot log reads as "the asset is wrong", not as a stack trace. */
+export class StellarRailConfigError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "StellarRailConfigError";
+  }
+}
+
+/** The network passphrase the SDK signs and parses against. Throws on anything but the two. */
+export function stellarPassphrase(network: string): string {
+  const defaults = STELLAR_DEFAULTS[network as StellarNetwork];
+  if (!defaults) throw new StellarRailConfigError(`unsupported STELLAR_NETWORK: expected stellar:testnet or stellar:pubnet`);
+  return defaults.passphrase;
+}
+
+/** Memoised beside `cached`: the derivation below hashes, and every 402 asks. */
+let stellarRailMemo: { env: Env; rail: StellarRail | null } | null = null;
+
+/**
+ * The Stellar rail, or `null` when `STELLAR_NETWORK` is unset. Mirrors `lib/chain.ts`:
+ * it throws rather than returning a flag, because a mis-set asset is the whole
+ * deployment being wrong about what it sells, not a per-request condition to skip past.
+ *
+ * Three checks, in the order a deployer meets them:
+ * 1. `STELLAR_RECEIVING_ADDRESS` is a `G…` account (the `payTo`, and the payout CHECK's shape).
+ * 2. The asset: all three of `STELLAR_ASSET_ADDRESS/CODE/ISSUER` or none; the contract
+ *    must be the SAC the SDK derives from the code and issuer on this network; and on
+ *    pubnet the issuer is pinned to Tether's unless `STELLAR_ALLOW_CUSTOM_ASSET=1`.
+ * 3. Pubnet has no public Soroban RPC, so `STELLAR_RPC_URL` is required there.
+ */
+export function stellarRail(): StellarRail | null {
+  const e = env();
+  if (stellarRailMemo && stellarRailMemo.env === e) return stellarRailMemo.rail;
+
+  const rail = buildStellarRail(e);
+  stellarRailMemo = { env: e, rail };
+  return rail;
+}
+
+function buildStellarRail(e: Env): StellarRail | null {
+  const network = e.STELLAR_NETWORK;
+  if (!network || network.length === 0) return null;
+  if (network !== "stellar:testnet" && network !== "stellar:pubnet") {
+    throw new StellarRailConfigError(`unsupported STELLAR_NETWORK: expected stellar:testnet or stellar:pubnet`);
+  }
+  const defaults = STELLAR_DEFAULTS[network];
+
+  const payTo = e.STELLAR_RECEIVING_ADDRESS;
+  if (!payTo || !/^G[A-Z2-7]{55}$/.test(payTo)) {
+    throw new StellarRailConfigError(`STELLAR_RECEIVING_ADDRESS must be a Stellar account (G…) when STELLAR_NETWORK is set`);
+  }
+
+  const set = [e.STELLAR_ASSET_ADDRESS, e.STELLAR_ASSET_CODE, e.STELLAR_ASSET_ISSUER].filter((v) => v && v.length > 0).length;
+  if (set !== 0 && set !== 3) {
+    throw new StellarRailConfigError(`STELLAR_ASSET_ADDRESS, STELLAR_ASSET_CODE and STELLAR_ASSET_ISSUER must be set together or not at all`);
+  }
+  const asset: StellarRail["asset"] =
+    set === 3
+      ? { contract: e.STELLAR_ASSET_ADDRESS!, code: e.STELLAR_ASSET_CODE!, issuer: e.STELLAR_ASSET_ISSUER! }
+      : defaults.asset;
+
+  if (network === "stellar:pubnet" && asset.issuer !== STELLAR_PUBNET_PINNED_ISSUER && e.STELLAR_ALLOW_CUSTOM_ASSET !== "1") {
+    throw new StellarRailConfigError(
+      `STELLAR_ASSET_ISSUER on stellar:pubnet must be ${STELLAR_PUBNET_PINNED_ISSUER} (USDT0); set STELLAR_ALLOW_CUSTOM_ASSET=1 to price in another issuer deliberately`,
+    );
+  }
+
+  let derived: string;
+  try {
+    derived = new Asset(asset.code, asset.issuer).contractId(defaults.passphrase);
+  } catch (err) {
+    throw new StellarRailConfigError(`STELLAR_ASSET_CODE/ISSUER do not form a valid Stellar asset: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  if (derived !== asset.contract) {
+    // Name the derived value, not the configured one: the operator knows what they set,
+    // and the derived contract is what they have to compare it to.
+    throw new StellarRailConfigError(
+      `STELLAR_ASSET_ADDRESS is not the SAC of STELLAR_ASSET_CODE:STELLAR_ASSET_ISSUER on ${network} (the SDK derives ${derived})`,
+    );
+  }
+
+  const rpcUrl = e.STELLAR_RPC_URL && e.STELLAR_RPC_URL.length > 0 ? e.STELLAR_RPC_URL : defaults.rpcUrl;
+  if (!rpcUrl) throw new StellarRailConfigError(`STELLAR_RPC_URL is required on stellar:pubnet`);
+
+  return {
+    family: "stellar",
+    network,
+    chainId: null,
+    asset,
+    payTo,
+    passphrase: defaults.passphrase,
+    horizonUrl: e.STELLAR_HORIZON_URL && e.STELLAR_HORIZON_URL.length > 0 ? e.STELLAR_HORIZON_URL : defaults.horizonUrl,
+    rpcUrl,
+    facilitatorUrl: e.STELLAR_FACILITATOR_URL && e.STELLAR_FACILITATOR_URL.length > 0 ? e.STELLAR_FACILITATOR_URL : defaults.facilitatorUrl,
+    facilitatorApiKey: e.STELLAR_FACILITATOR_API_KEY && e.STELLAR_FACILITATOR_API_KEY.length > 0 ? e.STELLAR_FACILITATOR_API_KEY : null,
+  };
+}
+
+/** The EVM rail as a `Rail`. Requires the receiving address, like `x402Config()`. */
+export function evmRail(): EvmRail {
+  const { network, chainId, asset, payTo } = x402Config();
+  return { family: "evm", network: network as `eip155:${number}`, chainId, asset, payTo };
+}
+
+/** Every rail this deployment can be paid on, EVM first (BUILD H10). */
+export function paymentRails(): Rail[] {
+  const stellar = stellarRail();
+  return stellar ? [evmRail(), stellar] : [evmRail()];
+}
+
+/**
+ * The CAIP-2 ids of every rail this deployment serves, for reads that must see both
+ * (install counts). Needs no receiving address, for the same reason `paymentChain()`
+ * exists beside `x402Config()`: a listing page renders on deployments that hold none.
+ */
+export function paymentNetworks(): string[] {
+  const stellar = stellarRail();
+  return stellar ? [paymentChain().network, stellar.network] : [paymentChain().network];
+}
+
+/** The Stellar payout signer's secret, or `null` when this deployment holds none (§14.8). */
+export function stellarSweepSecret(): string | null {
+  const v = env().STELLAR_SWEEP_SECRET;
+  return v && v.length > 0 ? v : null;
+}
+
+/** USDT0 W5 is deferred: this is read so the sweep can refuse to bridge, and for nothing else yet. */
+export function crossChainPayouts(): "on" | "off" {
+  return env().CROSS_CHAIN_PAYOUTS;
 }
 
 /** Vercel cron shared secret, or `null` when the routes are left open (local dev). */

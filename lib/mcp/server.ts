@@ -58,9 +58,13 @@ import type { PaymentPayload } from "@x402/core/types";
 import * as z from "zod";
 import { walletFrom, WALLET_SIGNATURE_HEADER } from "@/lib/auth/wallet-signature";
 import { buyLinks, chainLabel, signAndRetry } from "@/lib/buy-links";
-import { appUrl, paymentChain } from "@/lib/env";
+import { type PaymentOption, paymentOptionsFor } from "@/lib/core/access";
+import { appUrl } from "@/lib/env";
 import { ApiError, toApiError } from "@/lib/errors";
 import { versionStatus } from "@/lib/listings/version";
+import { openReleaseView } from "@/lib/listings/view";
+import { refreshPromiseOnRead } from "@/lib/release/promise";
+import { OpenReleaseBlock } from "@/lib/schemas";
 import { loadListingByPath, manifestFor } from "@/lib/web/loaders";
 import { formatPrice } from "@/lib/web/money";
 import { SEARCH_DEFAULT_LIMIT, SEARCH_MAX_LIMIT, searchListings } from "@/lib/listings/search";
@@ -69,9 +73,9 @@ import { type Jurisdiction, jurisdictionOf } from "@/lib/x402/jurisdiction";
 
 export const MCP_SERVER_NAME = "git-x402";
 export const MCP_SERVER_VERSION = "0.2.1";
-export const MCP_SERVER_TITLE = "X402 Git — buy private repos with USDC";
+export const MCP_SERVER_TITLE = "X402 Git — buy private repos over x402";
 export const MCP_SERVER_DESCRIPTION =
-  "Find and buy private git repositories and agent skills with USDC over x402. Search live listings by what they do, read a listing's free manifest — file tree, licence, dependencies, security scan — then pay and pull, with no account and no human in the loop.";
+  "Find and buy private git repositories and agent skills over x402 — USDC on Base or USDT0 on Stellar, whichever the listing offers. Search live listings by what they do, read a listing's free manifest — file tree, licence, dependencies, security scan — then pay and pull, with no account and no human in the loop.";
 
 /**
  * What `initialize` says about the server, and what the server card mirrors. Directories
@@ -104,8 +108,34 @@ const slug = z.string().describe("The listing slug, e.g. `humanizer`.");
 const walletSignature = z
   .string()
   .describe(
-    "An `X-Wallet-Signature` value: `<address>.<nonce>.<signature>`, where the nonce comes from `POST /api/auth/challenge` and the signature is EIP-191 over the challenge message. Single use.",
+    "An `X-Wallet-Signature` value: `<address>.<nonce>.<signature>`, where the nonce comes from `GET /api/auth/challenge` and the signature is over the challenge message — EIP-191 (hex) from an EVM wallet, SEP-53 (base64) from a Stellar key. Single use.",
   );
+
+/**
+ * `payment_options` as every tool prints it (JOURNEYS B4a): the networks a listing can be
+ * paid on, from `paymentOptionsFor` — the function behind the 402's `accepts`, so an
+ * agent can filter to what it can pay before it ever sees a 402.
+ */
+const paymentOptionsSchema = z
+  .array(
+    z.object({
+      network: z.string().describe("CAIP-2: `eip155:8453` is Base, `stellar:pubnet` is Stellar."),
+      asset: z.string().describe("The token on that network: an ERC-20 address on Base, a `C…` contract on Stellar."),
+      asset_symbol: z.string().describe("`USDC` on Base, `USDT0` on Stellar."),
+      amount: z.string().describe("The `amount` the 402's accepts entry for this network carries, in the token's smallest unit."),
+      how: z.string().describe("One sentence: how a wallet on this network pays."),
+    }),
+  )
+  .describe("Every network this listing can be paid on, Base first when offered. Empty means nothing here can be bought with any wallet.");
+
+/**
+ * The open-release promise (25 Oct 2026, docs/HACKMERIDIAN-STRATEGY.md §6a), the same
+ * shape the listing JSON carries. Null on an ordinary listing. Read from stored columns
+ * after the on-read check, so an agent and the page never disagree about a status.
+ */
+const openReleaseSchema = OpenReleaseBlock.nullable().describe(
+  "Present when the release being sold is an open release: sold early from a private repository, promised to go public in `public_repo_url` on `opens_at` under `licence`. `status` is `pending` until the date, then `opened_on_time` (with `evidence_url`, the public commit) or `overdue`; `ineligible` means a check at cut failed and `checks` says which. Null on an ordinary listing.",
+);
 
 // ---------------------------------------------------------------------------
 // The server
@@ -125,15 +155,15 @@ export function buildMcpServer(req?: Request): McpServer {
     mcpServerInfo(base),
     {
       instructions: [
-        `Paid access to private git repositories over x402/USDC, at ${base}.`,
+        `Paid access to private git repositories over x402, at ${base}. Listings are paid in dollars: USDC on Base, USDT0 on Stellar, or both — each listing's \`payment_options\` says which.`,
         "",
-        "Looking for something rather than a named listing? `search_listings` finds live repos and agent skills by what they do — free, no wallet. Each result carries the `owner` and `slug` every other tool takes.",
-        "Then `how_to_buy`: it is free, needs no wallet, and returns the price, the listing page, the step-by-step skill and the endpoint — everything you or the person you are helping needs. If you cannot sign transactions, that is the tool to answer with: give the person the listing URL to buy on themselves, or the skill URL to hand to an agent that has a wallet. Do not tell them the paywall is broken.",
+        "Looking for something rather than a named listing? `search_listings` finds live repos and agent skills by what they do — free, no wallet. Each result carries the `owner` and `slug` every other tool takes, and its `payment_options` — the networks and tokens it can be paid in — so you can skip what your wallet cannot pay.",
+        "Then `how_to_buy`: it is free, needs no wallet, and returns the price, the `payment_options`, the listing page, the step-by-step skill and the endpoint — everything you or the person you are helping needs. Pass the `network` you pay on: if the listing offers nothing on it, the answer is `cannot_pay: true` with the options that do exist. If you cannot sign transactions, that is the tool to answer with: give the person the listing URL to buy on themselves, or the skill URL to hand to an agent that has a wallet. Do not tell them the paywall is broken.",
         "Read `get_listing` before you buy: the manifest is free, it is the file tree, licence, dependencies and security-scan result of the exact bytes you would receive.",
         "`check_version` tells you the latest version and what it would cost this wallet.",
-        '`purchase` follows the x402 MCP transport: with no payment attached it returns `isError: true` with the `PaymentRequired` body as structured content, mirrored in `_meta["x402/error"]`. Sign `accepts[0]` locally with your own key — this server never sees a private key — and call `purchase` again with the payment as `payment_signature` or `_meta["x402/payment"]`.',
+        '`purchase` follows the x402 MCP transport: with no payment attached it returns `isError: true` with the `PaymentRequired` body as structured content, mirrored in `_meta["x402/error"]`. Sign the `accepts` entry whose `network` is yours — never index 0 by position: a listing that takes both lists Base first, a Stellar-only listing lists Stellar first — locally with your own key (this server never sees a private key) and call `purchase` again with the payment as `payment_signature` or `_meta["x402/payment"]`. On Stellar, `npx x402git-stellar buy <owner>/<slug>` does the whole exchange.',
         "`fetch_release` re-fetches a version you already own, forever, for free.",
-        "Money is micro-USDC: 9000000 is $9.00.",
+        "Money is micro-dollars as a decimal string: 9000000 is $9.00, in USDC on Base or USDT0 on Stellar; both count as $1.",
       ].join("\n"),
     },
   );
@@ -154,7 +184,7 @@ export function buildMcpServer(req?: Request): McpServer {
           .string()
           .regex(/^\d{1,15}$/)
           .optional()
-          .describe("Only listings a new buyer can get for at most this much, in micro-USDC: `5000000` is $5, `0` is free only."),
+          .describe("Only listings a new buyer can get for at most this much, in micro-dollars: `5000000` is $5, `0` is free only."),
         limit: z
           .number()
           .int()
@@ -173,7 +203,7 @@ export function buildMcpServer(req?: Request): McpServer {
             description: z.string().nullable().describe("The creator's own blurb. Self-reported, unverified."),
             trigger_hint: z.string().nullable().describe("The creator's \"use this when…\" line. Self-reported, unverified."),
             latest: z.string().describe("The version a purchase delivers today."),
-            price_micro: z.string().describe("Micro-USDC for a new buyer. `9000000` is $9."),
+            price_micro: z.string().describe("Micro-dollars for a new buyer. `9000000` is $9."),
             price_usd: z.string(),
             update_price_micro: z.string().describe("`0` means updates are included for life once bought (FR-16)."),
             artifact_class: z.string().nullable().describe("Computed: Prompt, Pack, Toolkit, Harness or System."),
@@ -182,6 +212,7 @@ export function buildMcpServer(req?: Request): McpServer {
             matched: z.array(z.string()).describe("The words of your query this listing matched."),
             listing_url: z.string(),
             manifest_url: z.string(),
+            payment_options: paymentOptionsSchema,
           }),
         ),
       },
@@ -203,15 +234,24 @@ export function buildMcpServer(req?: Request): McpServer {
     {
       title: "How to buy this listing — with or without a wallet",
       description:
-        "Free, no wallet needed. Returns whether the listing is for sale, its latest version and new-buyer price, the listing page a person can buy on with a browser wallet, the step-by-step skill an agent with a wallet follows, the raw x402 endpoint, and this server's URL. If you cannot sign transactions, answer the person with `without_a_wallet`; if you can, follow `with_a_wallet` or call `purchase`.",
-      inputSchema: { owner, slug },
+        "Free, no wallet needed. Returns whether the listing is for sale, its latest version and new-buyer price, its `payment_options` (the networks and tokens it can be paid in — USDC on Base, USDT0 on Stellar, or both), the listing page a person can buy on, the step-by-step skill an agent with a wallet follows, the raw x402 endpoint, and this server's URL. Pass `network` (the CAIP-2 id your wallet pays on) and, when the listing offers nothing on it, the answer is `cannot_pay: true` with the options that exist — not a procedure you cannot follow. If you cannot sign transactions, answer the person with `without_a_wallet`; if you can, follow `with_a_wallet` or call `purchase`.",
+      inputSchema: {
+        owner,
+        slug,
+        network: z
+          .string()
+          .optional()
+          .describe(
+            "Optional. The CAIP-2 network(s) your wallet can pay on, comma-separated: `eip155:8453` (Base), `stellar:pubnet` (Stellar). When none of them is offered, the result says `cannot_pay: true` and lists `payment_options`.",
+          ),
+      },
       outputSchema: {
         owner: z.string(),
         slug: z.string(),
         status: z.enum(["draft", "live", "retired"]),
         for_sale: z.boolean().describe("False when retired or when no release has passed the scan; then nothing here can be bought."),
         latest: z.string().nullable(),
-        price_micro: z.string().describe("Micro-USDC for a new buyer. `9000000` is $9. A wallet that already owns a version is quoted less by `check_version`."),
+        price_micro: z.string().describe("Micro-dollars for a new buyer. `9000000` is $9. A wallet that already owns a version is quoted less by `check_version`."),
         price_usd: z.string().describe("The same price as dollars, the way the site prints it: `$9`, `$9.50`, `$0`."),
         update_price_micro: z.string().describe("`0` means updates are included for life once bought (FR-16)."),
         listing_url: z.string().describe("The page. Server-rendered; readable as markdown with `Accept: text/markdown`."),
@@ -219,16 +259,34 @@ export function buildMcpServer(req?: Request): McpServer {
         skill_url: z.string().describe("The full buying procedure, as an Agent Skill. Hand this to an agent that has a wallet."),
         resource_endpoint: z.string().describe("The x402 endpoint. GET it to receive the 402; pay it to receive the download."),
         mcp_url: z.string(),
-        with_a_wallet: z.string().describe("What an agent that can sign EIP-3009 should do."),
+        payment_options: paymentOptionsSchema,
+        open_release: openReleaseSchema,
+        cannot_pay: z
+          .boolean()
+          .optional()
+          .describe("Present and true only when you named a `network` and the listing offers nothing on it. Then `with_a_wallet` says so and `payment_options` is what does exist."),
+        with_a_wallet: z.string().describe("What an agent with a wallet should do, per network the listing takes."),
         without_a_wallet: z.string().describe("What to tell a person when you cannot sign."),
       },
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
-    async ({ owner, slug }) =>
+    async ({ owner, slug, network }) =>
       await run(async () => {
         const status = await versionStatus({ owner, slug }, null);
         const links = buyLinks({ owner, slug, appUrl: base });
-        const chain = chainLabel(paymentChain().network);
+        // The networks this listing takes, from the creator's bound addresses (BUILD §0b
+        // B4): the same function behind the 402's `accepts`, so the two cannot disagree.
+        const bundle = await loadListingByPath(owner.toLowerCase(), slug.toLowerCase());
+        // An open release whose date has passed is checked on read, so the status an
+        // agent is told is the one the page shows (lib/release/promise.ts).
+        if (bundle) await refreshPromiseOnRead(bundle);
+        const options = bundle ? paymentOptionsFor(bundle.creator, bundle.listing) : [];
+        const wanted = (network ?? "")
+          .split(",")
+          .map((n) => n.trim())
+          .filter(Boolean);
+        const payable = wanted.length === 0 ? options : options.filter((o) => wanted.includes(o.network));
+        const cannotPay = wanted.length > 0 && payable.length === 0;
         const price = BigInt(status.price_micro);
         const priceUsd = formatPrice(price);
         const priceLabel = price === 0n ? "free" : priceUsd;
@@ -238,6 +296,8 @@ export function buildMcpServer(req?: Request): McpServer {
         // `no_release`; a referral to either would be the dead end this tool exists to
         // remove, with a price on it. `versionStatus` already 404s a draft.
         const forSale = status.status === "live" && status.latest !== null;
+        const optionLabel = (o: PaymentOption) => `${o.asset_symbol} on ${chainLabel(o.network)}`;
+        const optionsSentence = options.length ? options.map(optionLabel).join(" or ") : "no network this deployment offers";
         const [withWallet, withoutWallet] = !forSale
           ? status.status === "retired"
             ? [
@@ -248,13 +308,28 @@ export function buildMcpServer(req?: Request): McpServer {
                 `Not for sale yet: no release has passed the security scan, so \`/api/r\` answers \`no_release\`. Watch \`check_version\` for a \`latest\` version before trying to pay.`,
                 `Tell the person: ${name} on X402 Git has no release that passed the security scan yet, so it cannot be bought today. The page is ${links.listing_url}.`,
               ]
-          : [
-              `Price: ${priceLabel}. GET ${links.resource_endpoint}, then ${signAndRetry(links, chain)} ` +
-                `${links.skill_url} has the exact headers. The server never sees your key.`,
-              `You cannot pay for this; a wallet has to sign. Tell the person: ${name} is ${priceLabel} on X402 Git. ` +
-                `They can buy it themselves at ${links.listing_url} with a browser wallet holding USDC on ${chain}, or give the prompt on that page to an agent that has a wallet. ` +
-                `Before anyone pays, the free manifest at ${links.manifest_url} shows the file tree, licence, dependencies and security scan.`,
-            ];
+          : cannotPay
+            ? [
+                `You cannot pay for ${name} on ${wanted.join(" or ")}: it takes ${optionsSentence}. Do not sign anything; a payment on a network the listing does not offer cannot settle. ` +
+                  `Tell the person, or hand it to a wallet on one of those networks (${options.map((o) => o.how).join(" ")})`,
+                `Tell the person: ${name} is ${priceLabel} on X402 Git and takes ${optionsSentence}, which is not what your wallet pays on. ` +
+                  `They can buy it at ${links.listing_url} with a wallet on one of those networks. ` +
+                  `Before anyone pays, the free manifest at ${links.manifest_url} shows the file tree, licence, dependencies and security scan.`,
+              ]
+            : [
+                `Price: ${priceLabel}, in ${payable.map(optionLabel).join(" or ")}. GET ${links.resource_endpoint} for the 402, then pay the accepts entry whose network is yours: ` +
+                  payable
+                    .map((o) =>
+                      o.network.startsWith("eip155:")
+                        ? `on ${chainLabel(o.network)}, ${signAndRetry(links, chainLabel(o.network))}`
+                        : `on ${chainLabel(o.network)}, ${o.how}`,
+                    )
+                    .join(" ") +
+                  ` ${links.skill_url} has the exact headers. The server never sees your key.`,
+                `You cannot pay for this; a wallet has to sign. Tell the person: ${name} is ${priceLabel} on X402 Git, paid in ${optionsSentence}. ` +
+                  `They can buy it themselves at ${links.listing_url}${options.some((o) => o.network.startsWith("eip155:")) ? " with a browser wallet" : ""}${options.some((o) => o.network.startsWith("stellar:")) ? `, or from the command line with \`npx x402git-stellar buy ${owner}/${slug}\` and a Stellar wallet` : ""}, or give the prompt on that page to an agent that has a wallet. ` +
+                  `Before anyone pays, the free manifest at ${links.manifest_url} shows the file tree, licence, dependencies and security scan.`,
+              ];
 
         return {
           owner,
@@ -266,6 +341,9 @@ export function buildMcpServer(req?: Request): McpServer {
           price_usd: priceUsd,
           update_price_micro: status.update_price_micro,
           ...links,
+          payment_options: options,
+          open_release: bundle ? openReleaseView(bundle.listing, bundle.latest) : null,
+          ...(cannotPay ? { cannot_pay: true } : {}),
           with_a_wallet: withWallet,
           without_a_wallet: withoutWallet,
         };
@@ -287,6 +365,8 @@ export function buildMcpServer(req?: Request): McpServer {
         published_at: z.string().nullable().optional(),
         status: z.enum(["live", "retired"]).describe("`retired` still reads: holders keep their access (FR-43)."),
         manifest_url: z.string(),
+        payment_options: paymentOptionsSchema,
+        open_release: openReleaseSchema,
         computed: z.unknown().describe("Everything the analyser measured from the artifact."),
         self_reported: z.unknown().describe("The creator's own description and trigger hint."),
       },
@@ -297,6 +377,8 @@ export function buildMcpServer(req?: Request): McpServer {
         const bundle = await loadListingByPath(owner.toLowerCase(), slug.toLowerCase());
         if (!bundle || bundle.status === "draft") throw new ApiError("not_found");
 
+        // Open releases: a promise whose date has passed is checked on this read.
+        await refreshPromiseOnRead(bundle);
         const release = bundle.latest;
         if (!release) throw new ApiError("not_found", { message: "This listing has no passing release yet." });
 
@@ -307,6 +389,8 @@ export function buildMcpServer(req?: Request): McpServer {
           ...manifest,
           status: bundle.status === "retired" ? "retired" : "live",
           manifest_url: bundle.endpoints.label_endpoint,
+          payment_options: paymentOptionsFor(bundle.creator, bundle.listing),
+          open_release: openReleaseView(bundle.listing, release),
         };
       }),
   );
@@ -323,7 +407,7 @@ export function buildMcpServer(req?: Request): McpServer {
         slug: z.string(),
         latest: z.string().nullable(),
         published_at: z.string().nullable(),
-        price_micro: z.string().describe("Micro-USDC. `9000000` is $9.00."),
+        price_micro: z.string().describe("Micro-dollars. `9000000` is $9.00."),
         update_price_micro: z.string().describe("`0` means updates are included for life once bought (FR-16)."),
         status: z.enum(["draft", "live", "retired"]),
         releases_url: z.string(),
@@ -344,7 +428,7 @@ export function buildMcpServer(req?: Request): McpServer {
     {
       title: "Buy the latest release (x402)",
       description:
-        'Wraps `GET /api/r/:owner/:slug` — the same quote → screen → verify → settle → grant sequence, with the purchase recorded as `source: mcp`. Call it once with no payment: you get the x402 `PaymentRequired` body back. It arrives as `isError: true` per the x402 MCP transport, but it is not a failure — it is the price, and `accepts[0]` is the requirement to sign. Sign that EIP-3009 authorization with your own key (this server never sees it) and call again with the payment as the base64 `payment_signature` argument or as `_meta["x402/payment"]`. On success you get the version, the sha256 of the artifact, a signed download URL that expires in five minutes, and the settlement transaction in `_meta["x402/payment-response"]`. Access is granted only after the facilitator returns a transaction hash. A $0 listing returns `granted` on the first call.',
+        'Wraps `GET /api/r/:owner/:slug` — the same quote → screen → verify → settle → grant sequence, with the purchase recorded as `source: mcp`. Call it once with no payment: you get the x402 `PaymentRequired` body back. It arrives as `isError: true` per the x402 MCP transport, but it is not a failure — it is the price. `accepts` has one entry per network the listing takes (USDC on Base, USDT0 on Stellar); sign the one whose `network` is yours — never index 0 by position — with your own key (this server never sees it): an EIP-3009 authorization on Base, a Soroban transfer auth entry on Stellar (`npx x402git-stellar buy <owner>/<slug>` does it). Then call again with the payment as the base64 `payment_signature` argument or as `_meta["x402/payment"]`. On success you get the version, the sha256 of the artifact, a signed download URL that expires in five minutes, and the settlement transaction in `_meta["x402/payment-response"]`. Access is granted only after the facilitator returns a transaction hash. A $0 listing returns `granted` on the first call.',
       inputSchema: {
         owner,
         slug,
@@ -352,7 +436,7 @@ export function buildMcpServer(req?: Request): McpServer {
           .string()
           .optional()
           .describe(
-            'A base64 x402 payment payload signed locally against `accepts[0]` from a previous call. Equivalent to `_meta["x402/payment"]`; this argument wins when both are present. Omit both to get the 402.',
+            'A base64 x402 payment payload signed locally against the `accepts` entry whose `network` is yours, from a previous call. Equivalent to `_meta["x402/payment"]`; this argument wins when both are present. Omit both to get the 402.',
           ),
         wallet_signature: walletSignature
           .optional()
@@ -408,7 +492,7 @@ export function buildMcpServer(req?: Request): McpServer {
           // `_meta["x402/error"]` — the field `withX402Client` detects.
           const body = {
             ...outcome.requirements.body,
-            error: 'Payment required. Sign accepts[0] locally and retry with the payment in _meta["x402/payment"] or the payment_signature argument.',
+            error: 'Payment required. Sign the accepts entry whose network is yours locally and retry with the payment in _meta["x402/payment"] or the payment_signature argument.',
           };
           return {
             content: [{ type: "text", text: JSON.stringify(body, null, 2) }],

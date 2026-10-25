@@ -10,6 +10,7 @@ import { resetEnv } from "@/lib/env";
 import { receiptToken } from "@/lib/receipts";
 import { seedListing, seedPurchase } from "@/lib/test/fixtures";
 import { makeMockDb } from "@/lib/test/mock-db";
+import { clearStellarEnv, setStellarTestnetEnv, STELLAR_BUYER_ADDRESS, STELLAR_CREATOR } from "@/lib/test/stellar";
 import ReceiptPage from "./page";
 
 const BUYER = "0x59c6995e998f97a5a0044966f0945389dc9e86da";
@@ -88,5 +89,47 @@ describe("GET /receipts/:id", () => {
     const html = await render(id, receiptToken(id));
     expect(html).toContain("revoked on 2026-08-20 10:00 UTC");
     expect(html).toContain("refunded");
+  });
+});
+
+describe("a receipt names the network the purchase settled on, not the deployment's chain (BATTLE-TEST finding 24)", () => {
+  afterEach(() => {
+    clearStellarEnv();
+    resetEnv();
+  });
+
+  it("says Stellar and links stellar.expert for a Stellar purchase, in the listing's token", async () => {
+    setStellarTestnetEnv();
+    resetEnv();
+    const listing = seedListing(mock, { stellarPayoutAddress: STELLAR_CREATOR, releases: [{ version: "1.2.0" }] });
+    const id = seedPurchase(mock, {
+      listingId: listing.listingId,
+      releaseId: listing.latest.id,
+      buyer: STELLAR_BUYER_ADDRESS,
+      grossMicro: "9000000",
+      network: "stellar:testnet",
+    });
+
+    const html = await render(id, receiptToken(id));
+    expect(html).toContain("USDC on Stellar testnet");
+    expect(html).toContain('href="https://stellar.expert/explorer/testnet/tx/');
+    expect(html).not.toContain("basescan.org");
+    expect(html).toContain(STELLAR_BUYER_ADDRESS);
+    expect(html).toContain("npx x402git-stellar fetch adrian/humanizer");
+  });
+
+  it("falls back to 'paid on' when the creator no longer offers that network, and keeps Base receipts as they were", async () => {
+    const listing = seedListing(mock, { releases: [{ version: "1.2.0" }] });
+    const stellar = seedPurchase(mock, { listingId: listing.listingId, releaseId: listing.latest.id, buyer: STELLAR_BUYER_ADDRESS, network: "stellar:pubnet" });
+    const base = seedPurchase(mock, { listingId: listing.listingId, releaseId: listing.latest.id, buyer: BUYER });
+
+    const stellarHtml = await render(stellar, receiptToken(stellar));
+    expect(stellarHtml).toContain("paid on Stellar");
+    expect(stellarHtml).toContain('href="https://stellar.expert/explorer/public/tx/');
+
+    const baseHtml = await render(base, receiptToken(base));
+    expect(baseHtml).toContain("USDC on Base Sepolia");
+    expect(baseHtml).toContain('href="https://sepolia.basescan.org/tx/');
+    expect(baseHtml).not.toContain("x402git-stellar");
   });
 });

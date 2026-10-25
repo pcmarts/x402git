@@ -36,6 +36,7 @@ import { notifyIndexNow } from "@/lib/indexnow";
 import { type InstallationOctokit, githubApp, installationOctokit } from "@/lib/github/app";
 import { REPO_ROLE_REQUIRED, userCanSellRepo } from "@/lib/github/installations";
 import { applyLicenceGate } from "@/lib/licence";
+import { openEligibility, openStamp } from "@/lib/release/open";
 import { SCANNER_VERSION, SOCKET_REASONS, type ScanReport, defaultExtraChecks, publicChecks, publicCounts, publishedFindings, scanArtifact } from "@/lib/scan";
 import { githubTarball, snapshot } from "@/lib/snapshot";
 import { deleteArtifact, putReadmeAsset, readmeAssetPathFor } from "@/lib/storage";
@@ -337,6 +338,27 @@ export async function cutRelease(input: CutReleaseInput): Promise<CutReleaseResu
       hasLicenceFile: analysis.has_licence_file || snap.hasLicence,
     });
 
+    // 4b. Open release (25 Oct 2026, HackMeridian). When the listing promises to open,
+    //     the promise is stamped on *this* release now: `commit_sha` is the thing
+    //     promised, and from here on it is fixed. Eligibility is computed, never
+    //     declared — a failed check marks the release `ineligible`, it sells as a
+    //     normal release, and the page says which check failed. Like the licence gate
+    //     above, a signal and not a gate: nothing here can refuse a cut. The listing
+    //     keeps a copy of the checks so the dashboard can show them without a release
+    //     in hand. See lib/release/open.ts.
+    const open = listing.open_release
+      ? openStamp({
+          listing,
+          release,
+          licenceSpdx: licence.spdx,
+          checks: await openEligibility({ listing, creator, licence: { verdict: licence.verdict, spdx: licence.spdx }, commitSha }),
+        })
+      : null;
+    if (open) {
+      const { error: eligibilityError } = await client.from("listing").update({ open_eligibility: open.open_eligibility }).eq("id", listing.id);
+      if (eligibilityError) console.warn("[release] could not record open eligibility on the listing:", eligibilityError.message);
+    }
+
     // 5. Originality — FR-50 V0, blob-SHA overlap against previously-seen snapshots.
     const blobShas = significantBlobs(analysis.tree.map((b) => ({ sha: b.sha, size: b.size })));
     const overlap = await originality(blobShas, listing.id);
@@ -397,6 +419,8 @@ export async function cutRelease(input: CutReleaseInput): Promise<CutReleaseResu
         diff_summary: analysis.diff_summary,
         analyzer_version: analyzerVersion(),
         blob_shas: blobShas,
+        // 4b: the open-release promise, or nothing on an ordinary listing.
+        ...(open ?? {}),
       })
       .eq("id", release.id)
       .select("*")
@@ -421,6 +445,7 @@ export async function cutRelease(input: CutReleaseInput): Promise<CutReleaseResu
       licence: licence.verdict,
       artifact_class: computed.artifact_class,
       derivative_of: overlap.derivative_of ?? null,
+      ...(open ? { open_release: open.promise_status, opens_at: open.opens_at } : {}),
     });
 
     // §4.1 and §6.2's failure table: what an operator has to see even though the release

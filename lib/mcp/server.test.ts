@@ -16,9 +16,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { issueChallenge } from "@/lib/auth/challenge";
 import { type Db, resetDb, setDb } from "@/lib/db";
 import { resetEnv } from "@/lib/env";
+import { setPublicGithub } from "@/lib/github/public";
+import { resetPromiseCache } from "@/lib/release/promise";
 import { resetScreeningCache } from "@/lib/screening";
+import { stubPublicGithub } from "@/lib/test/public-github";
 import { seedListing, seedPurchase } from "@/lib/test/fixtures";
 import { makeMockDb } from "@/lib/test/mock-db";
+import { clearStellarEnv, setStellarTestnetEnv, STELLAR_CREATOR } from "@/lib/test/stellar";
 import { nonceHex, paymentPayload, signatureHeader, stubFacilitator } from "@/lib/test/x402";
 import { resetFacilitator, setFacilitator } from "@/lib/x402/server";
 import { buildMcpServer, TOOL_NAMES } from "./server";
@@ -696,5 +700,162 @@ describe("fetch_release — wraps the version endpoint", () => {
 
     expect(result.isError).toBe(true);
     expect(errorBody(result).code).toBe("not_entitled");
+  });
+});
+
+describe("payment_options — which networks a listing takes, on every free tool (JOURNEYS B4a, 25 Oct 2026)", () => {
+  afterEach(() => {
+    clearStellarEnv();
+    resetEnv();
+  });
+
+  it("puts the Base option on search results, the manifest and how_to_buy for an EVM creator", async () => {
+    seedListing(mock, { releases: [{ version: "1.2.0" }] });
+    withManifest("1.2.0");
+    const client = await connect();
+
+    // The manifest first, while the full manifest is in place.
+    const listing = await call(client, "get_listing", { owner: "adrian", slug: "humanizer" });
+    expect(listing.isError).toBe(false);
+    const options = listing.structuredContent!.payment_options;
+    expect(options).toEqual([expect.objectContaining({ network: "eip155:84532", asset_symbol: "USDC", amount: "9000000" })]);
+    expect(options[0].how).not.toContain("accepts[0]");
+
+    // Then the search, over the slimmer computed block the search reads.
+    withSearchManifest("humanizer", { artifact_class: "Toolkit", component_inventory: [{ kind: "skills", count: 1 }], languages: {}, readme_html: "<p>Takes the machine sound out of a draft.</p>" });
+    const search = await call(client, "search_listings", { query: "humanizer" });
+    const row = search.structuredContent!.results[0];
+    expect(row.payment_options).toEqual(options);
+
+    const how = await call(client, "how_to_buy", { owner: "adrian", slug: "humanizer" });
+    expect(how.structuredContent!.payment_options).toEqual(options);
+    expect(how.structuredContent!.cannot_pay).toBeUndefined();
+    expect(how.structuredContent!.with_a_wallet).not.toContain("accepts[0]");
+    expect(how.structuredContent!.with_a_wallet).toContain("entry whose `network` is yours");
+  });
+
+  it("answers cannot_pay with the options that exist when the caller's network is not offered", async () => {
+    seedListing(mock, { releases: [{ version: "1.2.0" }] });
+    const client = await connect();
+
+    const result = await call(client, "how_to_buy", { owner: "adrian", slug: "humanizer", network: "stellar:pubnet" });
+    expect(result.isError).toBe(false);
+    const body = result.structuredContent!;
+    expect(body.cannot_pay).toBe(true);
+    expect(body.for_sale).toBe(true);
+    expect(body.payment_options).toEqual([expect.objectContaining({ network: "eip155:84532" })]);
+    expect(body.with_a_wallet).toContain("You cannot pay");
+    expect(body.with_a_wallet).toContain("USDC on Base Sepolia");
+    expect(body.with_a_wallet).toContain("Do not sign anything");
+    expect(body.without_a_wallet).toContain("USDC on Base Sepolia");
+
+    // Naming a network the listing does take keeps the ordinary shape.
+    const ok = await call(client, "how_to_buy", { owner: "adrian", slug: "humanizer", network: "eip155:84532,stellar:pubnet" });
+    expect(ok.structuredContent!.cannot_pay).toBeUndefined();
+    expect(ok.structuredContent!.with_a_wallet).toContain("PAYMENT-SIGNATURE");
+  });
+
+  it("offers Stellar alone, with the CLI line, for a creator whose only address is a Stellar account", async () => {
+    setStellarTestnetEnv();
+    resetEnv();
+    seedListing(mock, { payoutAddress: STELLAR_CREATOR, releases: [{ version: "1.2.0" }] });
+    withSearchManifest("humanizer", { artifact_class: "Toolkit", component_inventory: [{ kind: "skills", count: 1 }], languages: {}, readme_html: "<p>Takes the machine sound out of a draft.</p>" });
+    const client = await connect();
+
+    const how = await call(client, "how_to_buy", { owner: "adrian", slug: "humanizer" });
+    const body = how.structuredContent!;
+    expect(body.payment_options).toEqual([expect.objectContaining({ network: "stellar:testnet", asset_symbol: "USDC", amount: "90000000" })]);
+    expect(body.with_a_wallet).toContain("npx x402git-stellar buy adrian/humanizer");
+    expect(body.with_a_wallet).not.toContain("EIP-3009");
+    expect(body.without_a_wallet).toContain("USDC on Stellar testnet");
+    expect(body.without_a_wallet).toContain("npx x402git-stellar buy adrian/humanizer");
+
+    const refused = await call(client, "how_to_buy", { owner: "adrian", slug: "humanizer", network: "eip155:8453" });
+    expect(refused.structuredContent!.cannot_pay).toBe(true);
+    expect(refused.structuredContent!.with_a_wallet).toContain("USDC on Stellar testnet");
+
+    const search = await call(client, "search_listings", {});
+    expect(search.structuredContent!.results[0].payment_options.map((o: { network: string }) => o.network)).toEqual(["stellar:testnet"]);
+  });
+
+  it("says nothing of accepts[0] or micro-USDC anywhere an agent reads", async () => {
+    const client = await connect();
+    const { tools } = await client.listTools();
+    const text = JSON.stringify(tools);
+    expect(text).not.toContain("accepts[0]");
+    expect(text).not.toMatch(/micro-USDC/i);
+    expect(text).not.toContain("holding USDC on");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Open releases (25 Oct 2026, HackMeridian): the promise an agent reads
+// ---------------------------------------------------------------------------
+
+describe("open_release in get_listing and how_to_buy (STRATEGY Proof 4: an agent can see it too)", () => {
+  const PUBLIC = "https://github.com/adrian/humanizer-public";
+  const COMMIT = "0".repeat(40); // what the shared fixture stamps on every release
+
+  function seedOpen(release: Record<string, unknown>) {
+    const seeded = seedListing(mock, { releases: [{ version: "1.2.0" }] });
+    withManifest("1.2.0");
+    Object.assign(mock.rows("listing").find((l) => l.id === seeded.listingId)!, { open_release: true, public_repo_url: PUBLIC, next_opens_at: "2026-12-01T00:00:00.000Z" });
+    Object.assign(mock.rows("release").find((r) => r.id === seeded.latest.id)!, {
+      opens_at: "2026-12-01T00:00:00.000Z",
+      open_licence_spdx: "MIT",
+      promise_status: "pending",
+      open_eligibility: [{ id: "licence", ok: true, detail: "MIT permits resale." }],
+      ...release,
+    });
+    return seeded;
+  }
+
+  afterEach(() => {
+    setPublicGithub(null);
+    resetPromiseCache();
+  });
+
+  it("is null on an ordinary listing", async () => {
+    seedListing(mock, { releases: [{ version: "1.2.0" }] });
+    withManifest("1.2.0");
+    const client = await connect();
+    expect((await call(client, "get_listing", { owner: "adrian", slug: "humanizer" })).structuredContent?.open_release).toBeNull();
+    expect((await call(client, "how_to_buy", { owner: "adrian", slug: "humanizer" })).structuredContent?.open_release).toBeNull();
+  });
+
+  it("carries the same block in both tools, read off the stored columns", async () => {
+    seedOpen({});
+    const client = await connect();
+
+    const listing = await call(client, "get_listing", { owner: "adrian", slug: "humanizer" });
+    const buy = await call(client, "how_to_buy", { owner: "adrian", slug: "humanizer" });
+
+    const expected = {
+      opens_at: "2026-12-01T00:00:00.000Z",
+      public_repo_url: PUBLIC,
+      licence: "MIT",
+      status: "pending",
+      opened_at: null,
+      checked_at: null,
+      evidence_url: null,
+      checks: [{ id: "licence", ok: true, detail: "MIT permits resale." }],
+    };
+    expect(listing.isError).toBe(false);
+    expect(listing.structuredContent?.open_release).toEqual(expected);
+    expect(buy.structuredContent?.open_release).toEqual(expected);
+  });
+
+  it("checks a promise whose date has passed on read, so the agent sees Opened on time", async () => {
+    const seeded = seedOpen({ opens_at: "2026-10-01T00:00:00.000Z" });
+    setPublicGithub(stubPublicGithub({ commits: { "adrian/humanizer-public": [COMMIT] }, licences: { "adrian/humanizer-public": "MIT" }, tags: { "adrian/humanizer-public": { [COMMIT]: "v1.2.0" } } }));
+    const client = await connect();
+
+    const result = await call(client, "get_listing", { owner: "adrian", slug: "humanizer" });
+
+    expect(result.structuredContent?.open_release).toMatchObject({
+      status: "opened_on_time",
+      evidence_url: `https://github.com/adrian/humanizer-public/commit/${COMMIT}`,
+    });
+    expect(mock.rows("release").find((r) => r.id === seeded.latest.id)!.promise_status).toBe("opened_on_time");
   });
 });

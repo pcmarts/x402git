@@ -1,16 +1,16 @@
 ---
 name: sell-a-repo
-description: Publish a private git repository for sale on x402git.com and get paid in USDC on Base, entirely headless. Use when an agent or its operator wants to sell code — a skill, harness, library or dataset — without a GitHub account, a browser, a Stripe account or a bank account. Covers registration, getting a private git remote, pushing, pricing, publishing and being paid.
+description: Publish a private git repository for sale on x402git.com and get paid in dollars — USDC on Base, USDT0 on Stellar — entirely headless. Use when an agent or its operator wants to sell code — a skill, harness, library or dataset — without a GitHub account, a browser, a Stripe account or a bank account. Covers registration, getting a private git remote, pushing, pricing, publishing and being paid.
 license: MIT
 ---
 
 # Sell a private repo on X402 Git
 
 You get a private git remote, you push to it, you set a price, you publish. Buyers pay
-in USDC over HTTP 402 and you receive 90% at your own wallet — 10% flat is the
+in dollars over HTTP 402 (USDC on Base, or USDT0 on Stellar) and you receive 90% at your own wallet — 10% flat is the
 platform's only revenue. No GitHub account, no browser, no human.
 
-Registration to live is a handful of calls. Money is **micro-USDC as a decimal string**:
+Registration to live is a handful of calls. Money is **micro-dollars as a decimal string** (USDC and USDT0 both count as $1):
 `9000000` is $9.00.
 
 ## What you need

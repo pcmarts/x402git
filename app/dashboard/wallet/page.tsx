@@ -15,17 +15,28 @@
  * With JavaScript on and a browser wallet, it is one button (`BindWallet`): connect,
  * fetch the challenge, sign, POST — the same three fields as the manual path, which
  * stays underneath for anyone binding a hardware or remote wallet by hand.
+ *
+ * Two kinds of wallet since 25 Oct 2026 (HACKMERIDIAN-JOURNEYS rule 1): one EVM address
+ * for being paid on Base, one Stellar account for being paid on Stellar, and a creator
+ * needs one, not both. A Stellar account is bound from Freighter (`StellarWallet`) with
+ * the same challenge, signed as SEP-53. The one Stellar-only step is the trustline (C2
+ * step 3): until the account has allowed the asset in Freighter, Horizon says so and this
+ * page prints the exact steps, with the issuer to copy, and a Refresh.
  */
 
 import type { Metadata } from "next";
-import { BindWallet } from "@/app/_components/bind-wallet";
+import { BindWallet, StellarWallet } from "@/app/_components/bind-wallet";
+import { CopyButton } from "@/app/_components/copy-button";
 import { Notice } from "@/app/_components/notice";
+import { currentStellarPayoutAddress, inspectStellarPayoutAccount, stellarBindReason } from "@/lib/auth/stellar-binding";
 import { REBIND_DELAY_HOURS } from "@/lib/auth/step-up";
-import { paymentChain } from "@/lib/env";
+import { type StellarRail, paymentChain, stellarRail } from "@/lib/env";
+import { ApiError } from "@/lib/errors";
 import { currentCreator, currentSession, signInPath } from "@/lib/web/current";
 import { challengeByNonce } from "@/lib/web/loaders";
 import { formatDateTime } from "@/lib/web/manifest-view";
 import { chainInfo, explorerAddressUrl } from "@/lib/web/wallet-checkout";
+import { addressFamily } from "@/lib/x402/stellar";
 import { redirect } from "next/navigation";
 
 export const metadata: Metadata = { title: "Wallet" };
@@ -34,9 +45,9 @@ export const dynamic = "force-dynamic";
 export default async function WalletPage({
   searchParams,
 }: {
-  searchParams: Promise<{ address?: string; nonce?: string; new?: string; ok?: string; error?: string }>;
+  searchParams: Promise<{ address?: string; nonce?: string; new?: string; ok?: string; error?: string; trustline?: string; refresh?: string }>;
 }) {
-  const { address, nonce, ok, error } = await searchParams;
+  const { address, nonce, ok, error, trustline, refresh } = await searchParams;
   const queued = (await searchParams).new;
 
   const session = await currentSession();
@@ -46,31 +57,50 @@ export default async function WalletPage({
   const challenge = nonce ? await challengeByNonce(nonce) : null;
   const bound = current?.creator.payout_address ?? null;
   const pending = current?.creator.pending_payout_address ?? null;
+  const boundFamily = bound ? addressFamily(bound) : null;
+
+  // `stellarRail()` throws on a misconfigured deployment; this page is not the place to
+  // surface that, so a broken rail reads as "not offered here" and the Base half still works.
+  let rail: StellarRail | null = null;
+  try {
+    rail = stellarRail();
+  } catch {
+    rail = null;
+  }
+  const stellarBound = current ? currentStellarPayoutAddress(current.creator) : null;
+  const stellarPending = current?.creator.pending_stellar_payout_address ?? null;
+
+  // The Refresh on the trustline steps (C2 step 3): read Horizon again for that account.
+  const trustlineCheck = rail && trustline && refresh === "1" ? await checkTrustline(trustline) : null;
 
   const chain = paymentChain();
   const chainName = chainInfo(chain.chainId).name;
-  const addressLink = (address: string) => {
-    const url = explorerAddressUrl(chain.chainId, address);
+  const addressLink = (value: string) => {
+    const family = addressFamily(value);
+    const url = family === "stellar" && rail ? stellarExplorerUrl(rail.network, value) : family === "evm" ? explorerAddressUrl(chain.chainId, value) : null;
     return url ? (
       <a href={url} rel="noopener noreferrer" target="_blank" className="computed">
-        {address}
+        {value}
       </a>
     ) : (
-      <span className="computed">{address}</span>
+      <span className="computed">{value}</span>
     );
   };
+  const paidOn = (value: string) => (addressFamily(value) === "stellar" ? "Stellar" : chainName);
 
   return (
     <main>
       <h1>Wallet</h1>
       <Notice ok={ok} error={error} />
 
+      {rail && trustline ? <TrustlineSteps address={trustline} asset={rail.asset} check={trustlineCheck} /> : null}
+
       {bound ? (
         <>
           <dl>
             <dt>Payout address</dt>
             <dd className="wrap">
-              {addressLink(bound)} <span className="muted">on {chainName}</span>
+              {addressLink(bound)} <span className="muted">on {paidOn(bound)}</span>
             </dd>
             <dt>Mode</dt>
             <dd>
@@ -132,15 +162,17 @@ export default async function WalletPage({
                 name="signature"
                 rows={3}
                 required
-                placeholder="0x…"
+                placeholder={addressFamily(address) === "stellar" ? "base64…" : "0x…"}
                 spellCheck={false}
                 aria-describedby="signature-help"
               />
               <small id="signature-help">
-                An EIP-191 <code>personal_sign</code> signature over the message above, from that address.
+                {addressFamily(address) === "stellar"
+                  ? "A SEP-53 signature over the message above from that Stellar account, base64-encoded (Freighter's signMessage, or the x402git-stellar CLI)."
+                  : "An EIP-191 personal_sign signature over the message above, from that address."}
               </small>
             </div>
-            <BindWallet mode="sign" address={address} message={challenge.message} signatureFieldId="signature" />
+            {addressFamily(address) === "evm" ? <BindWallet mode="sign" address={address} message={challenge.message} signatureFieldId="signature" /> : null}
             <p className="actions">
               <button type="submit">{bound ? `Queue the change (${REBIND_DELAY_HOURS}h delay)` : "Bind this address"}</button>
               <a href="/dashboard/wallet">Start over</a>
@@ -167,7 +199,18 @@ export default async function WalletPage({
               <p className="written measure">
                 Connect the wallet you want to be paid at and sign one message. That is the whole thing.
               </p>
+              <h3>EVM wallet, paid on {chainName}</h3>
               <BindWallet mode="bind" action="/dashboard/wallet/bind" />
+              {rail ? (
+                <>
+                  <h3>Stellar wallet (Freighter), paid on Stellar</h3>
+                  <p className="written measure">
+                    Paid in {rail.asset.code}. Your wallet has to allow {rail.asset.code} first; if it does not yet, the next step tells you exactly what to add in
+                    Freighter.
+                  </p>
+                  <StellarWallet mode="bind" action="/dashboard/wallet/bind" networkPassphrase={rail.passphrase} />
+                </>
+              ) : null}
               <details>
                 <summary>
                   <span className="label">No browser wallet? Bind by hand</span>
@@ -179,14 +222,139 @@ export default async function WalletPage({
         </section>
       )}
 
+      {bound && rail && boundFamily ? (
+        <section>
+          <h2>Stellar wallet (Freighter)</h2>
+          {stellarBound ? (
+            <dl>
+              <dt>Paid on Stellar at</dt>
+              <dd className="wrap">
+                {addressLink(stellarBound)} <span className="muted">in {rail.asset.code}</span>
+              </dd>
+              {current?.creator.stellar_payout_verified_at ? (
+                <>
+                  <dt>Allowed in the wallet</dt>
+                  <dd>
+                    {rail.asset.code} confirmed {formatDateTime(current.creator.stellar_payout_verified_at)}
+                  </dd>
+                </>
+              ) : null}
+              {stellarPending ? (
+                <>
+                  <dt>Pending</dt>
+                  <dd className="wrap" data-status="warn">
+                    {addressLink(stellarPending)} — effective {formatDateTime(current?.creator.stellar_rebind_effective_at)}
+                  </dd>
+                </>
+              ) : null}
+            </dl>
+          ) : (
+            <p className="written measure">
+              Agents paying on Stellar can&apos;t buy your listings yet. Add a Stellar wallet to accept {rail.asset.code}.
+            </p>
+          )}
+          <details>
+            <summary>
+              <span className="label">{stellarBound ? "Change the Stellar wallet" : "Add a Stellar wallet"}</span>
+              {stellarBound ? <span className="computed">{REBIND_DELAY_HOURS}h delay</span> : <span className="computed">live at once</span>}
+            </summary>
+            <p className="written measure">
+              {stellarBound
+                ? `A change takes ${REBIND_DELAY_HOURS} hours to land, and Stellar payouts keep going to the current wallet until then.`
+                : "Adding a second wallet is live at once: both wallets sign, and nothing already bound moves."}{" "}
+              Freighter signs for the new wallet, then the wallet you are paid at now signs off, then you type the last six characters.
+              The new wallet must already allow {rail.asset.code}; if it does not, you will be told exactly what to add in Freighter.
+            </p>
+            <StellarWallet
+              mode="add"
+              action="/dashboard/wallet/stellar"
+              networkPassphrase={rail.passphrase}
+              identity={bound}
+              identityFamily={boundFamily}
+              change={stellarBound !== null}
+            />
+          </details>
+        </section>
+      ) : null}
     </main>
   );
+}
+
+/**
+ * JOURNEYS C2 step 3, BATTLE-TEST finding 18: the trustline is a manual step in Freighter,
+ * and the page says exactly what to paste, from configuration, so testnet shows the
+ * testnet asset. Server-rendered — the words and the issuer are in the HTML — and the
+ * Refresh is a GET form, so it works with scripting off; `CopyButton` only adds the
+ * shortcut after mount.
+ */
+function TrustlineSteps({
+  address,
+  asset,
+  check,
+}: {
+  address: string;
+  asset: { code: string; issuer: string };
+  check: { ok: true } | { ok: false; reason: string | null; message: string } | null;
+}) {
+  if (check?.ok) {
+    return (
+      <section>
+        <p role="status" data-status="pass" className="written measure">
+          <span className="computed">{address}</span> now allows {asset.code}. Connect Freighter and sign below to finish binding it.
+        </p>
+      </section>
+    );
+  }
+  return (
+    <section aria-labelledby="trustline-heading">
+      <h2 id="trustline-heading">Allow {asset.code} in your wallet</h2>
+      <p role="alert" data-status="warn" className="written measure">
+        Your wallet needs to allow {asset.code} before we can pay you. In Freighter: <strong>Manage assets → Add manually</strong>, then paste: Asset code{" "}
+        <strong>{asset.code}</strong>, Issuer <code className="wrap">{asset.issuer}</code>. Then come back and press Refresh.
+      </p>
+      <div className="copyline">
+        <code>
+          <span className="url">{asset.issuer}</span>
+        </code>
+        <CopyButton value={asset.issuer} what="The issuer" />
+      </div>
+      {check && !check.ok && check.reason !== "no_trustline" ? (
+        <p role="alert" data-status="fail" className="written measure">
+          {check.message}
+        </p>
+      ) : null}
+      <form method="get" action="/dashboard/wallet">
+        <input type="hidden" name="trustline" value={address} />
+        <input type="hidden" name="refresh" value="1" />
+        <p className="actions">
+          <button type="submit">Refresh</button>
+          <span className="muted wrap">
+            Checking <span className="computed">{address}</span>
+          </span>
+        </p>
+      </form>
+    </section>
+  );
+}
+
+async function checkTrustline(address: string): Promise<{ ok: true } | { ok: false; reason: string | null; message: string }> {
+  try {
+    await inspectStellarPayoutAccount(address);
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, reason: stellarBindReason(e), message: e instanceof ApiError ? e.message : "Horizon could not be reached. Try Refresh again in a moment." };
+  }
+}
+
+function stellarExplorerUrl(network: string, address: string): string {
+  return `https://stellar.expert/explorer/${network === "stellar:pubnet" ? "public" : "testnet"}/account/${encodeURIComponent(address)}`;
 }
 
 /**
  * The by-hand path: type an address, get a challenge, sign it elsewhere. For a hardware
  * wallet, an air-gapped signer, or a browser with no extension. Real, and works with
  * scripting off — and closed by default on first bind because almost nobody needs it.
+ * Either family: an EVM `0x…` or a Stellar `G…`.
  */
 function AddressForm({ bound }: { bound: string | null }) {
   return (
@@ -197,15 +365,15 @@ function AddressForm({ bound }: { bound: string | null }) {
           id="address"
           name={bound ? "new_address" : "address"}
           required
-          pattern="0x[0-9a-fA-F]{40}"
-          placeholder="0x0000000000000000000000000000000000000000"
+          pattern="(0x[0-9a-fA-F]{40}|G[A-Z2-7]{55})"
+          placeholder="0x… or G…"
           spellCheck={false}
           autoComplete="off"
         />
         <small>
           {bound
             ? "Where payouts should go from now on. The next step asks the address bound now to sign off on the change."
-            : "An EVM address on Base that you can sign from. The next step gives you a challenge to sign, which is how we know it is yours."}
+            : "An EVM address paid on Base, or a Stellar account (G…) paid on Stellar, that you can sign from. The next step gives you a challenge to sign, which is how we know it is yours."}
         </small>
       </div>
       <p className="actions">

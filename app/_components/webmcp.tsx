@@ -48,13 +48,13 @@ var empty={type:"object",properties:{},required:[]};
 var tools=[
 {name:"get_listing_manifest",description:"The full public manifest of the repository on this page ("+ref+"): file tree, sizes, licence, dependencies, security-scan result and the sha256 of the exact artifact a buyer receives. Free, and the thing to read before deciding to buy.",inputSchema:empty,
 execute:function(){return get("/api/label/"+ref)}},
-{name:"get_listing_price",description:"The latest version of "+ref+", when it was published, its price in micro-USDC (9000000 is $9.00) and its update price (0 means updates are included for life).",inputSchema:empty,
+{name:"get_listing_price",description:"The latest version of "+ref+", when it was published, its price in micro-dollars (9000000 is $9.00) and its update price (0 means updates are included for life).",inputSchema:empty,
 execute:function(){return get("/api/v/"+ref)}},
 {name:"get_listing_releases",description:"The public release log for "+ref+": every version, when it shipped and what changed.",inputSchema:empty,
 execute:function(){return get("/api/v/"+ref+"/releases")}},
-{name:"how_to_buy_listing",description:"How to actually buy "+ref+" with USDC over x402. Returns the paid endpoint and the step-by-step skill. Payment is signed with the caller's own key, never in this page.",inputSchema:empty,
+{name:"how_to_buy_listing",description:"How to actually buy "+ref+" over x402, in USDC on Base or USDT0 on Stellar — whichever the listing offers. Returns the paid endpoint and the step-by-step skill. Payment is signed with the caller's own key, never in this page.",inputSchema:empty,
 execute:function(){return Promise.resolve(text({resource_endpoint:base+"/api/r/"+ref,version_endpoint:base+"/api/v/"+ref,skill:base+"/.well-known/agent-skills/buy-a-repo/SKILL.md",mcp_endpoint:base+"/api/mcp",
-steps:["GET the resource endpoint. It answers 402 with the x402 payment requirements and a quote to echo.","Sign those requirements with your own wallet. This site never sees a private key.","Repeat the GET with the signed payment attached. Access is granted once it settles on chain.","The skill above has the exact headers, and the 200 carries a five-minute download URL plus the sha256 to verify it against."]}))}}];
+steps:["GET the resource endpoint. It answers 402 with the x402 payment requirements and a quote to echo. Its accepts[] has one entry per network the listing takes (USDC on Base, USDT0 on Stellar).","Sign the accepts entry whose network your wallet pays on — never accepts[0] by position — with your own wallet. On Stellar, 'npx x402git-stellar buy "+ref+"' does the whole exchange. This site never sees a private key.","Repeat the GET with the signed payment attached. Access is granted once it settles on chain.","The skill above has the exact headers, and the 200 carries a five-minute download URL plus the sha256 to verify it against."]}))}}];
 try{
 if(typeof mc.registerTool==="function"){for(var i=0;i<tools.length;i++)mc.registerTool(tools[i]);}
 else if(typeof mc.provideContext==="function"){mc.provideContext({tools:tools});}

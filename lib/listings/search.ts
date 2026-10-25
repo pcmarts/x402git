@@ -18,6 +18,7 @@
  * fields and weights, and the tool's contract does not change.
  */
 
+import { type PaymentOption, paymentOptionsFor } from "@/lib/core/access";
 import { db } from "@/lib/db";
 import type { ReleaseRow } from "@/lib/db/types";
 import { appUrl } from "@/lib/env";
@@ -51,6 +52,8 @@ export type SearchHit = {
   matched: string[];
   listing_url: string;
   manifest_url: string;
+  /** The networks and tokens this listing can be paid in (JOURNEYS B4a), so an agent can filter to what it can pay. */
+  payment_options: PaymentOption[];
 };
 
 export type SearchResult = { query: string; total: number; results: SearchHit[] };
@@ -152,6 +155,7 @@ export async function searchListings(input: SearchInput = {}): Promise<SearchRes
         matched,
         listing_url: `${base}/${l.handle}/${l.slug}`,
         manifest_url: `${base}/api/label/${l.handle}/${l.slug}`,
+        payment_options: paymentOptionsFor({ handle: l.handle, ...l.payee }, { slug: l.slug, price_micro: l.priceMicro.toString() }),
       },
     });
   }

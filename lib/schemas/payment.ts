@@ -27,27 +27,57 @@ export const PaymentScheme = z.literal("exact").meta({
  * serves both audiences and neither has to guess. See DECISIONS.md, "the 402 body
  * carries both spellings".
  */
-export const PaymentRequirements = z
+const acceptCommon = {
+  scheme: PaymentScheme,
+  /** x402 v2: the atomic amount the payer authorizes, in the asset's smallest unit. */
+  amount: z.string().regex(/^\d+$/, "must be a non-negative integer written as a decimal string"),
+  /** PRD §13 / x402 v1 alias of `amount`. Identical value. */
+  maxAmountRequired: z.string().regex(/^\d+$/, "must be a non-negative integer written as a decimal string"),
+  resource: z.string(),
+  description: z.string(),
+  maxTimeoutSeconds: z.number().int().positive(),
+  mimeType: z.string().optional(),
+};
+
+/** The Base entry: micro-USDC, an EVM asset and payee, and the EIP-712 domain the payer signs for. */
+export const PaymentRequirementsEvm = z
   .object({
-    scheme: PaymentScheme,
+    ...acceptCommon,
     /** CAIP-2, e.g. `eip155:84532`. x402 v2 requires the `<namespace>:<reference>` form. */
-    network: z.string(),
+    network: z.string().regex(/^eip155:\d+$/),
     /** The USDC contract address on `network`. */
     asset: Address,
     /** The platform receiving address (D13). The split is a ledger insert. */
     payTo: Address,
-    /** x402 v2: the atomic amount the payer authorizes. */
+    /** Micro-USDC (6 decimals). */
     amount: MicroUsdc,
-    /** PRD §13 / x402 v1 alias of `amount`. Identical value. */
     maxAmountRequired: MicroUsdc,
-    resource: z.string(),
-    description: z.string(),
-    maxTimeoutSeconds: z.number().int().positive(),
-    mimeType: z.string().optional(),
     /** EIP-712 domain fields for the asset, per x402 v2. */
     extra: z.object({ name: z.string(), version: z.string() }),
   })
-  .meta({ id: "PaymentRequirements", description: "One entry of the x402 v2 `accepts[]` array." });
+  .meta({ id: "PaymentRequirementsEvm", description: "The Base entry of `accepts[]`: an EIP-3009 authorization in micro-USDC." });
+
+/**
+ * The Stellar entry (25 Oct 2026, docs/HACKMERIDIAN-BUILD.md §3.4). `amount` is in
+ * stroops — 7 decimals, so micro × 10 — and `asset` is the token's Soroban contract.
+ * `extra` is exactly `{ areFeesSponsored: true }`: the payer's client compares it with
+ * what it echoes, and the facilitator pays the network fee.
+ */
+export const PaymentRequirementsStellar = z
+  .object({
+    ...acceptCommon,
+    network: z.enum(["stellar:testnet", "stellar:pubnet"]),
+    /** The asset's Stellar Asset Contract (`C…`). */
+    asset: z.string().regex(/^C[A-Z2-7]{55}$/, "must be a Stellar contract address"),
+    /** The platform's Stellar account (`G…`). */
+    payTo: z.string().regex(/^G[A-Z2-7]{55}$/, "must be a Stellar account"),
+    extra: z.object({ areFeesSponsored: z.literal(true) }),
+  })
+  .meta({ id: "PaymentRequirementsStellar", description: "The Stellar entry of `accepts[]`: a signed Soroban `transfer`, amount in stroops, fees sponsored." });
+
+export const PaymentRequirements = z
+  .union([PaymentRequirementsEvm, PaymentRequirementsStellar])
+  .meta({ id: "PaymentRequirements", description: "One entry of the x402 v2 `accepts[]` array: the Base entry (first when present) or the Stellar entry." });
 
 /** x402 v2's `resource` envelope: what is being sold, in one object. */
 export const ResourceInfo = z

@@ -1,0 +1,11 @@
+-- `in_transit`: the transfer has left the source account and has not yet arrived
+-- (2026-10-25, HackMeridian; docs/HACKMERIDIAN-USDT0.md W5). A same-chain payout goes
+-- `pending → broadcast → confirmed` in one transaction and never uses it. A bridged
+-- payout (a USDT0 OFT `send` from Stellar to an EVM chain) is accepted on Stellar long
+-- before it is delivered, and the gap is the whole point of the status: the money is
+-- gone from our account, it is not yet the creator's, and it must never be sent twice.
+--
+-- Its own file because `alter type … add value` commits with the transaction, and the
+-- in-flight index in 20261025090100 names the value in its predicate; Postgres refuses
+-- to use a new enum value inside the transaction that added it.
+alter type payout_status add value if not exists 'in_transit';

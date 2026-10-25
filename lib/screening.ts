@@ -30,6 +30,14 @@ export const OFAC_ETH_LIST_URL =
   "https://raw.githubusercontent.com/0xB10C/ofac-sanctioned-digital-currency-addresses/lists/sanctioned_addresses_ETH.json";
 
 export const PROVIDER = "ofac-sdn-eth";
+/**
+ * The Stellar rail has no list (BUILD H12): checked 23 Oct 2026, the 0xB10C repository
+ * publishes no XLM set and its USDC set holds only `0x` addresses. A Stellar address is
+ * therefore recorded as *unscreened*, with `degraded: true` and `raw.skipped: "no_list"`,
+ * so an audit over `hit = false` rows cannot read it as a pass (BATTLE-TEST finding 16).
+ */
+export const STELLAR_PROVIDER = "none:stellar";
+const STELLAR_ADDRESS = /^[GC][A-Z2-7]{55}$/i;
 const CACHE_TTL_MS = 24 * 3600 * 1000;
 
 type Cache = { addresses: Set<string>; fetchedAt: number; error?: string };
@@ -61,6 +69,8 @@ export async function sanctionedAddresses(now = Date.now()): Promise<Cache> {
  * audit trail is the requirement, not the boolean.
  */
 export async function screen(address: string, context: ScreeningContext): Promise<ScreeningResult> {
+  if (STELLAR_ADDRESS.test(address)) return await recordUnscreenedStellar(address.toUpperCase(), context);
+
   const lower = address.toLowerCase();
   const list = await sanctionedAddresses();
   const degraded = list.error !== undefined;
@@ -79,4 +89,21 @@ export async function screen(address: string, context: ScreeningContext): Promis
   }
 
   return { hit, provider: PROVIDER, degraded, listSize: list.addresses.size };
+}
+
+/**
+ * The Stellar row. Canonical upper-case: a lower-cased strkey is not an address Horizon
+ * or an explorer would resolve, and the row is the audit trail. `hit: false` is still
+ * the honest boolean (nothing was found because nothing was looked up), and the two
+ * markers beside it are what say so.
+ */
+async function recordUnscreenedStellar(address: string, context: ScreeningContext): Promise<ScreeningResult> {
+  const raw = { skipped: "no_list", checked_at: new Date().toISOString() };
+  try {
+    const { error } = await db().from("screening").insert({ address, context, hit: false, provider: STELLAR_PROVIDER, raw });
+    if (error) throw error;
+  } catch (e) {
+    console.error("[screening] could not record result:", e instanceof Error ? e.message : String(e));
+  }
+  return { hit: false, provider: STELLAR_PROVIDER, degraded: true, listSize: 0 };
 }

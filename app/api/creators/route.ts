@@ -14,6 +14,8 @@
 import { type NextRequest, NextResponse } from "next/server";
 import { DEFAULT_SCOPES, insertApiKey } from "@/lib/auth/api-key";
 import { consumeChallenge, dbAddress, normaliseAddress } from "@/lib/auth/challenge";
+import { inspectStellarPayoutAccount } from "@/lib/auth/stellar-binding";
+import { addressFamily } from "@/lib/x402/stellar";
 import { clientIp, enforceLimit } from "@/lib/auth/rate-limit";
 import { db } from "@/lib/db";
 import type { CreatorRow } from "@/lib/db/types";
@@ -68,8 +70,12 @@ export const POST = handle(async (req: NextRequest) => {
     throw new ApiError("invite_required");
   }
 
-  // FR-2: prove control of the payout address, or no registration.
+  // FR-2: prove control of the payout address, or no registration. A Stellar `G…` is an
+  // identity too (25 Oct 2026, BUILD H5), proved as SEP-53 by `consumeChallenge`; it must
+  // also hold a trustline in the configured asset, read from Horizon before the nonce is
+  // spent, or a payout would have nowhere to land (lib/auth/stellar-binding.ts).
   const payoutAddress = normaliseAddress(body.payout_address);
+  const inspected = addressFamily(payoutAddress) === "stellar" ? await inspectStellarPayoutAccount(payoutAddress) : null;
   try {
     await consumeChallenge(payoutAddress, body.address_proof.nonce, body.address_proof.signature, "address_proof");
   } catch (e) {
@@ -91,6 +97,7 @@ export const POST = handle(async (req: NextRequest) => {
       onboarded_via: "api",
       wallet_mode: "linked",
       payout_address: dbAddress(payoutAddress),
+      ...(inspected ? { stellar_payout_address: payoutAddress, stellar_payout_meta: inspected.meta, stellar_payout_verified_at: inspected.verifiedAt } : {}),
       abuse_contact_url: body.abuse_contact_url ?? null,
       abuse_contact_email: body.abuse_contact_email ?? null,
       terms_version: currentTerms,

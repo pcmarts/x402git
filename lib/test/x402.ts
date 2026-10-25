@@ -141,10 +141,11 @@ export function stubFacilitator(options: StubOptions = {}): FacilitatorStub {
     },
     async settle(payload, requirements) {
       settleCalls.push({ payload, requirements });
+      // A real facilitator answers with the network it settled on, which is the payload's.
       const s = options.settle ?? {
         success: true,
         transaction: "0x" + "cd".repeat(32),
-        network: NETWORK as `${string}:${string}`,
+        network: (payload.accepted?.network ?? NETWORK) as `${string}:${string}`,
         payer: payload.payload.authorization ? (payload.payload.authorization as { from: string }).from : undefined,
       };
       if (s instanceof Error) throw s;

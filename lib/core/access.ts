@@ -22,13 +22,23 @@ import { buyLinks, chainLabel, paymentInstructions } from "@/lib/buy-links";
 import { db } from "@/lib/db";
 import type { CreatorRow, ListingRow, PurchaseKind, PurchaseRow, PurchaseSource, ReleaseRow } from "@/lib/db/types";
 import { fromMicro, toMicro } from "@/lib/db/types";
-import { appUrl, holdbackDays as holdbackDaysEnv, paymentChain, platformFeeBps, usdcAddress, x402Config } from "@/lib/env";
+import {
+  appUrl,
+  holdbackDays as holdbackDaysEnv,
+  paymentChain,
+  platformFeeBps,
+  type StellarRail,
+  stellarRail,
+  usdcAddress,
+  x402Config,
+} from "@/lib/env";
 import { ApiError } from "@/lib/errors";
 import { DiffSummary, type PaymentRequiredBodyOutput, type ReleaseLogEntryOutput } from "@/lib/schemas";
 import { PLATFORM_FEE_BPS, splitFee } from "@/lib/core/fee";
 import { signedUrl } from "@/lib/storage";
 import { assetDomain } from "@/lib/x402/asset";
 import { bazaarExtensions, type DiscoveryHints, discoveryHints, serviceMetadata } from "@/lib/x402/bazaar";
+import { addressFamily, canonicalAddress, microToStroops, stroopsToMicro } from "@/lib/x402/stellar";
 
 /**
  * D6's split lives in `lib/core/fee.ts` — a file with no imports, so a browser bundle
@@ -37,6 +47,14 @@ import { bazaarExtensions, type DiscoveryHints, discoveryHints, serviceMetadata 
  */
 export { PLATFORM_FEE_BPS, splitFee };
 
+/**
+ * The Stellar rail's pure half (25 Oct 2026) lives in `lib/x402/stellar.ts` for the same
+ * reason: units and address spelling are money facts, and callers outside the core import
+ * them from here only, so there is one answer to "how many stroops is a micro-dollar".
+ */
+export { addressFamily, canonicalAddress, microToStroops, stroopsToMicro };
+
+/** An EVM address. Kept for the EVM-only call sites; a buyer or payee may now also be a Stellar strkey. */
 export type Address = `0x${string}`;
 
 export type ListingRef = { owner: string; slug: string };
@@ -62,7 +80,8 @@ export type Purchase = {
   id: string;
   listingId: string;
   releaseId: string;
-  buyerAddress: Address;
+  /** Canonical spelling: an EVM `0x…` lower-case, or a Stellar `G…`/`C…` upper-case (BUILD H11). */
+  buyerAddress: string;
   allVersions: boolean;
   updatePriceAtPurchase: bigint;
   kind: PurchaseKind;
@@ -75,7 +94,18 @@ export type Purchase = {
   grantedAt: Date;
   holdbackUntil: Date;
   revokedAt: Date | null;
+  /** The rail it settled on (CAIP-2), the ledger's partition key since 20261025090100. */
+  network: string;
+  /** The token contract that was paid, or null for an EVM row the migration could not attribute. */
+  asset: string | null;
 };
+
+/**
+ * The two addresses a creator may have bound, which decide the rails a listing offers
+ * (JOURNEYS rule 4). Carried on the quote so `toPaymentRequirements` can build the 402
+ * per creator without a second read.
+ */
+export type Payee = { payoutAddress: string; stellarPayoutAddress: string | null };
 
 export type PaymentRequiredQuote = {
   kind: "payment_required";
@@ -96,6 +126,8 @@ export type PaymentRequiredQuote = {
   artifactKind: string | null;
   /** Computed manifest facts the Bazaar declaration is built from (lib/x402/bazaar.ts). */
   discovery: DiscoveryHints;
+  /** Who gets paid, and so which rails the 402 may offer (`paymentOptionsFor`). */
+  payee: Payee;
 };
 
 export type Quote =
@@ -103,7 +135,8 @@ export type Quote =
   | PaymentRequiredQuote
   | { kind: "unavailable"; code: "not_found" | "retired" | "no_release" | "not_entitled" };
 
-export type SettleResult = { txHash: string; nonce: string; amountMicro: bigint };
+/** `network` is the requirement's, never the facilitator's (BATTLE-TEST finding 10). */
+export type SettleResult = { txHash: string; nonce: string; amountMicro: bigint; network: string };
 
 /**
  * What `toPaymentRequirements` produces. Two views of one quote:
@@ -118,11 +151,26 @@ export type SettleResult = { txHash: string; nonce: string; amountMicro: bigint 
 export type X402Requirement = {
   scheme: "exact";
   network: string;
+  /** The asset's smallest unit: micro-USDC on Base, stroops (micro × 10) on Stellar. */
   amount: string;
   asset: string;
   payTo: string;
   maxTimeoutSeconds: number;
-  extra: { name: string; version: string };
+  /** The EIP-712 domain on Base; exactly `{ areFeesSponsored: true }` on Stellar (BUILD §3.4). */
+  extra: { name: string; version: string } | { areFeesSponsored: true };
+};
+
+/**
+ * One way to pay a listing, as the listing JSON, the MCP tools and the listing page show
+ * it (JOURNEYS B4a, BUILD §0b B4). `amount` is the wire amount of the `accepts` entry for
+ * the same rail, so an agent reading this can predict the 402 exactly.
+ */
+export type PaymentOption = {
+  network: string;
+  asset: string;
+  asset_symbol: string;
+  amount: string;
+  how: string;
 };
 
 export type PaymentRequirements = {
@@ -221,9 +269,9 @@ export function listingStatus(listing: ListingRow): "draft" | "live" | "retired"
 export async function quote(ref: ListingRef, buyer: Address | string | null, version?: string, now = new Date()): Promise<Quote> {
   const resolved = await resolveListing(ref);
   if (!resolved) return { kind: "unavailable", code: "not_found" };
-  const { listing } = resolved;
+  const { listing, creator } = resolved;
 
-  const buyerAddress = buyer ? lower(buyer) : null;
+  const buyerAddress = buyer ? canonicalAddress(buyer) : null;
   const purchases = buyerAddress ? await purchasesFor(listing.id, buyerAddress) : [];
   const isHolder = purchases.length > 0;
 
@@ -294,7 +342,13 @@ export async function quote(ref: ListingRef, buyer: Address | string | null, ver
     listingDescription: listing.description,
     artifactKind: manifestKind(latest),
     discovery: discoveryHints(latest.manifest),
+    payee: payeeOf(creator),
   };
+}
+
+/** The two bound addresses, as `paymentOptionsFor` reads them. */
+function payeeOf(creator: Pick<CreatorRow, "payout_address" | "stellar_payout_address">): Payee {
+  return { payoutAddress: creator.payout_address, stellarPayoutAddress: creator.stellar_payout_address ?? null };
 }
 
 /**
@@ -343,50 +397,166 @@ export function quoteId(listing: ListingRow, release: ReleaseRow, priceMicro: bi
 }
 
 // ---------------------------------------------------------------------------
+// paymentOptionsFor — one function decides which rails a listing offers (§11, BUILD §0b B4)
+// ---------------------------------------------------------------------------
+
+/**
+ * JOURNEYS rule 4: a listing offers a rail only if its money has somewhere to go.
+ *
+ * - **Base** when the creator's identity address is an EVM `0x…`. A Stellar `G…` identity
+ *   does not count (BUILD H5): there is no way to pay USDC on Base to a Stellar account.
+ * - **Stellar** when a Stellar payout address is bound, or the identity address itself is
+ *   a `G…` — and only when this deployment runs the Stellar rail at all.
+ *
+ * `CROSS_CHAIN_PAYOUTS` is off (BUILD §0b B3): an EVM-only creator gets Base only. When
+ * W5 lands, this is the one place that changes.
+ *
+ * The 402's `accepts`, `payment_options` in the listing JSON and MCP, and the listing
+ * page's Pay area all derive from this, so they cannot disagree.
+ */
+function railsFor(payee: Payee): { evm: boolean; stellar: StellarRail | null } {
+  const identity = addressFamily(payee.payoutAddress);
+  const stellar = stellarRail();
+  return {
+    evm: identity === "evm",
+    stellar: stellar && (payee.stellarPayoutAddress !== null || identity === "stellar") ? stellar : null,
+  };
+}
+
+export function paymentOptionsFor(
+  creator: Pick<CreatorRow, "handle" | "payout_address" | "stellar_payout_address">,
+  listing: Pick<ListingRow, "slug" | "price_micro">,
+): PaymentOption[] {
+  const rails = railsFor(payeeOf(creator));
+  const priceMicro = toMicro(listing.price_micro);
+  const options: PaymentOption[] = [];
+  if (rails.evm) {
+    // `paymentChain()`, not `x402Config()`: the listing page renders on deployments that
+    // hold no receiving address, and an option carries no `payTo`.
+    const { network, asset } = paymentChain();
+    options.push({
+      network,
+      asset,
+      asset_symbol: "USDC",
+      amount: priceMicro.toString(),
+      how: `Sign the ${network} entry of accepts as an EIP-3009 USDC authorization on ${chainLabel(network)} and retry with it in PAYMENT-SIGNATURE.`,
+    });
+  }
+  if (rails.stellar) {
+    const rail = rails.stellar;
+    options.push({
+      network: rail.network,
+      asset: rail.asset.contract,
+      asset_symbol: rail.asset.code,
+      amount: microToStroops(priceMicro).toString(),
+      how: stellarHow(rail, `${creator.handle}/${listing.slug}`),
+    });
+  }
+  return options;
+}
+
+/** The Stellar sentence. The CLI is W4's; the fallback is any x402 client with the Stellar scheme registered. */
+function stellarHow(rail: StellarRail, name: string): string {
+  return (
+    `Pay ${rail.asset.code} on ${chainLabel(rail.network)}: \`npx x402git-stellar buy ${name}\`, ` +
+    `or sign the ${rail.network} entry of accepts as a Soroban \`transfer\` of the ${rail.asset.code} contract with an x402 client that has the Stellar scheme registered.`
+  );
+}
+
+// ---------------------------------------------------------------------------
 // toPaymentRequirements — the only place a 402 body is built (§11)
 // ---------------------------------------------------------------------------
 
 export function toPaymentRequirements(q: PaymentRequiredQuote, now = new Date()): PaymentRequirements {
-  const { network, payTo, asset } = x402Config();
   const base = appUrl();
   const links = buyLinks({ owner: q.ref.owner, slug: q.ref.slug, appUrl: base });
   const resource = links.resource_endpoint;
   const manifestUrl = links.manifest_url;
   const amount = q.priceMicro.toString();
 
-  const canonical: X402Requirement = {
-    scheme: "exact",
-    network,
-    amount,
-    asset,
-    payTo,
-    maxTimeoutSeconds: PAYMENT_TIMEOUT_SEC,
-    // EIP-712 domain of the asset, per x402 v2, looked up per network: Base Sepolia
-    // USDC is ("USDC", "2") and Base mainnet USDC is ("USD Coin", "2"). Getting it
-    // wrong is not a validation error — the buyer signs for a domain the token does
-    // not recognise and settlement fails on simulation. See lib/x402/asset.ts.
-    extra: assetDomain(network, asset),
-  };
+  // One accept per rail the creator can be paid on, EVM first (BUILD H10): the MCP text
+  // tells EVM agents to sign `accepts[0]`, and an x402 client picks the first entry whose
+  // network it has a scheme for, so the Stellar CLI finds its entry wherever it sits.
+  const rails = railsFor(q.payee);
+  if (!rails.evm && !rails.stellar) {
+    // A Stellar-only creator on a deployment with the Stellar rail off. The listing exists
+    // and the price is right; there is simply no rail here that reaches the creator. 503,
+    // like the kill switch, because turning the rail on is what fixes it.
+    throw new ApiError("paused", { message: "This listing's creator cannot be paid on any payment rail this deployment serves." });
+  }
 
   const description = paymentDescription(q);
+  const canonicals: X402Requirement[] = [];
+  const accepts: PaymentRequiredBodyOutput["accepts"] = [];
 
-  // Both spellings: the v2 names `@x402/core` validates, and the v1 names PRD §13 and
-  // `lib/schemas/payment.ts` specify. A v2 client strips the aliases before it signs,
-  // so `accepted` still deep-equals `canonical`.
-  const accept = {
-    ...canonical,
-    maxAmountRequired: amount,
-    resource,
-    description,
-    mimeType: "application/zip",
-  };
+  if (rails.evm) {
+    const { network, payTo, asset } = x402Config();
+    // Spelled out rather than spread from the union type, so the published schema's
+    // narrower EVM shape typechecks; the key order is the wire order it always had.
+    const canonical = {
+      scheme: "exact" as const,
+      network,
+      amount,
+      asset,
+      payTo,
+      maxTimeoutSeconds: PAYMENT_TIMEOUT_SEC,
+      // EIP-712 domain of the asset, per x402 v2, looked up per network: Base Sepolia
+      // USDC is ("USDC", "2") and Base mainnet USDC is ("USD Coin", "2"). Getting it
+      // wrong is not a validation error — the buyer signs for a domain the token does
+      // not recognise and settlement fails on simulation. See lib/x402/asset.ts.
+      extra: assetDomain(network, asset),
+    };
+    canonicals.push(canonical);
+    // Both spellings: the v2 names `@x402/core` validates, and the v1 names PRD §13 and
+    // `lib/schemas/payment.ts` specify. A v2 client strips the aliases before it signs,
+    // so `accepted` still deep-equals `canonical`.
+    accepts.push({ ...canonical, maxAmountRequired: amount, resource, description, mimeType: "application/zip" });
+  }
+
+  if (rails.stellar) {
+    const rail = rails.stellar;
+    const stroops = microToStroops(q.priceMicro).toString();
+    // BUILD §3.4, exactly. `extra` must be `{ areFeesSponsored: true }` and nothing else:
+    // the client echoes it in `accepted` and the facilitator compares the two.
+    const canonical = {
+      scheme: "exact" as const,
+      network: rail.network,
+      amount: stroops,
+      asset: rail.asset.contract,
+      payTo: rail.payTo,
+      maxTimeoutSeconds: PAYMENT_TIMEOUT_SEC,
+      extra: { areFeesSponsored: true as const },
+    };
+    canonicals.push(canonical);
+    accepts.push({
+      ...canonical,
+      maxAmountRequired: stroops,
+      resource,
+      // The same product copy, naming the configured symbol so an agent holding USDT0
+      // on Stellar and USDC on Base knows which this entry wants.
+      description: `${description} ${dollars(q.priceMicro)} in ${rail.asset.code} on ${chainLabel(rail.network)}.`,
+      mimeType: "application/zip",
+    });
+  }
+
+  // The prose beside the fields. Unchanged for a Base creator; a Stellar-only creator's
+  // reader is told the Stellar procedure instead, and a creator on both rails gets the
+  // Base sentence with the Stellar alternative appended.
+  const stellarSentence = rails.stellar ? stellarHow(rails.stellar, `${q.ref.owner}/${q.ref.slug}`) : null;
+  const instructions = rails.evm
+    ? stellarSentence
+      ? `${paymentInstructions(links, chainLabel(canonicals[0].network))} Or on Stellar: ${stellarSentence}`
+      : paymentInstructions(links, chainLabel(canonicals[0].network))
+    : `This is an x402 paywall, not an error. To buy: ${stellarSentence} Then GET ${resource} again with the payment in the PAYMENT-SIGNATURE header and extra.quote_id in X-Quote-Id. ` +
+      `The full procedure is at ${links.skill_url}; the same tools are an MCP server at ${links.mcp_url}. ` +
+      `No wallet? A person can buy at ${links.listing_url}, and the free manifest at ${manifestUrl} shows what is inside before anyone pays.`;
 
   const body = {
     x402Version: 2 as const,
     // ResourceInfo — required by the x402 v2 envelope. `serviceName` and `tags` are the
     // Bazaar's, computed from the manifest and never from the creator's copy (FR-52).
     resource: { url: resource, description, mimeType: "application/zip", ...serviceMetadata(q.ref, q.discovery) },
-    accepts: [accept],
+    accepts,
     // The Bazaar discovery declaration (adopted 16 Sep 2026). An x402 client echoes it
     // in the payment payload and the facilitator catalogues this URL on settlement.
     extensions: bazaarExtensions(q.ref, q.release.version, base),
@@ -406,14 +576,21 @@ export function toPaymentRequirements(q: PaymentRequiredQuote, now = new Date())
       // The self-describing part (2026-09-02). An x402 client never reads these; every
       // other reader — a shell agent, a chat model's fetch tool, a person with curl —
       // has nothing else to go on, and this is the moment it decides what to do next.
-      instructions: paymentInstructions(links, chainLabel(network)),
+      instructions,
       listing_url: links.listing_url,
       skill_url: links.skill_url,
       mcp_url: links.mcp_url,
     },
   } satisfies PaymentRequiredBodyOutput;
 
-  return { body, accepts: [canonical], quoteId: q.quoteId, priceMicro: q.priceMicro };
+  return { body, accepts: canonicals, quoteId: q.quoteId, priceMicro: q.priceMicro };
+}
+
+/** `$2.00` from micro-dollars, two places, no float. For prose only; the fields carry the integer. */
+function dollars(micro: bigint): string {
+  const whole = micro / 1_000_000n;
+  const cents = (micro % 1_000_000n) / 10_000n;
+  return `$${whole}.${cents.toString().padStart(2, "0")}`;
 }
 
 /**
@@ -452,11 +629,23 @@ export async function grant(
   options: GrantOptions = {},
 ): Promise<Purchase> {
   const now = options.now ?? new Date();
-  const buyerAddress = lower(buyer);
+  const buyerAddress = canonicalAddress(buyer);
 
-  // The chain `insertPurchase` stamps. A row for the same nonce on another chain is a
-  // different authorization (CORE-1), never this one's idempotent replay.
-  const existing = await purchaseByNonce(settlement.nonce, paymentChain().chainId);
+  // The rail must be one this deployment serves, and the payer must belong to it: a
+  // settlement naming a network we never quoted is not ours to grant, and a `0x…` buyer
+  // on a Stellar row (or the reverse) would fail the `purchase_network_shape` CHECK
+  // after the money moved (BATTLE-TEST finding 11).
+  const rail = servedRail(settlement.network);
+  if (!rail || rail.family !== addressFamily(buyerAddress)) {
+    throw new ApiError("authorization_mismatch", {
+      message: `That settlement is on ${settlement.network}, which this deployment does not serve for this payer.`,
+    });
+  }
+
+  // The rail `insertPurchase` stamps. A row for the same nonce on another rail is a
+  // different authorization (CORE-1, now partitioned on `network` — BATTLE-TEST finding
+  // 1), never this one's idempotent replay.
+  const existing = await purchaseByNonce(settlement.nonce, settlement.network);
   if (existing) {
     const matches =
       existing.listingId === q.listingId && existing.releaseId === q.release.id && existing.grossMicro === settlement.amountMicro;
@@ -480,7 +669,7 @@ export async function grant(
 export async function grantFree(q: PaymentRequiredQuote, buyer: Address | string, options: GrantOptions = {}): Promise<Purchase> {
   if (q.priceMicro !== 0n) throw new Error("grantFree called on a priced quote");
   const now = options.now ?? new Date();
-  const buyerAddress = lower(buyer);
+  const buyerAddress = canonicalAddress(buyer);
 
   const held = await purchasesFor(q.listingId, buyerAddress);
   const already = held.find((p) => p.releaseId === q.release.id);
@@ -504,6 +693,11 @@ async function insertPurchase(
   const allVersions = q.updatePriceMicro === 0n;
   const kind: PurchaseKind = grossMicro === 0n ? "free" : q.reason;
 
+  // Which rail this row belongs to: the settlement's on a paid grant (`grant` has already
+  // checked it is served and matches the payer), the buyer's own family on a free one.
+  const rail = settlement ? servedRail(settlement.network) : railForBuyer(buyerAddress);
+  if (!rail) throw new ApiError("authorization_mismatch", { message: "No payment rail on this deployment matches that wallet." });
+
   const { data, error } = await db()
     .from("purchase")
     .insert({
@@ -521,10 +715,14 @@ async function insertPurchase(
       payment_nonce: settlement?.nonce ?? null,
       granted_at: now.toISOString(),
       holdback_until: holdbackUntil.toISOString(),
-      // Which chain this settled on. One database serves both networks (dev is Sepolia,
-      // production is mainnet), so without this the sweep would pay real USDC for
-      // testnet sales — see the 20260906010000 migration.
-      chain_id: paymentChain().chainId,
+      // Which rail this settled on, and in which token. One database serves Base Sepolia,
+      // Base mainnet and Stellar, so without these the sweep would pay real money for
+      // testnet sales (20260906010000) or USDT0 for a USDC sale (20261025090100).
+      // `chain_id` is the EVM spelling of `network` and is null on Stellar; the admin and
+      // reconcile reads still filter on it, and by construction never see a Stellar row.
+      network: rail.network,
+      asset: rail.asset,
+      chain_id: rail.chainId,
     })
     .select("*")
     .single();
@@ -533,9 +731,9 @@ async function insertPurchase(
     // 23505: a concurrent request for the same purchase won the race. Re-read and return
     // the winner rather than surfacing a duplicate-key error.
     if (error.code === "23505") {
-      // Paid path: the `payment_nonce` unique index (FR-22).
+      // Paid path: the `(network, payment_nonce)` unique index (FR-22).
       if (settlement) {
-        const winner = await purchaseByNonce(settlement.nonce, paymentChain().chainId);
+        const winner = await purchaseByNonce(settlement.nonce, settlement.network);
         if (winner) return winner;
       } else {
         // W1.7 / W3.7: the free path's `(listing_id, release_id, buyer_address) where
@@ -579,7 +777,7 @@ export async function downloadUrlForRelease(
 
 /** Everything this wallet owns, newest first. FR-32. */
 export async function owned(buyer: Address | string, ref?: ListingRef): Promise<Purchase[]> {
-  const buyerAddress = lower(buyer);
+  const buyerAddress = canonicalAddress(buyer);
   let listingId: string | null = null;
   if (ref) {
     const resolved = await resolveListing(ref);
@@ -587,14 +785,18 @@ export async function owned(buyer: Address | string, ref?: ListingRef): Promise<
     listingId = resolved.listing.id;
   }
 
-  // This chain only. One database serves both networks, so without the filter a wallet
-  // that bought on Sepolia would read as owning the version on mainnet and be handed a
-  // free download of something it paid test money for (2026-09-07, the cutover).
+  // This wallet's rail only. One database serves both networks, so without the filter a
+  // wallet that bought on Sepolia would read as owning the version on mainnet and be
+  // handed a free download of something it paid test money for (2026-09-07, the
+  // cutover). The rail follows the address family (JOURNEYS rule 7: a buyer is a wallet
+  // on a network); a Stellar wallet on a deployment with no Stellar rail owns nothing here.
+  const network = networkForBuyer(buyerAddress);
+  if (!network) return [];
   let query = db()
     .from("purchase")
     .select("*")
     .eq("buyer_address", buyerAddress)
-    .eq("chain_id", paymentChain().chainId)
+    .eq("network", network)
     .is("revoked_at", null);
   if (listingId) query = query.eq("listing_id", listingId);
   const { data, error } = await query.order("granted_at", { ascending: false });
@@ -609,7 +811,7 @@ export type OwnedEntitlement = { purchase: Purchase; owner: string; slug: string
  * release rather than a join, because PostgREST embedding is not in the mock DB.
  */
 export async function ownedWithContext(buyer: Address | string, limit = 100, cursor?: string): Promise<{ items: OwnedEntitlement[]; nextCursor: string | null }> {
-  const buyerAddress = lower(buyer);
+  const buyerAddress = canonicalAddress(buyer);
   let query = db().from("purchase").select("*").eq("buyer_address", buyerAddress);
   if (cursor) query = query.lt("granted_at", cursor);
   const { data, error } = await query.order("granted_at", { ascending: false }).limit(limit + 1);
@@ -636,13 +838,17 @@ export async function ownedWithContext(buyer: Address | string, limit = 100, cur
 // ---------------------------------------------------------------------------
 
 async function purchasesFor(listingId: string, buyerAddress: string): Promise<Purchase[]> {
+  // See the note in `owned`: entitlement does not cross rails, and the rail is the
+  // wallet's. Partitioned on `network`, not `chain_id`, because a Stellar row has none
+  // (BATTLE-TEST finding 1: filtering `chain_id` made every G buyer own nothing).
+  const network = networkForBuyer(buyerAddress);
+  if (!network) return [];
   const { data, error } = await db()
     .from("purchase")
     .select("*")
     .eq("listing_id", listingId)
     .eq("buyer_address", buyerAddress)
-    // See the note in `entitlementsFor`: entitlement does not cross chains.
-    .eq("chain_id", paymentChain().chainId)
+    .eq("network", network)
     .is("revoked_at", null)
     .order("granted_at", { ascending: false });
   if (error) throw error;
@@ -658,19 +864,23 @@ async function purchasesFor(listingId: string, buyerAddress: string): Promise<Pu
  * signed legally on Base Sepolia and on Base mainnet, and one database holds both. An
  * unscoped lookup let a testnet purchase answer a mainnet replay: buy with test USDC on
  * a Sepolia deployment, then present a signed-but-unsubmitted mainnet authorization with
- * the same nonce and be handed the mainnet download. The default is the chain this
- * deployment settles on, which is the chain the replayed signature is verified against.
+ * the same nonce and be handed the mainnet download. The default is the EVM chain this
+ * deployment settles on; a Stellar replay passes the network its payload named.
+ *
+ * The partition key is `network` (CAIP-2), not `chain_id`, since 20261025090100: a
+ * Stellar row has no chain id, and a lookup on one missed every Stellar replay, so the
+ * insert hit the global nonce key and an idempotent retry 500d (BATTLE-TEST finding 1).
  */
-export async function findPurchaseByNonce(nonce: string, chainId: number = paymentChain().chainId): Promise<Purchase | null> {
-  return await purchaseByNonce(nonce, chainId);
+export async function findPurchaseByNonce(nonce: string, network: string = paymentChain().network): Promise<Purchase | null> {
+  return await purchaseByNonce(nonce, network);
 }
 
-async function purchaseByNonce(nonce: string, chainId: number): Promise<Purchase | null> {
+async function purchaseByNonce(nonce: string, network: string): Promise<Purchase | null> {
   const { data, error } = await db()
     .from("purchase")
     .select("*")
     .eq("payment_nonce", nonce)
-    .eq("chain_id", chainId)
+    .eq("network", network)
     .maybeSingle();
   if (error) throw error;
   return data ? toPurchase(data as PurchaseRow) : null;
@@ -787,7 +997,7 @@ export function toPurchase(row: PurchaseRow): Purchase {
     id: row.id,
     listingId: row.listing_id,
     releaseId: row.release_id,
-    buyerAddress: row.buyer_address as Address,
+    buyerAddress: row.buyer_address,
     allVersions: row.all_versions,
     updatePriceAtPurchase: toMicro(row.update_price_at_purchase),
     kind: row.kind,
@@ -800,12 +1010,44 @@ export function toPurchase(row: PurchaseRow): Purchase {
     grantedAt: new Date(row.granted_at),
     holdbackUntil: new Date(row.holdback_until),
     revokedAt: row.revoked_at ? new Date(row.revoked_at) : null,
+    // Rows written before 20261025090100 were backfilled; the mock has no trigger, so a
+    // fixture that forgot the column reads as the deployment's EVM chain, as it would have.
+    network: row.network ?? (row.chain_id != null ? `eip155:${row.chain_id}` : paymentChain().network),
+    asset: row.asset ?? null,
   };
 }
 
-/** DECISIONS.md: every address column is stored lowercase so `.eq()` is always right. */
-function lower(address: Address | string): string {
-  return address.toLowerCase();
+// ---------------------------------------------------------------------------
+// rails — which network a row belongs to, in one place
+// ---------------------------------------------------------------------------
+
+/** What `insertPurchase` stamps: the three columns that say where a row settled. */
+type RowRail = { family: "evm" | "stellar"; network: string; asset: string; chainId: number | null };
+
+/** The rail named by a CAIP-2 id, if this deployment serves it. */
+function servedRail(network: string): RowRail | null {
+  const evm = paymentChain();
+  if (network === evm.network) return { family: "evm", network: evm.network, asset: evm.asset, chainId: evm.chainId };
+  const stellar = stellarRail();
+  if (stellar && network === stellar.network) return { family: "stellar", network: stellar.network, asset: stellar.asset.contract, chainId: null };
+  return null;
+}
+
+/**
+ * JOURNEYS rule 7: a buyer is a wallet on a network, and the network follows the address.
+ * An EVM wallet is on this deployment's EVM chain; a Stellar wallet is on its Stellar
+ * network, or nowhere when the rail is off.
+ */
+function railForBuyer(buyerAddress: string): RowRail | null {
+  const family = addressFamily(buyerAddress);
+  if (family === "evm") return servedRail(paymentChain().network);
+  const stellar = stellarRail();
+  if (family === "stellar" && stellar) return servedRail(stellar.network);
+  return null;
+}
+
+function networkForBuyer(buyerAddress: string): string | null {
+  return railForBuyer(buyerAddress)?.network ?? null;
 }
 
 /** Re-exported so callers do not have to know which module owns the default. */

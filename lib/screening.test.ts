@@ -80,3 +80,18 @@ describe("screen (FR-38)", () => {
     expect(result.degraded).toBe(true);
   });
 });
+
+describe("screen — a Stellar address is recorded unscreened (BUILD H12, BATTLE-TEST finding 16)", () => {
+  const G = "GDVEU3DD4KOFECV66VIHWEZOYX4ZKR3WV27L464SIIPOU2IUI3JCZA57";
+
+  it("writes degraded, skipped: no_list, provider none:stellar and the canonical upper-case address; never fetches the ETH list", async () => {
+    const fetchMock = stubList([SANCTIONED]);
+    const result = await screen(G.toLowerCase(), "settle");
+    expect(result).toEqual({ hit: false, provider: "none:stellar", degraded: true, listSize: 0 });
+    expect(fetchMock).not.toHaveBeenCalled();
+    const row = mock.rows("screening")[0];
+    expect(row).toMatchObject({ address: G, context: "settle", hit: false, provider: "none:stellar" });
+    expect(row.raw).toMatchObject({ skipped: "no_list" });
+    expect(row.address).not.toBe(G.toLowerCase());
+  });
+});

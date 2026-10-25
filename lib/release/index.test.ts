@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { type Db, resetDb, setDb } from "@/lib/db";
+import { setPublicGithub } from "@/lib/github/public";
 import { makeMockDb } from "@/lib/test/mock-db";
+import { stubPublicGithub } from "@/lib/test/public-github";
 import { makeTarball } from "@/lib/test/tarball";
 
 const COMMIT = "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678";
@@ -88,6 +90,7 @@ beforeEach(() => {
 
 afterEach(() => {
   resetDb();
+  setPublicGithub(null);
   vi.unstubAllGlobals();
 });
 
@@ -794,5 +797,104 @@ describe("changelogFor", () => {
     expect(changelogFor(undefined, analysis, "v1.2.0", "commit")).toBe("From the release page.");
     expect(changelogFor(undefined, { releases: [] } as any, "v1.2.0", "commit message")).toBe("commit message");
     expect(changelogFor("   ", { releases: [] } as any, undefined, null)).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Open releases (25 Oct 2026, HackMeridian): the promise is stamped at cut
+// ---------------------------------------------------------------------------
+
+describe("cutRelease — stamping the open-release promise (lib/release/open.ts)", () => {
+  const PUBLIC = "https://github.com/octo/widget-public";
+  const inDays = (n: number) => new Date(Date.now() + n * 86_400_000).toISOString();
+
+  function openListing(overrides: Record<string, unknown> = {}) {
+    Object.assign(mock.rows("listing")[0], { open_release: true, public_repo_url: PUBLIC, next_opens_at: inDays(30), ...overrides });
+  }
+
+  it("stamps a pending promise with the date, the sold licence and four passing checks", async () => {
+    openListing();
+    const github = stubPublicGithub({ repos: { "octo/widget-public": { private: false } }, commits: { "octo/widget-public": [] } });
+    setPublicGithub(github);
+
+    const result = await cutRelease({ listingId: "l1", ref: "refs/tags/v1.2.0" });
+    if (!result.ok) throw new Error(result.message);
+
+    const release = result.release;
+    expect(release.scan).toBe("pass");
+    expect(release.promise_status).toBe("pending");
+    expect(release.opens_at).toBe(mock.rows("listing")[0].next_opens_at);
+    expect(release.open_licence_spdx).toBe("MIT");
+    expect((release.open_eligibility as { id: string; ok: boolean }[]).map((c) => `${c.id}:${c.ok}`)).toEqual([
+      "licence:true",
+      "public_repo:true",
+      "not_yet_public:true",
+      "payout_address:true",
+    ]);
+    // The checks were made against the *public* repository and the *sold* commit.
+    expect(github.calls).toEqual(["repos/octo/widget-public", `repos/octo/widget-public/commits/${COMMIT}`]);
+    // The listing keeps a copy, so the dashboard can show the checks without a release in hand.
+    expect(mock.rows("listing")[0].open_eligibility).toEqual(release.open_eligibility);
+  });
+
+  it("marks the release ineligible — and still sells it — when the commit is already public (H6)", async () => {
+    openListing();
+    setPublicGithub(stubPublicGithub({ repos: { "octo/widget-public": { private: false } }, commits: { "octo/widget-public": [COMMIT] } }));
+
+    const result = await cutRelease({ listingId: "l1", ref: "refs/tags/v1.2.0" });
+    if (!result.ok) throw new Error(result.message);
+
+    expect(result.release.scan).toBe("pass");
+    expect(result.release.storage_path).toBeTruthy();
+    expect(result.release.promise_status).toBe("ineligible");
+    const failing = (result.release.open_eligibility as { id: string; ok: boolean; detail: string }[]).filter((c) => !c.ok);
+    expect(failing.map((c) => c.id)).toEqual(["not_yet_public"]);
+    expect(failing[0].detail).toMatch(/already public/);
+  });
+
+  it("marks the release ineligible when the sold snapshot has no licence", async () => {
+    openListing();
+    repoFiles = { "README.md": "# widget\n", "src/index.ts": "export const widget = () => 42;\n" };
+    requestImpl = defaultRequest({
+      "GET /repos/{owner}/{repo}/license": new Error("404 no licence"),
+      "GET /repos/{owner}/{repo}/git/trees/{tree_sha}": {
+        tree: [
+          { type: "blob", path: "README.md", size: 900, sha: "1".repeat(40) },
+          { type: "blob", path: "src/index.ts", size: 2400, sha: "3".repeat(40) },
+        ],
+      },
+    });
+    setPublicGithub(stubPublicGithub({ repos: { "octo/widget-public": { private: false } } }));
+
+    const result = await cutRelease({ listingId: "l1", ref: "refs/tags/v1.2.0" });
+    if (!result.ok) throw new Error(result.message);
+
+    expect(result.release.promise_status).toBe("ineligible");
+    const failing = (result.release.open_eligibility as { id: string; ok: boolean }[]).filter((c) => !c.ok).map((c) => c.id);
+    expect(failing).toContain("licence");
+  });
+
+  it("clamps a date the listing carries beyond the cap to 90 days after the cut", async () => {
+    openListing({ next_opens_at: inDays(120) });
+    setPublicGithub(stubPublicGithub({ repos: { "octo/widget-public": { private: false } } }));
+
+    const result = await cutRelease({ listingId: "l1", ref: "refs/tags/v1.2.0" });
+    if (!result.ok) throw new Error(result.message);
+
+    const cap = new Date(result.release.created_at).getTime() + 90 * 86_400_000;
+    expect(new Date(result.release.opens_at!).getTime()).toBe(cap);
+    expect(result.release.promise_status).toBe("pending");
+  });
+
+  it("leaves every promise column empty on an ordinary listing and asks GitHub nothing", async () => {
+    const github = stubPublicGithub();
+    setPublicGithub(github);
+
+    const result = await cutRelease({ listingId: "l1", ref: "refs/tags/v1.2.0" });
+    if (!result.ok) throw new Error(result.message);
+
+    expect(result.release.promise_status ?? null).toBeNull();
+    expect(result.release.opens_at ?? null).toBeNull();
+    expect(github.calls).toEqual([]);
   });
 });

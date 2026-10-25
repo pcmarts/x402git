@@ -390,7 +390,7 @@ describe("toPaymentRequirements — the only place a 402 body is built", () => {
 });
 
 describe("grant", () => {
-  const settlement = { txHash: "0xdeadbeef", nonce: "0xnonce-1", amountMicro: 9_000_000n };
+  const settlement = { txHash: "0xdeadbeef", nonce: "0xnonce-1", amountMicro: 9_000_000n, network: "eip155:84532" };
 
   async function newQuote(): Promise<PaymentRequiredQuote> {
     const q = await quote({ owner: "adrian", slug: "humanizer" }, BUYER);
@@ -455,13 +455,17 @@ describe("grant", () => {
   describe("the nonce ledger is chain-scoped (CORE-1)", () => {
     const SEPOLIA = 84532;
     const MAINNET = 8453;
+    // The ledger's partition key is the CAIP-2 `network` since 20261025090100; `chain_id`
+    // is its EVM spelling and what `seedPurchase` still takes.
+    const SEPOLIA_NET = "eip155:84532";
+    const MAINNET_NET = "eip155:8453";
 
     it("does not find a nonce granted on chain A when looking it up on chain B", async () => {
       const seed = seedListing(mock, { releases: [{ version: "1.0.0" }] });
       seedPurchase(mock, { listingId: seed.listingId, releaseId: seed.latest.id, buyer: BUYER, nonce: "0xshared", chainId: SEPOLIA });
 
-      expect(await findPurchaseByNonce("0xshared", SEPOLIA)).not.toBeNull();
-      expect(await findPurchaseByNonce("0xshared", MAINNET)).toBeNull();
+      expect(await findPurchaseByNonce("0xshared", SEPOLIA_NET)).not.toBeNull();
+      expect(await findPurchaseByNonce("0xshared", MAINNET_NET)).toBeNull();
     });
 
     it("defaults to this deployment's chain, so a Sepolia purchase cannot answer a mainnet replay", async () => {
@@ -495,7 +499,7 @@ describe("grant", () => {
       // Before the fix this resolved to the Sepolia row: a mainnet settle answered with a
       // testnet purchase. The global `payment_nonce` key still refuses a second row, so
       // the grant fails loudly instead of handing back the other chain's entitlement.
-      await expect(grant(q, BUYER, settlement)).rejects.toBeDefined();
+      await expect(grant(q, BUYER, { ...settlement, network: MAINNET_NET })).rejects.toBeDefined();
       expect(mock.rows("purchase")).toHaveLength(1);
       expect(mock.rows("purchase")[0].id).toBe(sepoliaRow);
     });
@@ -506,12 +510,14 @@ describe("grant", () => {
       resetEnv();
 
       const q = await newQuote();
-      const purchase = await grant(q, BUYER, settlement);
+      const mainnetSettlement = { ...settlement, network: MAINNET_NET };
+      const purchase = await grant(q, BUYER, mainnetSettlement);
       expect(Number(mock.rows("purchase")[0].chain_id)).toBe(MAINNET);
+      expect(mock.rows("purchase")[0].network).toBe(MAINNET_NET);
       expect((await findPurchaseByNonce(settlement.nonce))?.id).toBe(purchase.id);
-      expect(await findPurchaseByNonce(settlement.nonce, SEPOLIA)).toBeNull();
+      expect(await findPurchaseByNonce(settlement.nonce, SEPOLIA_NET)).toBeNull();
       // Idempotent on the same chain, as before.
-      expect((await grant(q, BUYER, settlement)).id).toBe(purchase.id);
+      expect((await grant(q, BUYER, mainnetSettlement)).id).toBe(purchase.id);
       expect(mock.rows("purchase")).toHaveLength(1);
     });
   });
@@ -525,7 +531,7 @@ describe("grant", () => {
       grantedAt: new Date(Date.now() - 60 * 86_400_000).toISOString(),
     });
     const q = await newQuote();
-    const purchase = await grant(q, BUYER, { txHash: "0xabc", nonce: "0xnonce-2", amountMicro: 3_000_000n });
+    const purchase = await grant(q, BUYER, { txHash: "0xabc", nonce: "0xnonce-2", amountMicro: 3_000_000n, network: "eip155:84532" });
     expect(purchase.kind).toBe("update");
     expect(purchase.grossMicro).toBe(3_000_000n);
     expect(purchase.feeMicro).toBe(300_000n);

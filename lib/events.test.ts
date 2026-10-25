@@ -116,3 +116,25 @@ describe("record — the admin alerts (\"PRD Trust Report.md\" §7)", () => {
     expect(notifyAdmin).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("record — the rail (migration 20261025090100)", () => {
+  it("stamps network and the EVM chain id when no network is named, as every event was", async () => {
+    await record({ name: "402_issued", listingId: "l1" });
+    expect(mock.rows("event")[0]).toMatchObject({ network: "eip155:84532", chain_id: 84532 });
+  });
+
+  it("stamps a Stellar event with its network, a null chain_id, and the buyer's strkey intact", async () => {
+    const G = "GDVEU3DD4KOFECV66VIHWEZOYX4ZKR3WV27L464SIIPOU2IUI3JCZA57";
+    await record({ name: "settled", listingId: "l1", buyerAddress: G, network: "stellar:testnet" });
+    expect(mock.rows("event")[0]).toMatchObject({ network: "stellar:testnet", chain_id: null, buyer_address: G });
+    // An EVM buyer is still stored lower-case.
+    await record({ name: "settled", listingId: "l1", buyerAddress: "0xAAaAAAaAAaaAaaAaAaAAAAaAaAaAaAAAAaaAAaAa" });
+    expect(mock.rows("event")[1].buyer_address).toBe("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+  });
+
+  it("drops a Stellar address from an alert's details the way it drops an EVM one (FR-40)", async () => {
+    await record({ name: "release_compromised", listingId: "l1", props: { version: "1.0.0", wallet: "GDVEU3DD4KOFECV66VIHWEZOYX4ZKR3WV27L464SIIPOU2IUI3JCZA57" } });
+    const event = vi.mocked(notifyAdmin).mock.calls[0][0];
+    expect(JSON.stringify(event)).not.toContain("GDVEU3DD");
+  });
+});

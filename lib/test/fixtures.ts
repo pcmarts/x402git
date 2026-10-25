@@ -30,7 +30,10 @@ export type SeedListing = {
   updatePriceMicro?: string;
   published?: boolean;
   retired?: boolean;
+  /** The identity address: an EVM `0x…` (stored lower-case) or a Stellar `G…` (kept upper-case, BUILD H5/H11). */
   payoutAddress?: string;
+  /** The creator's bound Stellar payout address (migration 20261025090100), when they have one beside the EVM identity. */
+  stellarPayoutAddress?: string | null;
   /** The hash of the creator's live `agent` key (FR-54): seeded into `api_key`. */
   apiKeyHash?: string;
   releases?: SeedRelease[];
@@ -59,8 +62,13 @@ export function seedListing(mock: MockDb, input: SeedListing = {}): SeededListin
     github_user_id: null,
     onboarded_via: "api",
     wallet_mode: "linked",
-    payout_address: (input.payoutAddress ?? "0x2222222222222222222222222222222222222222").toLowerCase(),
+    payout_address: canonicalFixtureAddress(input.payoutAddress ?? "0x2222222222222222222222222222222222222222"),
     cdp_wallet_id: null,
+    stellar_payout_address: input.stellarPayoutAddress ?? null,
+    pending_stellar_payout_address: null,
+    stellar_rebind_effective_at: null,
+    stellar_payout_meta: null,
+    stellar_payout_verified_at: null,
     pending_payout_address: null,
     rebind_effective_at: null,
     abuse_contact_url: null,
@@ -141,6 +149,11 @@ export function seedListing(mock: MockDb, input: SeedListing = {}): SeededListin
   return { creatorId, listingId, owner, slug, releases, latest: passing[passing.length - 1] ?? releases[releases.length - 1] };
 }
 
+/** EVM lower-case, Stellar strkey upper-case: the stored spelling (lib/x402/stellar.ts `canonicalAddress`). */
+function canonicalFixtureAddress(address: string): string {
+  return /^[GC][A-Z2-7]{55}$/i.test(address) ? address.toUpperCase() : address.toLowerCase();
+}
+
 export type SeedPurchase = {
   listingId: string;
   releaseId: string;
@@ -155,6 +168,10 @@ export type SeedPurchase = {
   payoutId?: string | null;
   revokedAt?: string | null;
   chainId?: number;
+  /** CAIP-2 rail (20261025090100). Defaults to the EVM spelling of `chainId`. */
+  network?: string;
+  /** Token contract (20261025090100). Defaults to Base Sepolia USDC. */
+  asset?: string;
 };
 
 export function seedPurchase(mock: MockDb, input: SeedPurchase): string {
@@ -162,11 +179,14 @@ export function seedPurchase(mock: MockDb, input: SeedPurchase): string {
   const gross = BigInt(input.grossMicro ?? "9000000");
   const fee = (gross * 1000n) / 10_000n;
   const grantedAt = input.grantedAt ?? new Date(Date.now() - 30 * 86_400_000).toISOString();
+  const network = input.network ?? `eip155:${input.chainId ?? 84532}`;
+  const stellar = network.startsWith("stellar:");
   mock.rows("purchase").push({
     id,
     listing_id: input.listingId,
     release_id: input.releaseId,
-    buyer_address: input.buyer.toLowerCase(),
+    // EVM addresses are stored lower-case; a Stellar strkey is case-sensitive and stays as given (H11).
+    buyer_address: stellar ? input.buyer : input.buyer.toLowerCase(),
     all_versions: input.allVersions ?? false,
     update_price_at_purchase: input.updatePriceAtPurchase ?? "3000000",
     kind: input.kind ?? "new",
@@ -181,8 +201,11 @@ export function seedPurchase(mock: MockDb, input: SeedPurchase): string {
     payout_id: input.payoutId ?? null,
     revoked_at: input.revokedAt ?? null,
     // Base Sepolia, matching the X402_NETWORK the tests set. The sweep queries are
-    // chain-scoped (20260906010000), so a row without this is invisible to them.
-    chain_id: input.chainId ?? 84532,
+    // chain-scoped (20260906010000) and network-scoped (20261025090100), so a row
+    // without these is invisible to them. `chain_id` is null on Stellar.
+    chain_id: stellar ? null : input.chainId ?? 84532,
+    network,
+    asset: input.asset ?? (stellar ? "CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA" : "0x036CbD53842c5426634e7929541eC2318f3dCF7e"),
   });
   return id;
 }

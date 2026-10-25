@@ -75,12 +75,12 @@ const FLOW: { who: "You" | "Platform" | "Buyer"; event: string; note: string }[]
   {
     who: "Buyer",
     event: "Pays over x402",
-    note: "One signed USDC authorization for the exact price. No account to make, no card to enter, no checkout page.",
+    note: "One signed payment for the exact price — USDC on Base, or USDT0 on Stellar. No account to make, no card to enter, no checkout page.",
   },
   {
     who: "Platform",
-    event: "Settles on Base",
-    note: "The payment lands on chain, and only then is access granted. The transaction is the receipt.",
+    event: "Settles on chain",
+    note: "The payment lands on Base or on Stellar, and only then is access granted. The transaction is the receipt.",
   },
   {
     who: "Buyer",
@@ -97,7 +97,7 @@ const FLOW: { who: "You" | "Platform" | "Buyer"; event: string; note: string }[]
 /** The x402 exchange, as a person reads it. Four lines and no JSON. */
 const EXCHANGE: { turn: "Request" | "Answer"; line: string }[] = [
   { turn: "Request", line: "GET the repository" },
-  { turn: "Answer", line: "402 Payment Required · $9.00 in USDC on Base" },
+  { turn: "Answer", line: "402 Payment Required · $9.00 in USDC on Base or USDT0 on Stellar" },
   { turn: "Request", line: "GET the repository, with the payment signed" },
   { turn: "Answer", line: "200 OK · download link, good for five minutes" },
 ];
@@ -136,7 +136,7 @@ const BUY: Row[] = [
   },
   {
     name: "Pay with your wallet",
-    body: "Open a listing, read what is inside, press buy. Your wallet signs one authorization for the exact amount in USDC on Base. There is no account to make and no card to enter.",
+    body: "Open a listing, read what is inside, press buy. Your wallet signs one payment for the exact amount: USDC on Base from the page, or USDT0 on Stellar from the command line. There is no account to make and no card to enter.",
   },
   {
     name: "Download",
@@ -202,8 +202,8 @@ const FEES: Row[] = [
     body: "Your share of a sale sweeps to your wallet seven days after it settles. That window is the only time this platform holds money you have earned, and it exists so a takedown refund has somewhere to come from.",
   },
   {
-    name: "USDC on Base",
-    body: "Prices are in dollars and settle in USDC on the Base network. Gas is sponsored, so neither side needs to hold ETH to transact.",
+    name: "USDC on Base, USDT0 on Stellar",
+    body: "Prices are in dollars and settle in USDC on Base or USDT0 on Stellar, whichever the creator can be paid in. Network fees are sponsored on both, so neither side needs to hold ETH or XLM to transact.",
   },
   {
     name: "What that adds up to",
@@ -465,8 +465,8 @@ export default async function HowItWorksPage() {
               <div>
                 <dt>No accounts</dt>
                 <dd className="written">
-                  The payment is the identity. A buyer needs a wallet with USDC
-                  in it and nothing else — no sign-up, no card, no checkout —
+                  The payment is the identity. A buyer needs a wallet with dollars
+                  in it (USDC on Base, USDT0 on Stellar) and nothing else — no sign-up, no card, no checkout —
                   which is why an agent can buy here without a person.
                 </dd>
               </div>

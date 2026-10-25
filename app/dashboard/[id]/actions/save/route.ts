@@ -75,12 +75,23 @@ export const POST = handle(async (req: Request, ctx: { params: Promise<{ id: str
     });
   }
 
-  const body: Record<string, string> = {
+  const body: Record<string, string | boolean> = {
     price_micro: micro.serialize(priceMicro),
     update_price_micro: micro.serialize(updateMicro),
   };
   if (description) body.description = description;
   if (triggerHint) body.trigger_hint = triggerHint;
+
+  // Open releases (25 Oct 2026). The checkbox is always sent — an unticked box posts
+  // nothing, and "leave it alone" would make it impossible to turn off. The URL and the
+  // day are sent only when filled, like the two text fields: the API refuses an open
+  // release with either missing, and names the field. The day crosses as `YYYY-MM-DD`;
+  // the service reads it as midnight UTC, or keeps an instant already set on that day.
+  body.open_release = form.get("open_release") === "1";
+  const publicRepoUrl = String(form.get("public_repo_url") ?? "").trim();
+  const opensOn = String(form.get("next_opens_at") ?? "").trim();
+  if (publicRepoUrl) body.public_repo_url = publicRepoUrl;
+  if (opensOn) body.next_opens_at = opensOn;
 
   const result = await creatorApi<{ description?: string | null; trigger_hint?: string | null }>({
     method: "PATCH",

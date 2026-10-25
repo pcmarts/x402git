@@ -54,6 +54,17 @@ export default async function PurchasesPage() {
 
         <Purchases chainName={chain.name} />
 
+        {/* Stellar buyers re-download from the command line at the event (25 Oct 2026,
+            BATTLE-TEST finding 23): the wallet button above speaks to EVM wallets only,
+            and a Freighter row is a follow-up. Server-rendered, so it is true with
+            script off and to an agent reading this page. */}
+        <p className="written measure">
+          <small className="muted">
+            Bought on Stellar? Re-download from the command line: <code>npx x402git-stellar fetch &lt;owner&gt;/&lt;slug&gt;</code>. It signs with
+            the same Stellar key that paid.
+          </small>
+        </p>
+
         {/* The other door, as /signin and the listing page hand it over: a prompt to paste
             and the agents it is written for. The buyer whose agent paid never had a browser
             wallet, so the button above cannot reach that key and the agent has to ask.
