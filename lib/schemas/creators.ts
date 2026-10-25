@@ -98,6 +98,13 @@ export const UpdateCreatorRequest = z
   .object({
     payout_address: AnyAddress.optional(),
     /**
+     * An EIP-191 `address_proof` challenge signed by `payout_address` itself. Only for a
+     * Stellar-only account adding an EVM address (JOURNEYS C4): with it, `step_up` from the
+     * bound G… and `confirm_address`, the EVM address is live at once and the G… stays the
+     * Stellar payout address. Without it, a `payout_address` change waits 48 hours.
+     */
+    payout_proof: SignedChallenge.optional(),
+    /**
      * Add or change the Stellar payout address (JOURNEYS C3, C5). Needs `step_up` from the
      * identity address (minted with `new_payout_address=<this G…>`), `stellar_proof` from
      * the new account itself, and `confirm_address`. An addition is live at once; a change
@@ -108,7 +115,7 @@ export const UpdateCreatorRequest = z
     stellar_payout_address: StellarAccount.optional(),
     /** A SEP-53 `address_proof` challenge signed by `stellar_payout_address` itself. */
     stellar_proof: SignedChallenge.optional(),
-    /** Type-to-confirm: the whole `stellar_payout_address`, or its last six characters. */
+    /** Type-to-confirm: the whole address being added (`stellar_payout_address`, or `payout_address` with `payout_proof`), or its last six characters. */
     confirm_address: z.string().min(1).max(64).optional(),
     abuse_contact_url: HttpsUrl.nullable().optional(),
     abuse_contact_email: Email.nullable().optional(),

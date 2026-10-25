@@ -432,5 +432,163 @@ export function StellarWallet(props: StellarProps) {
   );
 }
 
+/**
+ * JOURNEYS C4, the mirror of `StellarWallet` in "add" mode: a Stellar-only creator adds an
+ * EVM address. The EVM wallet proves the new `0x…`, Freighter signs off from the bound
+ * `G…` with a challenge naming it, then type-to-confirm. Live at once, like C3.
+ */
+export function EvmWallet({ action, networkPassphrase, identity }: { action: string; networkPassphrase: string; identity: string }) {
+  const [mounted, setMounted] = useState(false);
+  const [busy, setBusy] = useState<null | "evm" | "step_up">(null);
+  const [error, setError] = useState<string | null>(null);
+  const [noEvmWallet, setNoEvmWallet] = useState(false);
+  const [noFreighter, setNoFreighter] = useState(false);
+  const [proved, setProved] = useState<string | null>(null);
+  const [steppedUp, setSteppedUp] = useState(false);
+  const [confirm, setConfirm] = useState("");
+  const alive = useRef(true);
+  const formRef = useRef<HTMLFormElement>(null);
+
+  useEffect(() => {
+    alive.current = true;
+    setMounted(true);
+    return () => {
+      alive.current = false;
+    };
+  }, []);
+
+  const setField = useCallback((name: string, value: string) => {
+    const el = formRef.current?.elements.namedItem(name) as HTMLInputElement | null;
+    if (el) el.value = value;
+  }, []);
+
+  const connectAndProve = useCallback(async () => {
+    setError(null);
+    setBusy("evm");
+    try {
+      const { detectProvider } = await import("@/lib/web/wallet-checkout");
+      const provider = detectProvider(window as unknown as { ethereum?: Eip1193Provider });
+      if (!provider) {
+        setNoEvmWallet(true);
+        return;
+      }
+      const { connectAndSign } = await import("@/lib/web/wallet-bind");
+      const signed = await connectAndSign(provider, { fetch: window.fetch.bind(window), baseUrl: "" });
+      if (!alive.current) return;
+      setField("evm_address", signed.address);
+      setField("proof_nonce", signed.nonce);
+      setField("proof_signature", signed.signature);
+      // A different wallet after a sign-off: the sign-off named the old address, so it is spent.
+      if (proved && proved.toLowerCase() !== signed.address.toLowerCase()) setSteppedUp(false);
+      setProved(signed.address);
+    } catch (e) {
+      const { mapThrown } = await import("@/lib/web/wallet-checkout");
+      if (alive.current) setError(mapThrown(e).message);
+    } finally {
+      if (alive.current) setBusy(null);
+    }
+  }, [proved, setField]);
+
+  const stepUp = useCallback(async () => {
+    if (!proved) return;
+    setError(null);
+    setBusy("step_up");
+    try {
+      // FR-5: the Stellar wallet bound now authorises the addition, and its challenge names
+      // the incoming 0x… so the signature is good for this one change and nothing else.
+      const { nonce, message } = await fetchChallenge(identity, "step_up", proved);
+      const loaded = await loadFreighter();
+      if ("missing" in loaded) {
+        setNoFreighter(true);
+        return;
+      }
+      await requireNetwork(loaded.api, networkPassphrase);
+      const signature = await freighterSign(loaded.api, identity, message, networkPassphrase);
+      if (!alive.current) return;
+      setField("step_up_nonce", nonce);
+      setField("step_up_signature", signature);
+      setSteppedUp(true);
+    } catch (e) {
+      if (alive.current) setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      if (alive.current) setBusy(null);
+    }
+  }, [identity, networkPassphrase, proved, setField]);
+
+  if (!mounted) return null;
+
+  const confirmOk = confirm.trim().length === 6 || (proved !== null && confirm.trim().toLowerCase() === proved.toLowerCase());
+  const ready = proved !== null && steppedUp && confirmOk;
+
+  return (
+    <div className="buy-state">
+      <form method="post" action={action} ref={formRef}>
+        <input type="hidden" name="evm_address" />
+        <input type="hidden" name="proof_nonce" />
+        <input type="hidden" name="proof_signature" />
+        <input type="hidden" name="step_up_nonce" />
+        <input type="hidden" name="step_up_signature" />
+
+        <p className="actions">
+          <button type="button" data-variant={proved ? undefined : "primary"} onClick={connectAndProve} disabled={busy !== null}>
+            {busy === "evm" ? "Waiting for your wallet…" : proved ? "Use a different EVM wallet" : "1. Connect EVM wallet and sign"}
+          </button>
+          <button type="button" data-variant={proved && !steppedUp ? "primary" : undefined} onClick={stepUp} disabled={busy !== null || proved === null || steppedUp}>
+            {busy === "step_up" ? "Waiting for Freighter…" : steppedUp ? "Signed off" : "2. Sign with your Stellar wallet (Freighter)"}
+          </button>
+        </p>
+        {proved ? (
+          <p className="written wrap">
+            EVM wallet: <span className="computed">{proved}</span>
+          </p>
+        ) : null}
+
+        <div className="field">
+          <label htmlFor="confirm_evm_address">3. Type the last six characters of the EVM address to confirm</label>
+          <input
+            id="confirm_evm_address"
+            name="confirm_address"
+            value={confirm}
+            onChange={(e) => setConfirm(e.target.value)}
+            maxLength={42}
+            autoComplete="off"
+            spellCheck={false}
+            placeholder={proved ? proved.slice(-6) : "······"}
+            disabled={proved === null}
+          />
+        </div>
+
+        <p className="actions">
+          <button type="submit" data-variant="primary" disabled={!ready}>
+            Add the EVM wallet
+          </button>
+        </p>
+      </form>
+      <p role="status" className="buy-status">
+        {proved === null && !noEvmWallet ? "Your EVM wallet proves the new address; then Freighter signs off from the wallet you are paid at now. Nothing is sent on-chain." : null}
+      </p>
+      {noEvmWallet ? (
+        <p className="written" role="status">
+          No EVM wallet in this browser.{" "}
+          <a href="https://metamask.io/download/" rel="noopener noreferrer" target="_blank">
+            Install MetaMask
+          </a>{" "}
+          or another wallet, then reload this page.
+        </p>
+      ) : null}
+      {noFreighter ? (
+        <p className="written" role="status">
+          Freighter is not in this browser, or is locked. Unlock the Freighter holding <span className="computed">{identity}</span>, then try again.
+        </p>
+      ) : null}
+      {error ? (
+        <p role="alert" data-status="fail" className="written">
+          {error}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
 /** FR-5 / §7.6, spelled for a button. Kept as a string so this client file imports nothing server-only. */
 const REBIND_DELAY_HOURS_LABEL = "48h";

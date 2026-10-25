@@ -14,6 +14,12 @@
  * is live at once — both keys signed, and nothing already bound is redirected. Changing
  * the Stellar address keeps the 48-hour delay. The account must hold an authorised
  * trustline in the configured asset (`lib/auth/stellar-binding.ts`) or nothing is written.
+ *
+ * The mirror (C4): a Stellar-only account adds an EVM address with `payout_address` plus
+ * `payout_proof` from the new `0x…`, the step-up from the bound `G…` and type-to-confirm.
+ * Also live at once. The EVM address becomes the identity and the `G…` stays the Stellar
+ * payout address, which is the row an EVM creator who added Stellar (C3) has, and the row
+ * the 48-hour rebind without a proof already ends in when the sweep promotes it.
  */
 
 import { type NextRequest, NextResponse } from "next/server";
@@ -29,6 +35,7 @@ import { holdbackDays, platformFeeBps } from "@/lib/env";
 import { ApiError, handle } from "@/lib/errors";
 import { CreatorMeResponse, UpdateCreatorRequest, UpdateCreatorResponse } from "@/lib/schemas";
 import { screen } from "@/lib/screening";
+import { addressFamily } from "@/lib/x402/stellar";
 
 export const dynamic = "force-dynamic";
 
@@ -50,11 +57,36 @@ export const PATCH = handle(async (req: NextRequest) => {
   const rebindTo = body.payout_address !== undefined ? normaliseAddress(body.payout_address) : null;
   const stellarTo = body.stellar_payout_address !== undefined ? normaliseAddress(body.stellar_payout_address) : null;
 
+  // JOURNEYS C4: the only `payout_address` that can land at once is an EVM address added
+  // to a Stellar-only account, proved by its own signature. Anything else is a change.
+  const identityFamily = addressFamily(creator.payout_address);
+  const addingEvm = rebindTo !== null && body.payout_proof !== undefined;
+  if (addingEvm && (identityFamily !== "stellar" || addressFamily(rebindTo) !== "evm")) {
+    throw new ApiError("invalid_request", {
+      message: "payout_proof is only for adding an EVM address to a Stellar-only account. To change the EVM address, send payout_address alone; it takes effect after 48 hours.",
+      details: { field: "payout_proof" },
+    });
+  }
+  // An EVM account keeps an EVM payout_address: moving it to a G… would take Base off every
+  // listing. A Stellar wallet is `stellar_payout_address`.
+  if (rebindTo !== null && identityFamily === "evm" && addressFamily(rebindTo) !== "evm") {
+    throw new ApiError("invalid_request", {
+      message: "This account is paid on Base at an EVM address, so payout_address must stay an EVM address. Add or change a Stellar wallet with stellar_payout_address.",
+      details: { field: "payout_address" },
+    });
+  }
+
   // Type-to-confirm comes before any signature is spent: a typo is the cheapest thing to
   // bounce on, and both nonces stay usable for the retry.
   if (stellarTo !== null && !confirmsAddress(body.confirm_address, stellarTo)) {
     throw new ApiError("invalid_request", {
       message: "confirm_address must be the Stellar address being bound, or its last six characters.",
+      details: { field: "confirm_address" },
+    });
+  }
+  if (addingEvm && !confirmsAddress(body.confirm_address, rebindTo)) {
+    throw new ApiError("invalid_request", {
+      message: "confirm_address must be the EVM address being added, or its last six characters.",
       details: { field: "confirm_address" },
     });
   }
@@ -96,15 +128,35 @@ export const PATCH = handle(async (req: NextRequest) => {
 
   if (rebindTo !== null) {
     const next = rebindTo;
-    if (dbAddress(next) === creator.payout_address.toLowerCase()) {
+    if (dbAddress(next) === dbAddress(creator.payout_address)) {
       throw new ApiError("invalid_request", { message: "That is already the bound payout address." });
+    }
+    if (addingEvm && creator.pending_payout_address) {
+      throw new ApiError("invalid_request", { message: "A payout address change is already queued. Add the EVM address after it takes effect." });
+    }
+    if (addingEvm && body.payout_proof) {
+      // C4: the new EVM address proves itself, as the G… does in C3.
+      try {
+        await consumeChallenge(next, body.payout_proof.nonce, body.payout_proof.signature, "address_proof");
+      } catch (e) {
+        throw new ApiError("payout_address_unverified", { message: e instanceof ApiError ? e.message : "The EVM proof could not be verified." });
+      }
     }
     // FR-38: screen the incoming address before it can ever receive a sweep.
     const screening = await screen(next, "bind");
     if (screening.hit) throw new ApiError("sanctioned_counterparty");
 
-    patch.pending_payout_address = dbAddress(next);
-    patch.rebind_effective_at = effectiveAt.toISOString();
+    if (addingEvm) {
+      patch.payout_address = dbAddress(next);
+      patch.pending_payout_address = null;
+      patch.rebind_effective_at = null;
+      // The G… that was the identity keeps being paid on Stellar. A web sign-up already
+      // wrote it here (BUILD §2.5); a row seeded without it would otherwise lose the rail.
+      if (!creator.stellar_payout_address) patch.stellar_payout_address = creator.payout_address;
+    } else {
+      patch.pending_payout_address = dbAddress(next);
+      patch.rebind_effective_at = effectiveAt.toISOString();
+    }
   }
 
   if (body.abuse_contact_url !== undefined || body.abuse_contact_email !== undefined) {

@@ -183,12 +183,13 @@ export function stellarBindPatch(
   };
 }
 
-/** Type-to-confirm: the whole address, or its last six characters, case-insensitively. */
+/** Type-to-confirm: the whole address, or its last six characters, case-insensitively (an EVM address is checksummed mixed-case). */
 export function confirmsAddress(confirm: string | null | undefined, address: string): boolean {
   if (!confirm) return false;
   const typed = confirm.trim().toUpperCase();
   if (typed.length === 0) return false;
-  return typed === address || (typed.length === 6 && address.endsWith(typed));
+  const target = address.toUpperCase();
+  return typed === target || (typed.length === 6 && target.endsWith(typed));
 }
 
 /** The `details.reason` off a refusal, when there is one — for a page to branch on. */

@@ -211,6 +211,75 @@ describe("PATCH /api/creators/me — changing the Stellar payout address (C5)", 
   });
 });
 
+describe("PATCH /api/creators/me — a Stellar-only creator adds an EVM address (C4)", () => {
+  /** Step-up from the bound G…, naming the incoming 0x… (FR-5 `rebindContext`). */
+  async function stellarStepUp(to: string) {
+    const challenge = await issueChallenge(G, "step_up", rebindContext(to));
+    return { nonce: challenge.nonce, signature: sep53(stellar, challenge.message) };
+  }
+  /** The new EVM address proving itself. */
+  async function evmProof(account = evm) {
+    const challenge = await issueChallenge(account.address, "address_proof");
+    return { nonce: challenge.nonce, signature: await account.signMessage({ message: challenge.message }) };
+  }
+
+  it("is live at once: the 0x… becomes payout_address and the G… stays the Stellar payout address", async () => {
+    seedCreator({ payout_address: G, stellar_payout_address: G });
+    const res = await PATCH(request("PATCH", { payout_address: evm.address, payout_proof: await evmProof(), confirm_address: evm.address.slice(-6).toLowerCase(), step_up: await stellarStepUp(evm.address) }));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.payout_address).toBe(evm.address);
+    expect(body.pending_payout_address).toBeNull();
+    expect(body.rebind_effective_at).toBeNull();
+    expect(body.effective_at).toBeNull();
+    expect(body.stellar_payout_address).toBe(G);
+    expect(mock.rows("creator")[0]).toMatchObject({ payout_address: evm.address.toLowerCase(), stellar_payout_address: G });
+    expect(mock.rows("challenge").every((c) => c.used_at !== null)).toBe(true);
+  });
+
+  it("keeps the G… on the Stellar rail when the row had no stellar_payout_address", async () => {
+    seedCreator({ payout_address: G });
+    const res = await PATCH(request("PATCH", { payout_address: evm.address, payout_proof: await evmProof(), confirm_address: evm.address, step_up: await stellarStepUp(evm.address) }));
+    expect(res.status).toBe(200);
+    expect(mock.rows("creator")[0]).toMatchObject({ payout_address: evm.address.toLowerCase(), stellar_payout_address: G });
+  });
+
+  it("refuses a proof signed by another EVM key, and writes nothing", async () => {
+    seedCreator({ payout_address: G, stellar_payout_address: G });
+    const stranger = privateKeyToAccount(generatePrivateKey());
+    const challenge = await issueChallenge(evm.address, "address_proof");
+    const forged = { nonce: challenge.nonce, signature: await stranger.signMessage({ message: challenge.message }) };
+    const res = await PATCH(request("PATCH", { payout_address: evm.address, payout_proof: forged, confirm_address: evm.address.slice(-6), step_up: await stellarStepUp(evm.address) }));
+    expect(res.status).toBe(400);
+    expect((await res.json()).code).toBe("payout_address_unverified");
+    expect(mock.rows("creator")[0].payout_address).toBe(G);
+  });
+
+  it("refuses a confirm_address that does not match, before spending any nonce", async () => {
+    seedCreator({ payout_address: G, stellar_payout_address: G });
+    const res = await PATCH(request("PATCH", { payout_address: evm.address, payout_proof: await evmProof(), confirm_address: "zzzzzz", step_up: await stellarStepUp(evm.address) }));
+    expect(res.status).toBe(400);
+    expect((await res.json()).details).toMatchObject({ field: "confirm_address" });
+    expect(mock.rows("challenge").every((c) => c.used_at === null || c.used_at === undefined)).toBe(true);
+  });
+
+  it("refuses payout_proof on an account whose identity is already EVM", async () => {
+    seedCreator();
+    const next = privateKeyToAccount(generatePrivateKey());
+    const res = await PATCH(request("PATCH", { payout_address: next.address, payout_proof: await evmProof(next), confirm_address: next.address, step_up: await evmStepUp(next.address) }));
+    expect(res.status).toBe(400);
+    expect((await res.json()).details).toMatchObject({ field: "payout_proof" });
+  });
+
+  it("refuses moving an EVM account's payout_address to a G… (Base would vanish from every listing)", async () => {
+    seedCreator();
+    const res = await PATCH(request("PATCH", { payout_address: G, step_up: await evmStepUp(G) }));
+    expect(res.status).toBe(400);
+    expect((await res.json()).details).toMatchObject({ field: "payout_address" });
+    expect(mock.rows("creator")[0].pending_payout_address ?? null).toBeNull();
+  });
+});
+
 describe("GET /api/creators/me for a Stellar-only creator (test 12, finding 14)", () => {
   it("returns 200 with the G… as payout_address and the Stellar fields", async () => {
     seedCreator({ payout_address: G, stellar_payout_address: G, stellar_payout_verified_at: "2026-10-25T12:00:00.000Z" });

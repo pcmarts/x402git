@@ -22,10 +22,16 @@
  * the same challenge, signed as SEP-53. The one Stellar-only step is the trustline (C2
  * step 3): until the account has allowed the asset in Freighter, Horizon says so and this
  * page prints the exact steps, with the issuer to copy, and a Refresh.
+ *
+ * Once bound, the page is two sections, one per rail, each with its address and one
+ * action: add it (live at once, both wallets sign: C3 for Stellar, C4 for EVM) or change
+ * it (48 hours, signed by the wallet bound now: C5). A Stellar-only creator who adds an
+ * EVM wallet ends up with the EVM address as the identity and the G… as the Stellar
+ * payout address, the same row as an EVM creator who added Stellar.
  */
 
 import type { Metadata } from "next";
-import { BindWallet, StellarWallet } from "@/app/_components/bind-wallet";
+import { BindWallet, EvmWallet, StellarWallet } from "@/app/_components/bind-wallet";
 import { CopyButton } from "@/app/_components/copy-button";
 import { Notice } from "@/app/_components/notice";
 import { currentStellarPayoutAddress, inspectStellarPayoutAccount, stellarBindReason } from "@/lib/auth/stellar-binding";
@@ -86,7 +92,6 @@ export default async function WalletPage({
       <span className="computed">{value}</span>
     );
   };
-  const paidOn = (value: string) => (addressFamily(value) === "stellar" ? "Stellar" : chainName);
 
   return (
     <main>
@@ -96,31 +101,9 @@ export default async function WalletPage({
       {rail && trustline ? <TrustlineSteps address={trustline} asset={rail.asset} check={trustlineCheck} /> : null}
 
       {bound ? (
-        <>
-          <dl>
-            <dt>Payout address</dt>
-            <dd className="wrap">
-              {addressLink(bound)} <span className="muted">on {paidOn(bound)}</span>
-            </dd>
-            <dt>Mode</dt>
-            <dd>
-              {current?.creator.wallet_mode === "custodial"
-                ? "custodial — created for you at sign-up"
-                : "your own wallet, bound by signature"}
-            </dd>
-            {pending ? (
-              <>
-                <dt>Pending</dt>
-                <dd className="wrap" data-status="warn">
-                  {addressLink(pending)} — effective {formatDateTime(current?.creator.rebind_effective_at)}
-                </dd>
-              </>
-            ) : null}
-          </dl>
-          <p className="written measure">
-            Every sweep goes to this address. The ledger is on <a href="/dashboard/earnings">Earnings</a>.
-          </p>
-        </>
+        <p className="written measure">
+          Each sale is paid out on the rail it was bought on, to the wallet below for that rail. The ledger is on <a href="/dashboard/earnings">Earnings</a>.
+        </p>
       ) : (
         <p className="written measure">
           Signed in as <span className="computed">{session.github.login}</span>. One thing is missing before you have an account: an
@@ -182,17 +165,63 @@ export default async function WalletPage({
       ) : (
         <section>
           {bound ? (
-            <details>
-              <summary>
-                <span className="label">Change the payout address</span>
-                <span className="computed">{REBIND_DELAY_HOURS}h delay</span>
-              </summary>
-              <p className="written measure">
-                A change takes {REBIND_DELAY_HOURS} hours to land. Nothing announces it, so look here if you did not ask for one. Sweeps keep going to the
-                current address until then — that delay is the whole defence against someone who has taken your API key.
-              </p>
-              <AddressForm bound={bound} />
-            </details>
+            <>
+              <h2>EVM wallet, paid on {chainName}</h2>
+              {boundFamily === "evm" ? (
+                <>
+                  <dl>
+                    <dt>Paid in USDC at</dt>
+                    <dd className="wrap">{addressLink(bound)}</dd>
+                    {pending ? (
+                      <>
+                        <dt>Pending</dt>
+                        <dd className="wrap" data-status="warn">
+                          {addressLink(pending)} — effective {formatDateTime(current?.creator.rebind_effective_at)}
+                        </dd>
+                      </>
+                    ) : null}
+                  </dl>
+                  <details>
+                    <summary>
+                      <span className="label">Change the EVM wallet</span>
+                      <span className="computed">{REBIND_DELAY_HOURS}h delay</span>
+                    </summary>
+                    <p className="written measure">
+                      A change takes {REBIND_DELAY_HOURS} hours to land. Nothing announces it, so look here if you did not ask for one. Payouts on {chainName} keep going to the
+                      current address until then — that delay is the whole defence against someone who has taken your API key.
+                    </p>
+                    <AddressForm bound={bound} />
+                  </details>
+                </>
+              ) : (
+                <>
+                  {pending ? (
+                    <dl>
+                      <dt>Pending</dt>
+                      <dd className="wrap" data-status="warn">
+                        {addressLink(pending)} — effective {formatDateTime(current?.creator.rebind_effective_at)}
+                      </dd>
+                    </dl>
+                  ) : (
+                    <p className="written measure">Agents paying on {chainName} can&apos;t buy your listings yet. Add an EVM wallet to accept USDC.</p>
+                  )}
+                  {rail && !pending ? (
+                    <details>
+                      <summary>
+                        <span className="label">Add an EVM wallet</span>
+                        <span className="computed">live at once</span>
+                      </summary>
+                      <p className="written measure">
+                        Your EVM wallet (MetaMask, Coinbase Wallet…) signs for the new address, then Freighter signs off from the Stellar wallet you are paid at now,
+                        then you type the last six characters. Stellar payouts keep going where they go now. From then on, changing either wallet is signed off by
+                        the EVM wallet.
+                      </p>
+                      <EvmWallet action="/dashboard/wallet/evm" networkPassphrase={rail.passphrase} identity={bound} />
+                    </details>
+                  ) : null}
+                </>
+              )}
+            </>
           ) : (
             <>
               <h2>Bind a payout address</h2>
@@ -357,22 +386,24 @@ function stellarExplorerUrl(network: string, address: string): string {
  * Either family: an EVM `0x…` or a Stellar `G…`.
  */
 function AddressForm({ bound }: { bound: string | null }) {
+  // A change is to the EVM wallet only (the page offers it only when the bound address is
+  // EVM); the Stellar wallet has its own section. The API refuses a cross-rail change too.
   return (
     <form method="post" action="/dashboard/wallet/challenge">
       <div className="field">
-        <label htmlFor="address">{bound ? "New address" : "Address"}</label>
+        <label htmlFor="address">{bound ? "New EVM address" : "Address"}</label>
         <input
           id="address"
           name={bound ? "new_address" : "address"}
           required
-          pattern="(0x[0-9a-fA-F]{40}|G[A-Z2-7]{55})"
-          placeholder="0x… or G…"
+          pattern={bound ? "0x[0-9a-fA-F]{40}" : "(0x[0-9a-fA-F]{40}|G[A-Z2-7]{55})"}
+          placeholder={bound ? "0x…" : "0x… or G…"}
           spellCheck={false}
           autoComplete="off"
         />
         <small>
           {bound
-            ? "Where payouts should go from now on. The next step asks the address bound now to sign off on the change."
+            ? "Where payouts on Base should go from now on. The next step asks the address bound now to sign off on the change."
             : "An EVM address paid on Base, or a Stellar account (G…) paid on Stellar, that you can sign from. The next step gives you a challenge to sign, which is how we know it is yours."}
         </small>
       </div>
