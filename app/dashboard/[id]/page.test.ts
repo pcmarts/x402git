@@ -49,9 +49,9 @@ afterEach(() => {
   resetEnv();
 });
 
-async function render(seed: Parameters<typeof seedListing>[1]): Promise<string> {
+async function render(seed: Parameters<typeof seedListing>[1], creatorPatch: Partial<CreatorRow> = {}): Promise<string> {
   const seeded = seedListing(mock, seed);
-  state.creator = mock.rows("creator").find((c) => c.id === seeded.creatorId) as unknown as CreatorRow;
+  state.creator = Object.assign(mock.rows("creator").find((c) => c.id === seeded.creatorId) as unknown as CreatorRow, creatorPatch);
   const page = await ListingDashboardPage({ params: Promise.resolve({ id: seeded.listingId }), searchParams: Promise.resolve({}) });
   return renderToStaticMarkup(page);
 }
@@ -104,7 +104,27 @@ describe("/dashboard/:id — Where you get paid", () => {
     expect(stellar).toContain(`<code>${STELLAR_CREATOR.slice(0, 6)}…${STELLAR_CREATOR.slice(-4)}</code>`);
     expect(box(stellar)).toMatchObject({ value: "stellar:testnet", checked: true, disabled: false });
 
-    expect(html).toContain("Buyers see only the offered ways to pay. Each pays out to the address beside it.");
+    expect(html).toContain("Buyers see only the offered ways to pay. Addresses change on <a href=\"/dashboard/wallet\">the wallet page</a>.");
+  });
+
+  it("is the only place on the page that names an address: the right-hand box has no 'Paid to'", async () => {
+    const html = await render({ payoutAddress: EVM_PAYOUT, stellarPayoutAddress: STELLAR_CREATOR });
+    expect(html).not.toContain("Paid to");
+    expect(html).not.toContain("Change the address");
+    // The EVM address appears once per EVM row (Base, Arbitrum) and nowhere else.
+    expect(html.split("0x7ae2…5019").length - 1).toBe(2);
+  });
+
+  it("prints a pending 48-hour move under the address it replaces, in every row of that family", async () => {
+    const html = block(
+      await render(
+        { payoutAddress: EVM_PAYOUT, stellarPayoutAddress: STELLAR_CREATOR },
+        { pending_payout_address: "0x1111111111111111111111111111111111112222", rebind_effective_at: "2026-10-27T21:00:00.000Z" },
+      ),
+    );
+    expect(row(html, "eip155:84532")).toContain("Moving to 0x1111…2222 on ");
+    expect(row(html, "eip155:42161")).toContain("Moving to 0x1111…2222 on ");
+    expect(row(html, "stellar:testnet")).not.toContain("Moving to");
   });
 
   it("ticks only the offered rails when the listing has chosen", async () => {

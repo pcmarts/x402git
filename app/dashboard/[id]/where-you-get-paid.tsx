@@ -21,6 +21,11 @@
  * `offered_networks_shown` tells the save route the rows were on screen at all. A browser
  * posts nothing for an unticked box, so without it "every box unticked" and "a form from
  * before this block" would arrive as the same empty POST.
+ *
+ * Later that evening the right-hand box lost its "Paid to" address (founder: two places
+ * saying where money lands is one too many), so these rows are now the only place on the
+ * page that names an address, and a pending move ("Moving to … on …", the 48-hour
+ * rebind) prints under the address it replaces, in every row of that family.
  */
 
 import { RailChip } from "@/app/_components/rail-marks";
@@ -45,7 +50,18 @@ export function isOffered(rail: PayoutRail, offered: readonly string[] | null): 
   return rail.address !== null && (offered === null || offered.includes(rail.network));
 }
 
-export function WhereYouGetPaid({ rails, offered }: { rails: PayoutRail[]; offered: readonly string[] | null }) {
+/** A rebind in its 48-hour window, already shortened and formatted by the server. */
+export type PendingMove = { address: string; at: string };
+
+export function WhereYouGetPaid({
+  rails,
+  offered,
+  pending = { evm: null, stellar: null },
+}: {
+  rails: PayoutRail[];
+  offered: readonly string[] | null;
+  pending?: { evm: PendingMove | null; stellar: PendingMove | null };
+}) {
   return (
     <section id="get-paid">
       <h2>Where you get paid</h2>
@@ -62,6 +78,7 @@ export function WhereYouGetPaid({ rails, offered }: { rails: PayoutRail[]; offer
           {rails.map((rail) => {
             const id = `offer-${rail.network.replace(/[^a-z0-9]+/gi, "-")}`;
             const name = `${rail.symbol} on ${chainLabel(rail.network)}`;
+            const move = pending[rail.family];
             return (
               <tr key={rail.network} data-network={rail.network}>
                 <td>
@@ -69,7 +86,17 @@ export function WhereYouGetPaid({ rails, offered }: { rails: PayoutRail[]; offer
                 </td>
                 <td className="wrap">
                   {rail.address ? (
-                    <code>{shortAddress(rail.address)}</code>
+                    <>
+                      <code>{shortAddress(rail.address)}</code>
+                      {move ? (
+                        <>
+                          <br />
+                          <small className="muted" data-status="warn">
+                            Moving to {move.address} on {move.at}
+                          </small>
+                        </>
+                      ) : null}
+                    </>
                   ) : (
                     <>
                       <span className="muted">No {rail.family === "evm" ? "EVM" : "Stellar"} wallet yet</span>
@@ -95,7 +122,9 @@ export function WhereYouGetPaid({ rails, offered }: { rails: PayoutRail[]; offer
         </tbody>
       </table>
       <p className="written note">
-        <small className="muted">Buyers see only the offered ways to pay. Each pays out to the address beside it.</small>
+        <small className="muted">
+          Buyers see only the offered ways to pay. Addresses change on <a href="/dashboard/wallet">the wallet page</a>.
+        </small>
       </p>
     </section>
   );

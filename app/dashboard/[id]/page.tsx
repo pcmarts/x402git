@@ -675,9 +675,6 @@ export default async function ListingDashboardPage({
             priceMicro={price.toString()}
             updatePriceMicro={updatePrice.toString()}
             feeBps={PLATFORM_FEE_BPS.toString()}
-            payoutAddress={shortAddress(creator.payout_address)}
-            pendingAddress={creator.pending_payout_address ? shortAddress(creator.pending_payout_address) : null}
-            pendingAt={creator.pending_payout_address ? formatDateTime(creator.rebind_effective_at) : null}
             formId="listing-form"
           />
         </aside>
@@ -843,7 +840,18 @@ export default async function ListingDashboardPage({
 
           {/* Where you get paid (25 Oct 2026): which rails this listing is sold on, each
               beside the address it pays out to. In the form, so Save carries it. */}
-          <WhereYouGetPaid rails={payoutRails} offered={offeredNetworks} />
+          <WhereYouGetPaid
+            rails={payoutRails}
+            offered={offeredNetworks}
+            pending={{
+              evm: creator.pending_payout_address
+                ? { address: shortAddress(creator.pending_payout_address), at: formatDateTime(creator.rebind_effective_at) }
+                : null,
+              stellar: creator.pending_stellar_payout_address
+                ? { address: shortAddress(creator.pending_stellar_payout_address), at: formatDateTime(creator.stellar_rebind_effective_at ?? null) }
+                : null,
+            }}
+          />
 
           {/* Open releases (25 Oct 2026, HackMeridian; docs/HACKMERIDIAN-STRATEGY.md §6a;
               reshaped that evening on the founder's direction). Inside the one form, so the

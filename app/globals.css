@@ -5014,22 +5014,6 @@ section.terminal h2 {
   line-height: 1.5;
 }
 
-/* The bound payout address, whole. Not truncated and not behind a copy control: this
-   is the one address on the site a creator never pastes anywhere, and the only useful
-   thing to do with it is read it against the wallet they hold. */
-
-.payout-box .payout-address {
-  margin: 0;
-  max-width: none;
-}
-
-.payout-box .payout-address code {
-  display: block;
-  padding: var(--space-2) var(--space-3);
-  line-height: var(--leading-listing);
-  overflow-wrap: anywhere;
-}
-
 /* The right column ------------------------------------------------------------
    Where this listing stands, the two acts available on it, and what a sale pays.
    Everything in it is a verdict or a control; nothing in it is edited. Unboxed down to

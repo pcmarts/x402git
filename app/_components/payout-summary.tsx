@@ -22,6 +22,11 @@
  * The arithmetic is the shipping arithmetic: `splitFee` from `lib/core/fee.ts` (which
  * `lib/core/access.ts` re-exports and settlement calls) and `formatAmount` from
  * `money-format.ts`. Nothing here computes money a second way.
+ *
+ * The box used to end with "Paid to" and the bound address. That left on 25 Oct 2026
+ * (founder: "confusing as we also have 'Where you get paid' in the main body"): a creator
+ * can now hold two payout addresses, one per rail family, and the rows in the form name
+ * each beside the rail it serves. This box is the money; the rows are where it lands.
  */
 
 import { useEffect, useState } from "react";
@@ -33,16 +38,11 @@ type Props = {
   priceMicro: string;
   updatePriceMicro: string;
   feeBps: string;
-  /** Already abbreviated by the server. The full address is on the wallet page. */
-  payoutAddress: string;
-  pendingAddress: string | null;
-  /** Already formatted; the client never renders a date. */
-  pendingAt: string | null;
   /** The `id` of the form whose price fields this box watches. */
   formId: string;
 };
 
-export function PayoutSummary({ priceMicro, updatePriceMicro, feeBps, payoutAddress, pendingAddress, pendingAt, formId }: Props) {
+export function PayoutSummary({ priceMicro, updatePriceMicro, feeBps, formId }: Props) {
   const saved = { price: BigInt(priceMicro), update: BigInt(updatePriceMicro) };
   const [live, setLive] = useState(saved);
 
@@ -93,35 +93,6 @@ export function PayoutSummary({ priceMicro, updatePriceMicro, feeBps, payoutAddr
         <p className="written free">Free to anyone who already bought. Every later release is included in what they paid.</p>
       ) : (
         <Split gross={live.update} bps={bps} percent={percent} payer="Holder pays" />
-      )}
-
-      {/* A listing that charges nothing pays nothing, so the wallet is not part of
-          these terms (2026-08-31, founder). Live like the rest of the box: it leaves
-          when both fields read $0 and returns with the first real price. The address
-          itself still lives on /dashboard/wallet. */}
-      {live.price === 0n && live.update === 0n ? null : (
-        <>
-          <h2>Paid to</h2>
-          <p className="payout-address">
-            <code>{payoutAddress}</code>
-          </p>
-          {pendingAddress ? (
-            <p className="note" data-status="warn">
-              <small>
-                Moving to {pendingAddress} on {pendingAt}.
-              </small>
-            </p>
-          ) : null}
-          {/* The sentence that stood here went on 2026-09-01 (founder). The link stays:
-              it is the only way to the page that rebinds the address, and NG10's promise
-              — one bound address, no `to` parameter — is enforced in `access.ts` and
-              stated on that page, not re-asserted beside every price. */}
-          <p className="written note">
-            <small className="muted">
-              <a href="/dashboard/wallet">Change the address</a>
-            </small>
-          </p>
-        </>
       )}
     </div>
   );
