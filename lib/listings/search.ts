@@ -155,7 +155,9 @@ export async function searchListings(input: SearchInput = {}): Promise<SearchRes
         matched,
         listing_url: `${base}/${l.handle}/${l.slug}`,
         manifest_url: `${base}/api/label/${l.handle}/${l.slug}`,
-        payment_options: paymentOptionsFor({ handle: l.handle, ...l.payee }, { slug: l.slug, price_micro: l.priceMicro.toString() }),
+        // The listing's own rail choice rides along (25 Oct 2026), so a search result
+        // names the same networks the 402 will.
+        payment_options: paymentOptionsFor({ handle: l.handle, ...l.payee }, { slug: l.slug, price_micro: l.priceMicro.toString(), offered_networks: l.offeredNetworks }),
       },
     });
   }

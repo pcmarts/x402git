@@ -25,6 +25,8 @@ export type LiveListing = {
   description: string | null;
   /** The creator's "use this when…" line (self-reported), or null. */
   triggerHint: string | null;
+  /** The listing's own choice of rails (migration 20261025213000), or null for every reachable one. */
+  offeredNetworks: string[] | null;
   /**
    * The creator's bound addresses, as `paymentOptionsFor` reads them (25 Oct 2026): the
    * identity address (EVM `0x…` or Stellar `G…`) and the Stellar payout address, if any.
@@ -37,7 +39,7 @@ export type LiveListing = {
 export async function liveListings(): Promise<LiveListing[]> {
   const { data: listings, error } = await db()
     .from("listing")
-    .select("id, slug, creator_id, published_at, price_micro, update_price_micro, description, trigger_hint")
+    .select("id, slug, creator_id, published_at, price_micro, update_price_micro, description, trigger_hint, offered_networks")
     .not("published_at", "is", null)
     .is("retired_at", null);
   if (error || !listings?.length) return [];
@@ -68,6 +70,7 @@ export async function liveListings(): Promise<LiveListing[]> {
       updatePriceMicro: toMicro(listing.update_price_micro as string),
       description: (listing.description as string | null) ?? null,
       triggerHint: (listing.trigger_hint as string | null) ?? null,
+      offeredNetworks: Array.isArray(listing.offered_networks) ? (listing.offered_networks as string[]) : null,
       payee: { payout_address: creator.payout_address, stellar_payout_address: creator.stellar_payout_address },
     });
   }
