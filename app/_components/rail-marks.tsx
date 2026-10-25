@@ -3,9 +3,10 @@
  *
  * A buyer choosing how to pay and a creator reading where money landed both need the same
  * two facts at a glance: which token, on which chain. These are the marks for them, drawn
- * from `public/logos` (official assets: USDT0 from Tether's kit, Arbitrum from
- * arbitrum.foundation, Base from base/brand-kit), with the symbol as text where no mark is
- * held. Server components: plain `<img>`, no script, `alt=""` because the words beside the
+ * from `public/logos` (USDT0 from Tether's kit, Arbitrum from arbitrum.foundation, Stellar's
+ * rocket from its brand kit drawn in the text colour so it reads on both themes, and Base as
+ * the plain `#00F` disc the founder asked for on 25 Oct), with the symbol as text where no
+ * mark is held. Server components: plain `<img>`, no script, `alt=""` because the words beside the
  * mark carry the meaning and a screen reader should not hear "USDT0 USDT0 on Arbitrum".
  *
  * One rule: a mark never stands alone. `RailChip` always prints "<token> on <chain>" next
@@ -28,7 +29,7 @@ const CHAIN_MARKS: Record<string, string> = {
 };
 
 /** Marks we actually hold a file for; the rest fall back to text. */
-const HELD = new Set(["/logos/usdt0.svg", "/logos/arbitrum.svg", "/logos/base.svg"]);
+const HELD = new Set(["/logos/usdt0.svg", "/logos/arbitrum.svg", "/logos/base.svg", "/logos/stellar.svg"]);
 
 function Mark({ src, text }: { src: string | undefined; text: string }) {
   if (src && HELD.has(src)) return <img className="mark" src={src} alt="" width={16} height={16} loading="lazy" decoding="async" />;
