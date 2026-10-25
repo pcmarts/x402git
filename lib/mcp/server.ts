@@ -119,9 +119,9 @@ const walletSignature = z
 const paymentOptionsSchema = z
   .array(
     z.object({
-      network: z.string().describe("CAIP-2: `eip155:8453` is Base, `stellar:pubnet` is Stellar."),
-      asset: z.string().describe("The token on that network: an ERC-20 address on Base, a `C…` contract on Stellar."),
-      asset_symbol: z.string().describe("`USDC` on Base, `USDT0` on Stellar."),
+      network: z.string().describe("CAIP-2: `eip155:8453` is Base, `eip155:42161` is Arbitrum, `stellar:pubnet` is Stellar."),
+      asset: z.string().describe("The token on that network: an ERC-20 address on an EVM chain (Base, Arbitrum), a `C…` contract on Stellar."),
+      asset_symbol: z.string().describe("`USDC` on Base, `USDT0` on Arbitrum and on Stellar."),
       amount: z.string().describe("The `amount` the 402's accepts entry for this network carries, in the token's smallest unit."),
       how: z.string().describe("One sentence: how a wallet on this network pays."),
     }),
@@ -155,7 +155,7 @@ export function buildMcpServer(req?: Request): McpServer {
     mcpServerInfo(base),
     {
       instructions: [
-        `Paid access to private git repositories over x402, at ${base}. Listings are paid in dollars: USDC on Base, USDT0 on Stellar, or both — each listing's \`payment_options\` says which.`,
+        `Paid access to private git repositories over x402, at ${base}. Listings are paid in dollars: USDC on Base, USDT0 on Arbitrum or on Stellar, or several — each listing's \`payment_options\` says which.`,
         "",
         "Looking for something rather than a named listing? `search_listings` finds live repos and agent skills by what they do — free, no wallet. Each result carries the `owner` and `slug` every other tool takes, and its `payment_options` — the networks and tokens it can be paid in — so you can skip what your wallet cannot pay.",
         "Then `how_to_buy`: it is free, needs no wallet, and returns the price, the `payment_options`, the listing page, the step-by-step skill and the endpoint — everything you or the person you are helping needs. Pass the `network` you pay on: if the listing offers nothing on it, the answer is `cannot_pay: true` with the options that do exist. If you cannot sign transactions, that is the tool to answer with: give the person the listing URL to buy on themselves, or the skill URL to hand to an agent that has a wallet. Do not tell them the paywall is broken.",
@@ -234,7 +234,7 @@ export function buildMcpServer(req?: Request): McpServer {
     {
       title: "How to buy this listing — with or without a wallet",
       description:
-        "Free, no wallet needed. Returns whether the listing is for sale, its latest version and new-buyer price, its `payment_options` (the networks and tokens it can be paid in — USDC on Base, USDT0 on Stellar, or both), the listing page a person can buy on, the step-by-step skill an agent with a wallet follows, the raw x402 endpoint, and this server's URL. Pass `network` (the CAIP-2 id your wallet pays on) and, when the listing offers nothing on it, the answer is `cannot_pay: true` with the options that exist — not a procedure you cannot follow. If you cannot sign transactions, answer the person with `without_a_wallet`; if you can, follow `with_a_wallet` or call `purchase`.",
+        "Free, no wallet needed. Returns whether the listing is for sale, its latest version and new-buyer price, its `payment_options` (the networks and tokens it can be paid in — USDC on Base, USDT0 on Arbitrum or on Stellar, or several), the listing page a person can buy on, the step-by-step skill an agent with a wallet follows, the raw x402 endpoint, and this server's URL. Pass `network` (the CAIP-2 id your wallet pays on) and, when the listing offers nothing on it, the answer is `cannot_pay: true` with the options that exist — not a procedure you cannot follow. If you cannot sign transactions, answer the person with `without_a_wallet`; if you can, follow `with_a_wallet` or call `purchase`.",
       inputSchema: {
         owner,
         slug,
@@ -242,7 +242,7 @@ export function buildMcpServer(req?: Request): McpServer {
           .string()
           .optional()
           .describe(
-            "Optional. The CAIP-2 network(s) your wallet can pay on, comma-separated: `eip155:8453` (Base), `stellar:pubnet` (Stellar). When none of them is offered, the result says `cannot_pay: true` and lists `payment_options`.",
+            "Optional. The CAIP-2 network(s) your wallet can pay on, comma-separated: `eip155:8453` (Base), `eip155:42161` (Arbitrum), `stellar:pubnet` (Stellar). When none of them is offered, the result says `cannot_pay: true` and lists `payment_options`.",
           ),
       },
       outputSchema: {

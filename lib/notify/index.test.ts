@@ -71,8 +71,8 @@ describe("formatAdminEvent", () => {
     // Mainnet gets the mainnet explorer; an unknown chain gets a CAIP-2 name rather than
     // a bare number, and no link we would be guessing at.
     expect(formatAdminEvent({ ...base, network: "eip155:8453" })).toContain('<a href="https://basescan.org/tx/0x1234567890abcdefabcd">0x1234…abcd</a>');
-    expect(formatAdminEvent({ ...base, network: "eip155:1" })).toContain("chain: eip155:1");
-    expect(formatAdminEvent({ ...base, network: "eip155:1" })).toContain("tx: 0x1234…abcd\n");
+    expect(formatAdminEvent({ ...base, network: "eip155:999" })).toContain("chain: eip155:999");
+    expect(formatAdminEvent({ ...base, network: "eip155:999" })).toContain("tx: 0x1234…abcd\n");
     // The Stellar rail (25 Oct 2026): named, and linked to stellar.expert.
     const stellarHash = "a".repeat(64);
     expect(formatAdminEvent({ ...base, network: "stellar:pubnet", txHash: stellarHash })).toContain("chain: Stellar");

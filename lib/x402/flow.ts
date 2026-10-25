@@ -42,7 +42,7 @@ import {
 } from "@/lib/core/access";
 import type { SettleResponse } from "@x402/core/types";
 import type { PurchaseSource } from "@/lib/db/types";
-import { replayGrantWindowSec, x402Config } from "@/lib/env";
+import { evmRailFor, replayGrantWindowSec } from "@/lib/env";
 import { ApiError, type ErrorCode } from "@/lib/errors";
 import { notifyAdmin } from "@/lib/notify";
 import { isPaused } from "@/lib/ops/switches";
@@ -387,10 +387,12 @@ async function serveFree(
  * fails closed — BATTLE-TEST finding 15 is the follow-up. A byte-identical resend of a
  * settled transaction verifies, which is the crash-retry this path exists for.
  *
- * On Base it is the EIP-3009 `TransferWithAuthorization` signature. The domain is the
- * asset's own EIP-712 domain — the same `name`/`version` the 402 advertised
- * (`assetDomain`) plus the chain id and the token contract (`x402Config`) — so a
- * signature that verifies here is one the token contract would also honour. Permit2
+ * On an EVM rail it is the EIP-3009 `TransferWithAuthorization` signature. The domain is
+ * the asset's own EIP-712 domain — the same `name`/`version` the 402 advertised
+ * (`assetDomain`) plus the chain id and the token contract of the rail the payload names
+ * (`evmRailFor`; Base, or USDT0 on Arbitrum since 25 Oct 2026) — so a signature that
+ * verifies here is one that token contract would also honour. A network no EVM rail
+ * serves has no domain to check against and fails closed. Permit2
  * payloads are not verifiable this way; in V0 the only EVM scheme is `exact`/EIP-3009,
  * so a payload without a full EIP-3009 authorization + signature is treated as
  * unverifiable (fail closed).
@@ -401,7 +403,7 @@ async function verifyAuthorizationSignature(payload: PaymentPayload, authorizati
     if (typeof transaction !== "string") return false;
     return verifyPayerAuthEntry(transaction, authorization.network);
   }
-  return await verifyEip3009Signature(payload);
+  return await verifyEip3009Signature(payload, authorization.network);
 }
 
 const EIP3009_TYPES = {
@@ -415,7 +417,7 @@ const EIP3009_TYPES = {
   ],
 } as const;
 
-async function verifyEip3009Signature(payload: PaymentPayload): Promise<boolean> {
+async function verifyEip3009Signature(payload: PaymentPayload, network: string): Promise<boolean> {
   const raw = payload.payload as Record<string, unknown> | undefined;
   if (!raw) return false;
   const auth = raw.authorization as
@@ -434,10 +436,11 @@ async function verifyEip3009Signature(payload: PaymentPayload): Promise<boolean>
     return false;
   }
 
-  const { network, chainId, asset } = x402Config();
-  const domain = { ...assetDomain(network, asset), chainId, verifyingContract: asset as `0x${string}` };
+  const rail = evmRailFor(network, { payTo: false });
+  if (!rail) return false;
 
   try {
+    const domain = { ...assetDomain(rail.network, rail.asset), chainId: rail.chainId, verifyingContract: rail.asset as `0x${string}` };
     return await verifyTypedData({
       address: auth.from as `0x${string}`,
       domain,

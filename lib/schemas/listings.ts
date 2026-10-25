@@ -245,14 +245,15 @@ export const LatestRelease = z
  * exact wire amount the 402's `accepts` entry for that network will carry, and one
  * sentence saying how. Built only by `lib/core/access.ts#paymentOptionsFor`, so the
  * listing JSON, the MCP tools and the 402 cannot disagree about which networks a listing
- * takes. A listing offers a network only when its creator can be paid on it.
+ * takes. A listing offers a network only when its creator can be paid on it: since
+ * 25 Oct 2026 an EVM creator may see two EVM entries, USDC on Base and USDT0 on Arbitrum.
  */
 export const PaymentOption = z
   .object({
-    network: z.string().describe("CAIP-2: `eip155:8453` is Base, `stellar:pubnet` is Stellar."),
-    asset: z.string().describe("The token on that network: an ERC-20 address on Base, a `C…` contract on Stellar."),
-    asset_symbol: z.string().describe("What the token is called: `USDC` on Base, `USDT0` on Stellar."),
-    amount: z.string().describe("The `amount` the 402's accepts entry for this network carries, in the token's smallest unit (micro-USDC on Base, stroops on Stellar)."),
+    network: z.string().describe("CAIP-2: `eip155:8453` is Base, `eip155:42161` is Arbitrum, `stellar:pubnet` is Stellar."),
+    asset: z.string().describe("The token on that network: an ERC-20 address on an EVM chain (Base, Arbitrum), a `C…` contract on Stellar."),
+    asset_symbol: z.string().describe("What the token is called: `USDC` on Base, `USDT0` on Arbitrum and on Stellar."),
+    amount: z.string().describe("The `amount` the 402's accepts entry for this network carries, in the token's smallest unit (micro-dollars on every EVM chain, stroops on Stellar)."),
     how: z.string().describe("One sentence: how a wallet on this network pays. Never \"sign accepts[0]\"; sign the entry whose `network` is yours."),
   })
   .meta({

@@ -24,13 +24,15 @@ import type { CreatorRow, ListingRow, PurchaseKind, PurchaseRow, PurchaseSource,
 import { fromMicro, toMicro } from "@/lib/db/types";
 import {
   appUrl,
+  type EvmRail,
+  evmChains,
+  evmRails,
   holdbackDays as holdbackDaysEnv,
   paymentChain,
   platformFeeBps,
   type StellarRail,
   stellarRail,
   usdcAddress,
-  x402Config,
 } from "@/lib/env";
 import { ApiError } from "@/lib/errors";
 import { DiffSummary, type PaymentRequiredBodyOutput, type ReleaseLogEntryOutput } from "@/lib/schemas";
@@ -151,12 +153,12 @@ export type SettleResult = { txHash: string; nonce: string; amountMicro: bigint;
 export type X402Requirement = {
   scheme: "exact";
   network: string;
-  /** The asset's smallest unit: micro-USDC on Base, stroops (micro × 10) on Stellar. */
+  /** The asset's smallest unit: micro-dollars on every EVM rail (6 decimals), stroops (micro × 10) on Stellar. */
   amount: string;
   asset: string;
   payTo: string;
   maxTimeoutSeconds: number;
-  /** The EIP-712 domain on Base; exactly `{ areFeesSponsored: true }` on Stellar (BUILD §3.4). */
+  /** The token's EIP-712 domain on an EVM rail; exactly `{ areFeesSponsored: true }` on Stellar (BUILD §3.4). */
   extra: { name: string; version: string } | { areFeesSponsored: true };
 };
 
@@ -403,8 +405,10 @@ export function quoteId(listing: ListingRow, release: ReleaseRow, priceMicro: bi
 /**
  * JOURNEYS rule 4: a listing offers a rail only if its money has somewhere to go.
  *
- * - **Base** when the creator's identity address is an EVM `0x…`. A Stellar `G…` identity
- *   does not count (BUILD H5): there is no way to pay USDC on Base to a Stellar account.
+ * - **Every EVM rail** when the creator's identity address is an EVM `0x…`: Base, and
+ *   since 25 Oct 2026 each `X402_EXTRA_EVM_RAILS` entry (USDT0 on Arbitrum), all paid
+ *   into the one receiving address and swept to the same `0x…` per chain. A Stellar `G…`
+ *   identity does not count (BUILD H5): there is no way to pay an ERC-20 to a Stellar account.
  * - **Stellar** when a Stellar payout address is bound, or the identity address itself is
  *   a `G…` — and only when this deployment runs the Stellar rail at all.
  *
@@ -431,16 +435,18 @@ export function paymentOptionsFor(
   const priceMicro = toMicro(listing.price_micro);
   const options: PaymentOption[] = [];
   if (rails.evm) {
-    // `paymentChain()`, not `x402Config()`: the listing page renders on deployments that
-    // hold no receiving address, and an option carries no `payTo`.
-    const { network, asset } = paymentChain();
-    options.push({
-      network,
-      asset,
-      asset_symbol: "USDC",
-      amount: priceMicro.toString(),
-      how: `Sign the ${network} entry of accepts as an EIP-3009 USDC authorization on ${chainLabel(network)} and retry with it in PAYMENT-SIGNATURE.`,
-    });
+    // `evmChains()`, not `evmRails()`: the listing page renders on deployments that hold
+    // no receiving address, and an option carries no `payTo`. One option per EVM rail,
+    // the primary first, each in its own token (USDC on Base, USDT0 on Arbitrum).
+    for (const rail of evmChains()) {
+      options.push({
+        network: rail.network,
+        asset: rail.asset,
+        asset_symbol: rail.symbol,
+        amount: priceMicro.toString(),
+        how: `Sign the ${rail.network} entry of accepts as an EIP-3009 ${rail.symbol} authorization on ${chainLabel(rail.network)} and retry with it in PAYMENT-SIGNATURE.`,
+      });
+    }
   }
   if (rails.stellar) {
     const rail = rails.stellar;
@@ -474,9 +480,10 @@ export function toPaymentRequirements(q: PaymentRequiredQuote, now = new Date())
   const manifestUrl = links.manifest_url;
   const amount = q.priceMicro.toString();
 
-  // One accept per rail the creator can be paid on, EVM first (BUILD H10): the MCP text
-  // tells EVM agents to sign `accepts[0]`, and an x402 client picks the first entry whose
-  // network it has a scheme for, so the Stellar CLI finds its entry wherever it sits.
+  // One accept per rail the creator can be paid on, EVM first and the primary EVM rail
+  // first of all (BUILD H10): an x402 client picks the first entry whose network it has a
+  // scheme for, so a Base agent still finds Base at [0], and the Stellar CLI and an
+  // Arbitrum wallet find theirs by `network` wherever they sit.
   const rails = railsFor(q.payee);
   if (!rails.evm && !rails.stellar) {
     // A Stellar-only creator on a deployment with the Stellar rail off. The listing exists
@@ -489,28 +496,38 @@ export function toPaymentRequirements(q: PaymentRequiredQuote, now = new Date())
   const canonicals: X402Requirement[] = [];
   const accepts: PaymentRequiredBodyOutput["accepts"] = [];
 
-  if (rails.evm) {
-    const { network, payTo, asset } = x402Config();
+  // Every EVM rail, the primary first. The ones beyond it are named again in the
+  // instructions below; there are none on a deployment that sets no
+  // `X402_EXTRA_EVM_RAILS`, which leaves the Base 402 byte-identical.
+  const evm = rails.evm ? evmRails() : [];
+  const extraEvm = evm.slice(1);
+  for (const rail of evm) {
     // Spelled out rather than spread from the union type, so the published schema's
     // narrower EVM shape typechecks; the key order is the wire order it always had.
+    // Every EVM rail pays into the same receiving address; the amount is micro on each,
+    // because every EVM rail is 6 decimals (lib/env.ts#EvmRail).
     const canonical = {
       scheme: "exact" as const,
-      network,
+      network: rail.network,
       amount,
-      asset,
-      payTo,
+      asset: rail.asset,
+      payTo: rail.payTo,
       maxTimeoutSeconds: PAYMENT_TIMEOUT_SEC,
-      // EIP-712 domain of the asset, per x402 v2, looked up per network: Base Sepolia
-      // USDC is ("USDC", "2") and Base mainnet USDC is ("USD Coin", "2"). Getting it
-      // wrong is not a validation error — the buyer signs for a domain the token does
-      // not recognise and settlement fails on simulation. See lib/x402/asset.ts.
-      extra: assetDomain(network, asset),
+      // EIP-712 domain of the asset, per x402 v2, looked up per rail: Base Sepolia
+      // USDC is ("USDC", "2"), Base mainnet USDC is ("USD Coin", "2"), Arbitrum USDT0
+      // is ("USD₮0", "1"). Getting it wrong is not a validation error — the buyer signs
+      // for a domain the token does not recognise and settlement fails on simulation.
+      // See lib/x402/asset.ts.
+      extra: assetDomain(rail.network, rail.asset),
     };
     canonicals.push(canonical);
     // Both spellings: the v2 names `@x402/core` validates, and the v1 names PRD §13 and
     // `lib/schemas/payment.ts` specify. A v2 client strips the aliases before it signs,
-    // so `accepted` still deep-equals `canonical`.
-    accepts.push({ ...canonical, maxAmountRequired: amount, resource, description, mimeType: "application/zip" });
+    // so `accepted` still deep-equals `canonical`. The primary's description is the one
+    // it always had; an extra rail's names its token and chain, as the Stellar one does,
+    // so an agent holding USDT0 on Arbitrum and USDC on Base knows which entry is which.
+    const railDescription = rail === evm[0] ? description : `${description} ${dollars(q.priceMicro)} in ${rail.symbol} on ${chainLabel(rail.network)}.`;
+    accepts.push({ ...canonical, maxAmountRequired: amount, resource, description: railDescription, mimeType: "application/zip" });
   }
 
   if (rails.stellar) {
@@ -539,14 +556,16 @@ export function toPaymentRequirements(q: PaymentRequiredQuote, now = new Date())
     });
   }
 
-  // The prose beside the fields. Unchanged for a Base creator; a Stellar-only creator's
-  // reader is told the Stellar procedure instead, and a creator on both rails gets the
-  // Base sentence with the Stellar alternative appended.
+  // The prose beside the fields. Unchanged for a Base creator on a deployment with one EVM
+  // rail; the other EVM rails are named in one clause after the Base sentence; a
+  // Stellar-only creator's reader is told the Stellar procedure instead, and a creator on
+  // both families gets the EVM sentence with the Stellar alternative appended.
   const stellarSentence = rails.stellar ? stellarHow(rails.stellar, `${q.ref.owner}/${q.ref.slug}`) : null;
-  const instructions = rails.evm
+  const evmSentence = rails.evm ? `${paymentInstructions(links, chainLabel(canonicals[0].network))}${otherEvmRails(extraEvm)}` : null;
+  const instructions = evmSentence
     ? stellarSentence
-      ? `${paymentInstructions(links, chainLabel(canonicals[0].network))} Or on Stellar: ${stellarSentence}`
-      : paymentInstructions(links, chainLabel(canonicals[0].network))
+      ? `${evmSentence} Or on Stellar: ${stellarSentence}`
+      : evmSentence
     : `This is an x402 paywall, not an error. To buy: ${stellarSentence} Then GET ${resource} again with the payment in the PAYMENT-SIGNATURE header and extra.quote_id in X-Quote-Id. ` +
       `The full procedure is at ${links.skill_url}; the same tools are an MCP server at ${links.mcp_url}. ` +
       `No wallet? A person can buy at ${links.listing_url}, and the free manifest at ${manifestUrl} shows what is inside before anyone pays.`;
@@ -584,6 +603,19 @@ export function toPaymentRequirements(q: PaymentRequiredQuote, now = new Date())
   } satisfies PaymentRequiredBodyOutput;
 
   return { body, accepts: canonicals, quoteId: q.quoteId, priceMicro: q.priceMicro };
+}
+
+/**
+ * The clause that names the EVM rails beyond the primary, or nothing when there are none:
+ * " Also payable in USDT0 on Arbitrum: sign the eip155:42161 entry the same way, as an
+ * EIP-3009 USDT0 authorization." Same procedure, same retry; only the entry and the token differ.
+ */
+function otherEvmRails(extra: EvmRail[]): string {
+  if (extra.length === 0) return "";
+  const where = extra.map((r) => `${r.symbol} on ${chainLabel(r.network)}`).join(" or ");
+  const entries = extra.map((r) => `the ${r.network} entry`).join(" or ");
+  const tokens = [...new Set(extra.map((r) => r.symbol))].join(" or ");
+  return ` Also payable in ${where}: sign ${entries} the same way, as an EIP-3009 ${tokens} authorization.`;
 }
 
 /** `$2.00` from micro-dollars, two places, no float. For prose only; the fields carry the integer. */
@@ -785,18 +817,20 @@ export async function owned(buyer: Address | string, ref?: ListingRef): Promise<
     listingId = resolved.listing.id;
   }
 
-  // This wallet's rail only. One database serves both networks, so without the filter a
+  // This wallet's rails only. One database serves both networks, so without the filter a
   // wallet that bought on Sepolia would read as owning the version on mainnet and be
   // handed a free download of something it paid test money for (2026-09-07, the
-  // cutover). The rail follows the address family (JOURNEYS rule 7: a buyer is a wallet
-  // on a network); a Stellar wallet on a deployment with no Stellar rail owns nothing here.
-  const network = networkForBuyer(buyerAddress);
-  if (!network) return [];
+  // cutover). The rails follow the address family (JOURNEYS rule 7: a buyer is a wallet
+  // on a network): an EVM wallet owns what it bought on any EVM rail this deployment
+  // serves (Base or Arbitrum, 25 Oct 2026), and a Stellar wallet on a deployment with no
+  // Stellar rail owns nothing here.
+  const networks = networksForBuyer(buyerAddress);
+  if (networks.length === 0) return [];
   let query = db()
     .from("purchase")
     .select("*")
     .eq("buyer_address", buyerAddress)
-    .eq("network", network)
+    .in("network", networks)
     .is("revoked_at", null);
   if (listingId) query = query.eq("listing_id", listingId);
   const { data, error } = await query.order("granted_at", { ascending: false });
@@ -838,17 +872,19 @@ export async function ownedWithContext(buyer: Address | string, limit = 100, cur
 // ---------------------------------------------------------------------------
 
 async function purchasesFor(listingId: string, buyerAddress: string): Promise<Purchase[]> {
-  // See the note in `owned`: entitlement does not cross rails, and the rail is the
-  // wallet's. Partitioned on `network`, not `chain_id`, because a Stellar row has none
-  // (BATTLE-TEST finding 1: filtering `chain_id` made every G buyer own nothing).
-  const network = networkForBuyer(buyerAddress);
-  if (!network) return [];
+  // See the note in `owned`: entitlement does not cross address families or deployments,
+  // and the rails are the wallet's. Partitioned on `network`, not `chain_id`, because a
+  // Stellar row has none (BATTLE-TEST finding 1: filtering `chain_id` made every G buyer
+  // own nothing). An EVM wallet that paid on Arbitrum owns it on the next quote, or the
+  // 402 would ask it to pay again.
+  const networks = networksForBuyer(buyerAddress);
+  if (networks.length === 0) return [];
   const { data, error } = await db()
     .from("purchase")
     .select("*")
     .eq("listing_id", listingId)
     .eq("buyer_address", buyerAddress)
-    .eq("network", network)
+    .in("network", networks)
     .is("revoked_at", null)
     .order("granted_at", { ascending: false });
   if (error) throw error;
@@ -1024,10 +1060,15 @@ export function toPurchase(row: PurchaseRow): Purchase {
 /** What `insertPurchase` stamps: the three columns that say where a row settled. */
 type RowRail = { family: "evm" | "stellar"; network: string; asset: string; chainId: number | null };
 
-/** The rail named by a CAIP-2 id, if this deployment serves it. */
+/**
+ * The rail named by a CAIP-2 id, if this deployment serves it. Every EVM rail counts
+ * (25 Oct 2026): a settlement on `eip155:42161` is stamped `eip155:42161`, chain 42161,
+ * in the USDT0 contract, so the sweep pays it out on Arbitrum in USDT0 and never as Base USDC.
+ * `evmChains()`, not `evmRails()`: the row needs no receiving address.
+ */
 function servedRail(network: string): RowRail | null {
-  const evm = paymentChain();
-  if (network === evm.network) return { family: "evm", network: evm.network, asset: evm.asset, chainId: evm.chainId };
+  const evm = evmChains().find((r) => r.network === network);
+  if (evm) return { family: "evm", network: evm.network, asset: evm.asset, chainId: evm.chainId };
   const stellar = stellarRail();
   if (stellar && network === stellar.network) return { family: "stellar", network: stellar.network, asset: stellar.asset.contract, chainId: null };
   return null;
@@ -1035,8 +1076,10 @@ function servedRail(network: string): RowRail | null {
 
 /**
  * JOURNEYS rule 7: a buyer is a wallet on a network, and the network follows the address.
- * An EVM wallet is on this deployment's EVM chain; a Stellar wallet is on its Stellar
- * network, or nowhere when the rail is off.
+ * An EVM wallet is on this deployment's primary EVM chain; a Stellar wallet is on its
+ * Stellar network, or nowhere when the rail is off. This is what a *free* grant is stamped
+ * with, so it stays the primary chain even with Arbitrum on: a $0 hand-over has no
+ * settlement to say otherwise. A paid row takes its settlement's network (`servedRail`).
  */
 function railForBuyer(buyerAddress: string): RowRail | null {
   const family = addressFamily(buyerAddress);
@@ -1046,8 +1089,18 @@ function railForBuyer(buyerAddress: string): RowRail | null {
   return null;
 }
 
-function networkForBuyer(buyerAddress: string): string | null {
-  return railForBuyer(buyerAddress)?.network ?? null;
+/**
+ * Every network an entitlement read looks on for this wallet: each EVM rail for a `0x…`
+ * (the primary first), the Stellar network for a `G…`/`C…`, nothing when the family's rail
+ * is off. Never another deployment's networks, which is what keeps the 2026-09-07 cutover
+ * rule: a Sepolia row is not a mainnet entitlement unless this deployment sells on Sepolia.
+ */
+function networksForBuyer(buyerAddress: string): string[] {
+  const family = addressFamily(buyerAddress);
+  if (family === "evm") return evmChains().map((r) => r.network);
+  const stellar = stellarRail();
+  if (family === "stellar" && stellar) return [stellar.network];
+  return [];
 }
 
 /** Re-exported so callers do not have to know which module owns the default. */

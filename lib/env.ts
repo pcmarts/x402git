@@ -623,8 +623,12 @@ type ExtraEvmRailInput = { network?: unknown; asset?: unknown; symbol?: unknown;
 /**
  * The extra EVM rails from `X402_EXTRA_EVM_RAILS`, each completed from `KNOWN_EVM_RAILS`
  * and checked for shape. Throws `EvmRailConfigError` naming the entry, so a typo stops
- * the boot rather than producing a 402 nobody can pay. Memoised per process like
- * `stellarRail()`; `resetEnv()` in tests clears it through `env()`.
+ * the boot rather than producing a 402 nobody can pay. Re-read on every call (it is a
+ * small JSON parse); `resetEnv()` in tests changes what it sees through `env()`.
+ *
+ * An entry that names a different `asset` from the known one must also name `symbol` and
+ * `domain` (W6a, 25 Oct 2026): taking the known token's EIP-712 domain for another
+ * contract would make every signature on that rail fail at settle, silently.
  */
 export function extraEvmRails(payTo: string | null): EvmRail[] {
   const raw = env().X402_EXTRA_EVM_RAILS;
@@ -646,16 +650,18 @@ export function extraEvmRails(payTo: string | null): EvmRail[] {
     seen.add(network);
     const known = KNOWN_EVM_RAILS[network];
     const asset = typeof e.asset === "string" ? e.asset : known?.asset;
-    const symbol = typeof e.symbol === "string" ? e.symbol : known?.symbol;
-    const domain = e.domain && typeof e.domain === "object" ? (e.domain as { name?: unknown; version?: unknown }) : known?.domain;
+    // Only a rail selling the known token inherits the known symbol and domain.
+    const sameToken = Boolean(known && asset && known.asset.toLowerCase() === asset.toLowerCase());
+    const symbol = typeof e.symbol === "string" ? e.symbol : sameToken ? known?.symbol : undefined;
+    const domain = e.domain && typeof e.domain === "object" ? (e.domain as { name?: unknown; version?: unknown }) : sameToken ? known?.domain : undefined;
     const explorer = typeof e.explorer === "string" ? e.explorer : known?.explorer ?? "";
     const chainId = Number(network.split(":")[1]);
     const envRpc = chainId === 42161 ? env().ARBITRUM_RPC_URL : chainId === 1 ? env().ETHEREUM_RPC_URL : chainId === 137 ? env().POLYGON_RPC_URL : undefined;
     const rpc = typeof e.rpcUrl === "string" ? e.rpcUrl : envRpc && envRpc.length > 0 ? envRpc : known?.rpcUrl;
     if (!asset || !/^0x[0-9a-fA-F]{40}$/.test(asset)) throw new EvmRailConfigError(`X402_EXTRA_EVM_RAILS[${i}] (${network}) needs an asset address; none known for this network`);
-    if (!symbol || symbol.length === 0) throw new EvmRailConfigError(`X402_EXTRA_EVM_RAILS[${i}] (${network}) needs a symbol`);
+    if (!symbol || symbol.length === 0) throw new EvmRailConfigError(`X402_EXTRA_EVM_RAILS[${i}] (${network}) needs a symbol${known && !sameToken ? " (its asset is not the known token's)" : ""}`);
     if (!domain || typeof domain.name !== "string" || typeof domain.version !== "string" || domain.name.length === 0) {
-      throw new EvmRailConfigError(`X402_EXTRA_EVM_RAILS[${i}] (${network}) needs the token's EIP-712 domain {name, version}`);
+      throw new EvmRailConfigError(`X402_EXTRA_EVM_RAILS[${i}] (${network}) needs the token's EIP-712 domain {name, version}${known && !sameToken ? " (its asset is not the known token's)" : ""}`);
     }
     if (!rpc) throw new EvmRailConfigError(`X402_EXTRA_EVM_RAILS[${i}] (${network}) needs an rpcUrl`);
     return {

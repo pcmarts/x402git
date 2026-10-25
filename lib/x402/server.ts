@@ -12,12 +12,16 @@
  *   if (!result.ok) throw new ApiError(result.code, { details: result.details });
  *   await grant(q, result.payer, result);
  *
- * Two rails since 25 Oct 2026 (docs/HACKMERIDIAN-BUILD.md): Base, through `@x402/evm`, and
- * Stellar, through `@x402/stellar`. Each has its own resource server and its own
- * facilitator (`resourceServerFor`), and the payload's `accepted.network` decides which.
+ * Two rail families since 25 Oct 2026 (docs/HACKMERIDIAN-BUILD.md): EVM, through
+ * `@x402/evm`, and Stellar, through `@x402/stellar`. Each has its own resource server and
+ * its own facilitator (`resourceServerFor`), and the payload's `accepted.network` decides
+ * which. Since the same evening the EVM family is a list (Base, and USDT0 on Arbitrum;
+ * docs/HACKMERIDIAN-EVM-USDT0-RAIL.md): one resource server per facilitator URL, so a
+ * rail that names its own facilitator is settled there and nowhere else.
  *
- * The facilitator clients are injectable (`setFacilitator`, `setStellarFacilitator`) so a
- * test never touches the network; `resetFacilitator()` puts the real ones back.
+ * The facilitator clients are injectable (`setFacilitator`, `setFacilitatorFor`,
+ * `setStellarFacilitator`) so a test never touches the network; `resetFacilitator()` puts
+ * the real ones back.
  */
 
 import { createFacilitatorConfig } from "@coinbase/x402";
@@ -30,7 +34,7 @@ import { ExactEvmScheme } from "@x402/evm/exact/server";
 import { ExactStellarScheme } from "@x402/stellar/exact/server";
 import * as z from "zod";
 import type { X402Requirement } from "@/lib/core/access";
-import { env, type StellarRail, stellarRail, x402Config } from "@/lib/env";
+import { env, evmRailFor, type StellarRail, stellarRail, x402Config } from "@/lib/env";
 import type { ErrorCode } from "@/lib/errors";
 import {
   canonicalAddress,
@@ -85,11 +89,25 @@ let facilitator: FacilitatorClient | null = null;
 let server: x402ResourceServer | null = null;
 let stellarFacilitator: FacilitatorClient | null = null;
 let stellarServer: x402ResourceServer | null = null;
+/** The EVM rails whose facilitator is not the primary's, one client and one server per URL. */
+const railFacilitators = new Map<string, FacilitatorClient>();
+const railServers = new Map<string, x402ResourceServer>();
 
-/** Test seam for the EVM rail. Pass a stub implementing `verify`/`settle`/`getSupported`. */
+/** Test seam for the primary EVM rail (and every rail that shares its facilitator). Pass a stub implementing `verify`/`settle`/`getSupported`. */
 export function setFacilitator(client: FacilitatorClient | null): void {
   facilitator = client;
   server = null;
+}
+
+/**
+ * Test seam for an EVM rail with a facilitator of its own: the client used for `url`,
+ * which is the rail's `facilitatorUrl` exactly as `X402_EXTRA_EVM_RAILS` spells it. A
+ * rail whose URL is the primary's uses the primary's client, so stub that with `setFacilitator`.
+ */
+export function setFacilitatorFor(url: string, client: FacilitatorClient | null): void {
+  if (client) railFacilitators.set(url, client);
+  else railFacilitators.delete(url);
+  railServers.delete(url);
 }
 
 /** Test seam for the Stellar rail. The two are separate so a test can prove which one was asked. */
@@ -103,6 +121,8 @@ export function resetFacilitator(): void {
   server = null;
   stellarFacilitator = null;
   stellarServer = null;
+  railFacilitators.clear();
+  railServers.clear();
 }
 
 /**
@@ -135,9 +155,14 @@ function isCdpHost(url: string): boolean {
  *    therefore gets a bare `{ url }`, which is exactly what Base Sepolia has always used.
  * 2. **No URL and no keys is the library's own default**, so a deployment that has not
  *    been configured for money still builds.
+ *
+ * `url` is the facilitator to configure, the primary's (`X402_FACILITATOR_URL`) when
+ * omitted. Rule 1 holds for every URL (25 Oct 2026): an extra EVM rail that names its own
+ * facilitator gets the CDP key pair only if that facilitator is CDP's, whatever the
+ * primary's host is.
  */
-export function facilitatorConfig(): FacilitatorConfig {
-  const { facilitatorUrl } = x402Config();
+export function facilitatorConfig(url: string | undefined = x402Config().facilitatorUrl): FacilitatorConfig {
+  const facilitatorUrl = url && url.length > 0 ? url : undefined;
   const { CDP_API_KEY_ID, CDP_API_KEY_SECRET } = env();
   const cdp = CDP_API_KEY_ID && CDP_API_KEY_SECRET ? createFacilitatorConfig(CDP_API_KEY_ID, CDP_API_KEY_SECRET) : null;
 
@@ -152,6 +177,23 @@ export function facilitatorClient(): FacilitatorClient {
   if (facilitator) return facilitator;
   facilitator = new HTTPFacilitatorClient(facilitatorConfig());
   return facilitator;
+}
+
+/** The primary EVM rail's facilitator URL, or undefined for the library's (or CDP's) default. */
+function primaryFacilitatorUrl(): string | undefined {
+  const url = env().X402_FACILITATOR_URL;
+  return url && url.length > 0 ? url : undefined;
+}
+
+/**
+ * Where an EVM rail's `verify` and `settle` go: its own `facilitatorUrl`, or the primary's
+ * when it names none. Throws for a network no EVM rail serves: `verifyAndSettle` has
+ * already refused one, so reaching here with it is a bug, never a payload to forward.
+ */
+function evmFacilitatorUrlFor(network: string): string | undefined {
+  const rail = evmRailFor(network, { payTo: false });
+  if (!rail) throw new Error(`no EVM rail on this deployment serves ${network}`);
+  return rail.facilitatorUrl && rail.facilitatorUrl.length > 0 ? rail.facilitatorUrl : primaryFacilitatorUrl();
 }
 
 /**
@@ -198,10 +240,29 @@ export function stellarFacilitatorClient(rail: StellarRail = requireStellarRail(
  * Stellar payload at all.
  */
 export function resourceServerFor(network: string): x402ResourceServer {
-  if (!network.startsWith("stellar:")) return resourceServer();
-  if (stellarServer) return stellarServer;
-  stellarServer = new x402ResourceServer(stellarFacilitatorClient()).register("stellar:*", new ExactStellarScheme());
-  return stellarServer;
+  if (network.startsWith("stellar:")) {
+    if (stellarServer) return stellarServer;
+    stellarServer = new x402ResourceServer(stellarFacilitatorClient()).register("stellar:*", new ExactStellarScheme());
+    return stellarServer;
+  }
+
+  // The EVM rails (25 Oct 2026): one server per facilitator URL, by the same H4 reasoning.
+  // A rail that shares the primary's facilitator shares the primary's server (and its
+  // `setFacilitator` seam); one that names another URL — Arbitrum at CDP while Base
+  // Sepolia stays on x402.org — gets its own, and the primary's facilitator never sees
+  // its payloads. Every server registers `eip155:*`; the URL, not the scheme, separates them.
+  const url = evmFacilitatorUrlFor(network);
+  if (url === undefined || url === primaryFacilitatorUrl()) return resourceServer();
+  const cached = railServers.get(url);
+  if (cached) return cached;
+  let client = railFacilitators.get(url);
+  if (!client) {
+    client = new HTTPFacilitatorClient(facilitatorConfig(url));
+    railFacilitators.set(url, client);
+  }
+  const rs = new x402ResourceServer(client).register("eip155:*", new ExactEvmScheme());
+  railServers.set(url, rs);
+  return rs;
 }
 
 function requireStellarRail(): StellarRail {
@@ -468,7 +529,21 @@ export async function verifyAndSettle(paymentSignatureHeader: string | null, req
   const { payload, authorization } = parsed;
   const stellar = requirement.network.startsWith("stellar:");
 
-  // One server per rail (H4): the Base facilitator is never asked about a Stellar payload.
+  // The EVM half of the Stellar decode's local checks (25 Oct 2026): with several EVM
+  // rails on the wire, a payload is paid against exactly one of them. Before any
+  // facilitator call: the requirement is a rail this deployment serves, and the payload is
+  // for that rail's network, token and receiving address. So a USDT0 authorization for
+  // Arbitrum is settled only against the Arbitrum accept, never sent to Base's facilitator
+  // under Base's requirement, and an EVM network we do not run matches nothing.
+  if (!stellar) {
+    const mismatch = evmRailMismatch(payload, requirement);
+    if (mismatch) {
+      return { ok: false, code: "authorization_mismatch", message: mismatch, payer: authorization.payer, nonce: authorization.nonce };
+    }
+  }
+
+  // One server per rail (H4): the Base facilitator is never asked about a Stellar payload,
+  // nor about a payload for an EVM rail that has a facilitator of its own.
   const rs = resourceServerFor(requirement.network);
   // `requirement` is a plain object shaped like the library's PaymentRequirements; the
   // cast keeps our own narrow type at the call sites.
@@ -621,6 +696,34 @@ export async function verifyAndSettle(paymentSignatureHeader: string | null, req
     network: requirement.network,
     settlement,
   };
+}
+
+/**
+ * Why an EVM payload cannot be paid against `requirement`, or null when it can. The
+ * payload has passed the CORE-5 schema, so the fields read here exist and are addresses.
+ * EIP-3009 names the token only through the domain it was signed for, which is
+ * `accepted.asset`; Permit2 names it in `permitted.token`. Addresses compare case-blind.
+ */
+function evmRailMismatch(payload: PaymentPayload, requirement: X402Requirement): string | null {
+  const rail = evmRailFor(requirement.network);
+  if (!rail) return `This deployment does not take payments on ${requirement.network}.`;
+  const same = (a: unknown, b: string) => typeof a === "string" && a.toLowerCase() === b.toLowerCase();
+  if (!same(requirement.asset, rail.asset) || !same(requirement.payTo, rail.payTo)) {
+    return `That requirement is not this deployment's ${rail.symbol} on ${requirement.network}.`;
+  }
+  if (payload.accepted?.network !== requirement.network) {
+    return `The payment is for ${payload.accepted?.network}, not ${requirement.network}.`;
+  }
+  const raw = payload.payload as {
+    authorization?: { to?: unknown };
+    permit2Authorization?: { permitted?: { token?: unknown }; witness?: { to?: unknown } };
+  };
+  const permit2 = raw.permit2Authorization;
+  const token = permit2 ? permit2.permitted?.token : payload.accepted.asset;
+  const to = permit2 ? permit2.witness?.to : raw.authorization?.to;
+  if (!same(token, rail.asset)) return `The payment is not in ${rail.symbol} (${rail.asset}) on ${requirement.network}.`;
+  if (!same(to, rail.payTo)) return "The payment is not to this deployment's receiving address.";
+  return null;
 }
 
 /**

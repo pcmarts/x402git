@@ -17,7 +17,7 @@ import { PaymentRequiredBody } from "@/lib/schemas";
 import { seedListing, seedPurchase } from "@/lib/test/fixtures";
 import { makeMockDb } from "@/lib/test/mock-db";
 import { clearStellarEnv, setStellarTestnetEnv, STELLAR_BUYER_ADDRESS, STELLAR_CREATOR, STELLAR_PAY_TO, STELLAR_TESTNET_USDC } from "@/lib/test/stellar";
-import { findPurchaseByNonce, grant, owned, paymentOptionsFor, type PaymentRequiredQuote, quote, toPaymentRequirements } from "./access";
+import { findPurchaseByNonce, grant, grantFree, owned, paymentOptionsFor, type PaymentRequiredQuote, quote, toPaymentRequirements } from "./access";
 
 const EVM_BUYER = "0xAAaAAAaAAaaAaaAaAaAAAAaAaAaAaAAAAaaAAaAa";
 const EVM_PAYOUT = "0x2222222222222222222222222222222222222222";
@@ -210,6 +210,7 @@ afterEach(() => {
   delete process.env.NEXT_PUBLIC_APP_URL;
   delete process.env.PLATFORM_RECEIVING_ADDRESS;
   delete process.env.X402_NETWORK;
+  delete process.env.X402_EXTRA_EVM_RAILS;
   resetEnv();
 });
 
@@ -434,5 +435,151 @@ describe("entitlement reads partition on network, so a Stellar buyer owns what t
     seedPurchase(mock, { listingId: seed.listingId, releaseId: seed.latest.id, buyer: STELLAR_BUYER_ADDRESS, network: "stellar:testnet" });
     expect((await quote({ owner: "adrian", slug: "humanizer" }, STELLAR_BUYER_ADDRESS)).kind).toBe("payment_required");
     expect(await owned(STELLAR_BUYER_ADDRESS)).toEqual([]);
+  });
+});
+
+// --- a second EVM rail: USDT0 on Arbitrum (25 Oct 2026, docs/HACKMERIDIAN-EVM-USDT0-RAIL.md §2) ---
+
+const ARBITRUM_USDT0 = "0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9";
+const BASE_SEPOLIA_USDC = "0x036CbD53842c5426634e7929541eC2318f3dCF7e";
+
+function arbitrumOn(): void {
+  process.env.X402_EXTRA_EVM_RAILS = '[{"network":"eip155:42161","facilitatorUrl":"https://api.cdp.coinbase.com/platform/v2/x402"}]';
+  resetEnv();
+}
+
+describe("a second EVM rail: one accept and one option per EVM rail, the primary first", () => {
+  /** The Arbitrum canonical requirement, exactly: the same payee and micro amount, its own token and domain. */
+  const ARBITRUM_CANONICAL = {
+    scheme: "exact",
+    network: "eip155:42161",
+    amount: "2000000",
+    asset: ARBITRUM_USDT0,
+    payTo: "0x1111111111111111111111111111111111111111",
+    maxTimeoutSeconds: 300,
+    extra: { name: "USD₮0", version: "1" },
+  };
+
+  it("a creator with both address families gets Base, Arbitrum and Stellar, in that order", async () => {
+    stellarOn();
+    arbitrumOn();
+    seedListing(mock, { ...TWO_DOLLARS, payoutAddress: EVM_PAYOUT, stellarPayoutAddress: STELLAR_CREATOR });
+    const { body, accepts } = toPaymentRequirements(await quoteFor(), NOW);
+
+    expect(accepts.map((a) => a.network)).toEqual(["eip155:84532", "eip155:42161", "stellar:testnet"]);
+    expect(body.accepts.map((a) => a.network)).toEqual(["eip155:84532", "eip155:42161", "stellar:testnet"]);
+    // Base is untouched, byte for byte.
+    expect(accepts[0]).toEqual(EVM_CANONICAL_SNAPSHOT[0]);
+    expect(body.accepts[0]).toEqual(EVM_402_SNAPSHOT.accepts[0]);
+    // Arbitrum: its own token and EIP-712 domain, the same receiving address, micro amount.
+    expect(accepts[1]).toEqual(ARBITRUM_CANONICAL);
+    expect(body.accepts[1]).toEqual({
+      ...ARBITRUM_CANONICAL,
+      maxAmountRequired: "2000000",
+      resource: "https://x402git.test/api/r/adrian/humanizer",
+      description: `${EVM_402_SNAPSHOT.accepts[0].description} $2.00 in USDT0 on Arbitrum.`,
+      mimeType: "application/zip",
+    });
+    expect(accepts[2]).toMatchObject({ network: "stellar:testnet", amount: "20000000", asset: STELLAR_TESTNET_USDC });
+
+    // The Base sentence first and intact, Arbitrum in one clause, then the Stellar alternative.
+    const instructions = body.extra.instructions;
+    expect(instructions.startsWith(EVM_402_SNAPSHOT.extra.instructions)).toBe(true);
+    expect(instructions).toContain(
+      `${EVM_402_SNAPSHOT.extra.instructions} Also payable in USDT0 on Arbitrum: sign the eip155:42161 entry the same way, as an EIP-3009 USDT0 authorization. Or on Stellar:`,
+    );
+    expect(() => PaymentRequiredBody.parse(body)).not.toThrow();
+  });
+
+  it("an EVM-only creator gets Base then Arbitrum; a Stellar-only creator gets no EVM entry at all", async () => {
+    stellarOn();
+    arbitrumOn();
+    seedListing(mock, { ...TWO_DOLLARS, payoutAddress: EVM_PAYOUT });
+    const evmOnly = toPaymentRequirements(await quoteFor(), NOW);
+    expect(evmOnly.accepts).toEqual([EVM_CANONICAL_SNAPSHOT[0], ARBITRUM_CANONICAL]);
+    expect(evmOnly.body.extra.instructions).not.toContain("Or on Stellar:");
+
+    seedListing(mock, { ...TWO_DOLLARS, owner: "stella", slug: "tool", payoutAddress: STELLAR_CREATOR });
+    const stellarOnly = toPaymentRequirements(await quoteFor("stella", "tool"), NOW);
+    expect(stellarOnly.accepts.map((a) => a.network)).toEqual(["stellar:testnet"]);
+    expect(stellarOnly.body.extra.instructions).not.toContain("Arbitrum");
+  });
+
+  it("payment_options carries both EVM rails with their own symbols, and needs no receiving address", async () => {
+    stellarOn();
+    arbitrumOn();
+    const both = seedListing(mock, { ...TWO_DOLLARS, payoutAddress: EVM_PAYOUT, stellarPayoutAddress: STELLAR_CREATOR });
+    const creator = mock.rows("creator").find((c) => c.id === both.creatorId)!;
+    const listing = mock.rows("listing").find((l) => l.id === both.listingId)!;
+
+    // A page renders where no payout configuration exists (`evmChains()`, not `evmRails()`).
+    delete process.env.PLATFORM_RECEIVING_ADDRESS;
+    resetEnv();
+    const options = paymentOptionsFor(creator as never, listing as never);
+    expect(options.map((o) => [o.network, o.asset, o.asset_symbol, o.amount])).toEqual([
+      ["eip155:84532", BASE_SEPOLIA_USDC, "USDC", "2000000"],
+      ["eip155:42161", ARBITRUM_USDT0, "USDT0", "2000000"],
+      ["stellar:testnet", STELLAR_TESTNET_USDC, "USDC", "20000000"],
+    ]);
+    expect(options[0].how).toBe("Sign the eip155:84532 entry of accepts as an EIP-3009 USDC authorization on Base Sepolia and retry with it in PAYMENT-SIGNATURE.");
+    expect(options[1].how).toBe("Sign the eip155:42161 entry of accepts as an EIP-3009 USDT0 authorization on Arbitrum and retry with it in PAYMENT-SIGNATURE.");
+  });
+});
+
+describe("grant — an Arbitrum settlement is stamped on Arbitrum, in USDT0", () => {
+  const nonce = `0x${"a7".repeat(32)}`;
+  const settlement = { txHash: `0x${"cd".repeat(32)}`, nonce, amountMicro: 2_000_000n, network: "eip155:42161" };
+
+  it("writes network eip155:42161, chain_id 42161 and the USDT0 address, and the buyer owns it on the next quote", async () => {
+    arbitrumOn();
+    seedListing(mock, { ...TWO_DOLLARS, payoutAddress: EVM_PAYOUT });
+    const q = await quoteFor();
+
+    const purchase = await grant(q, EVM_BUYER, settlement);
+    expect(purchase).toMatchObject({ network: "eip155:42161", asset: ARBITRUM_USDT0, buyerAddress: EVM_BUYER.toLowerCase(), grossMicro: 2_000_000n, feeMicro: 200_000n });
+    expect(mock.rows("purchase")[0]).toMatchObject({ network: "eip155:42161", chain_id: 42161, asset: ARBITRUM_USDT0, payment_nonce: nonce });
+
+    // The replay ledger is per network: found on Arbitrum, not on the primary chain.
+    expect((await findPurchaseByNonce(nonce, "eip155:42161"))?.id).toBe(purchase.id);
+    expect(await findPurchaseByNonce(nonce)).toBeNull();
+    // Idempotent on the nonce, as on Base.
+    expect((await grant(q, EVM_BUYER, settlement)).id).toBe(purchase.id);
+    expect(mock.rows("purchase")).toHaveLength(1);
+
+    // An EVM wallet owns what it bought on any EVM rail this deployment serves, or the next
+    // 402 would ask it to pay again for what it just paid for on Arbitrum.
+    expect((await quote({ owner: "adrian", slug: "humanizer" }, EVM_BUYER)).kind).toBe("granted");
+    expect((await owned(EVM_BUYER)).map((p) => p.network)).toEqual(["eip155:42161"]);
+  });
+
+  it("refuses an Arbitrum settlement on a deployment that does not run the rail", async () => {
+    seedListing(mock, { ...TWO_DOLLARS, payoutAddress: EVM_PAYOUT });
+    const q = await quoteFor();
+    await expect(grant(q, EVM_BUYER, settlement)).rejects.toSatisfy((e: unknown) => isApiError(e) && e.code === "authorization_mismatch");
+    expect(mock.rows("purchase")).toHaveLength(0);
+  });
+
+  it("refuses a Stellar payer on the Arbitrum rail (the row would fail the CHECK after the money moved)", async () => {
+    stellarOn();
+    arbitrumOn();
+    seedListing(mock, { ...TWO_DOLLARS, payoutAddress: EVM_PAYOUT, stellarPayoutAddress: STELLAR_CREATOR });
+    const q = await quoteFor();
+    await expect(grant(q, STELLAR_BUYER_ADDRESS, settlement)).rejects.toSatisfy((e: unknown) => isApiError(e) && e.code === "authorization_mismatch");
+  });
+
+  it("an Arbitrum row is not an entitlement on a deployment without the rail (the cutover rule, per network)", async () => {
+    const seed = seedListing(mock, { ...TWO_DOLLARS, payoutAddress: EVM_PAYOUT });
+    seedPurchase(mock, { listingId: seed.listingId, releaseId: seed.latest.id, buyer: EVM_BUYER, network: "eip155:42161", chainId: 42161, asset: ARBITRUM_USDT0, grossMicro: "2000000" });
+    expect((await quote({ owner: "adrian", slug: "humanizer" }, EVM_BUYER)).kind).toBe("payment_required");
+    expect(await owned(EVM_BUYER)).toEqual([]);
+  });
+
+  it("a free grant is still stamped on the primary chain: a $0 hand-over has no settlement to say otherwise", async () => {
+    arbitrumOn();
+    seedListing(mock, { priceMicro: "0", updatePriceMicro: "0", payoutAddress: EVM_PAYOUT, releases: [{ version: "1.0.0" }] });
+    const q = await quoteFor();
+    const purchase = await grantFree(q, EVM_BUYER);
+    expect(purchase.network).toBe("eip155:84532");
+    expect(mock.rows("purchase")[0]).toMatchObject({ network: "eip155:84532", chain_id: 84532, asset: BASE_SEPOLIA_USDC });
   });
 });

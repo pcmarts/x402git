@@ -39,23 +39,27 @@ const acceptCommon = {
   mimeType: z.string().optional(),
 };
 
-/** The Base entry: micro-USDC, an EVM asset and payee, and the EIP-712 domain the payer signs for. */
+/**
+ * An EVM entry: micro-dollars, an EVM asset and payee, and the EIP-712 domain the payer
+ * signs for. Base USDC, and since 25 Oct 2026 USDT0 on Arbitrum where the deployment runs
+ * it (`X402_EXTRA_EVM_RAILS`): the same shape, its own `network`, `asset` and `extra`.
+ */
 export const PaymentRequirementsEvm = z
   .object({
     ...acceptCommon,
     /** CAIP-2, e.g. `eip155:84532`. x402 v2 requires the `<namespace>:<reference>` form. */
     network: z.string().regex(/^eip155:\d+$/),
-    /** The USDC contract address on `network`. */
+    /** The token contract on `network`: USDC on Base, USDT0 on Arbitrum. */
     asset: Address,
     /** The platform receiving address (D13). The split is a ledger insert. */
     payTo: Address,
-    /** Micro-USDC (6 decimals). */
+    /** Micro-dollars: every EVM token this product takes has 6 decimals. */
     amount: MicroUsdc,
     maxAmountRequired: MicroUsdc,
-    /** EIP-712 domain fields for the asset, per x402 v2. */
+    /** EIP-712 domain fields for the asset, per x402 v2, byte-exact (`USD₮0`, with the ₮, on Arbitrum). */
     extra: z.object({ name: z.string(), version: z.string() }),
   })
-  .meta({ id: "PaymentRequirementsEvm", description: "The Base entry of `accepts[]`: an EIP-3009 authorization in micro-USDC." });
+  .meta({ id: "PaymentRequirementsEvm", description: "An EVM entry of `accepts[]` (USDC on Base, USDT0 on Arbitrum): an EIP-3009 authorization in micro-dollars." });
 
 /**
  * The Stellar entry (25 Oct 2026, docs/HACKMERIDIAN-BUILD.md §3.4). `amount` is in
@@ -77,7 +81,7 @@ export const PaymentRequirementsStellar = z
 
 export const PaymentRequirements = z
   .union([PaymentRequirementsEvm, PaymentRequirementsStellar])
-  .meta({ id: "PaymentRequirements", description: "One entry of the x402 v2 `accepts[]` array: the Base entry (first when present) or the Stellar entry." });
+  .meta({ id: "PaymentRequirements", description: "One entry of the x402 v2 `accepts[]` array: an EVM entry (Base first when present, then any other EVM chain) or the Stellar entry." });
 
 /** x402 v2's `resource` envelope: what is being sold, in one object. */
 export const ResourceInfo = z
