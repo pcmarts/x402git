@@ -16,10 +16,14 @@ describe("buyLinks", () => {
 });
 
 describe("chainLabel", () => {
-  it("names the two chains the product runs on and passes anything else through", () => {
+  it("names the chains the product runs on or pays to, and passes anything else through", () => {
     expect(chainLabel("eip155:8453")).toBe("Base");
     expect(chainLabel("eip155:84532")).toBe("Base Sepolia");
-    expect(chainLabel("eip155:1")).toBe("eip155:1");
+    // 25 Oct 2026: the USDT0 rail (Arbitrum) and the W5 payout chains.
+    expect(chainLabel("eip155:42161")).toBe("Arbitrum");
+    expect(chainLabel("eip155:1")).toBe("Ethereum");
+    expect(chainLabel("eip155:137")).toBe("Polygon");
+    expect(chainLabel("eip155:999999")).toBe("eip155:999999");
   });
 });
 

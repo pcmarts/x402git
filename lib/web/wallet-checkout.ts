@@ -88,6 +88,8 @@ export type ChainInfo = {
  */
 export const CHAINS: Record<number, ChainInfo> = {
   8453: { id: 8453, hex: "0x2105", name: "Base", rpcUrls: ["https://mainnet.base.org"], explorer: "https://basescan.org" },
+  // Arbitrum One (25 Oct 2026): the USDT0 rail, docs/HACKMERIDIAN-EVM-USDT0-RAIL.md.
+  42161: { id: 42161, hex: "0xa4b1", name: "Arbitrum", rpcUrls: ["https://arb1.arbitrum.io/rpc"], explorer: "https://arbiscan.io" },
   84532: {
     id: 84532,
     hex: "0x14a34",

@@ -119,6 +119,17 @@ export const envSchema = z.object({
   X402_ASSET_ADDRESS: z.string().optional(),
   /** Read-only JSON-RPC for the sweep and the FR-28 reconcile. Public endpoint by default. */
   EVM_RPC_URL: z.string().optional(),
+  /**
+   * More EVM rails beside `X402_NETWORK` (25 Oct 2026, HackMeridian; docs/HACKMERIDIAN-EVM-USDT0-RAIL.md).
+   * A JSON array; each entry names a `network` and may override the fields `KNOWN_EVM_RAILS`
+   * fills in: `[{"network":"eip155:42161"}]` is a complete Arbitrum USDT0 rail. Every extra
+   * rail shares the receiving address and, unless it says otherwise, the facilitator.
+   */
+  X402_EXTRA_EVM_RAILS: z.string().optional(),
+  /** Per-chain RPC overrides for the extra rails; the public endpoints are the defaults. */
+  ARBITRUM_RPC_URL: z.string().optional(),
+  ETHEREUM_RPC_URL: z.string().optional(),
+  POLYGON_RPC_URL: z.string().optional(),
 
   // --- the Stellar rail (25 Oct 2026, HackMeridian; docs/HACKMERIDIAN-BUILD.md §3.2) ------
   /**
@@ -386,7 +397,44 @@ export function sweepPrivateKey(): string | null {
 // else, so that "is Stellar on?" has one answer, and a mis-set asset is caught once, at
 // boot, rather than on the first sale.
 
-export type EvmRail = { family: "evm"; network: `eip155:${number}`; chainId: number; asset: string; payTo: string };
+/**
+ * One EVM rail: a chain, a token on it, and how to pay and be paid there. Since 25 Oct
+ * 2026 a deployment may run several (`evmRails()`), all paying into the same receiving
+ * address. `domain` is the token's EIP-712 domain — what the buyer's wallet signs for —
+ * and must be byte-exact (`USD₮0`, with the ₮, on Arbitrum). `decimals` is always 6:
+ * the ledger is in micro-dollars and a token with other decimals would need a conversion
+ * this codebase does not have (the Stellar rail has `microToStroops` for its 7).
+ */
+export type EvmRail = {
+  family: "evm";
+  network: `eip155:${number}`;
+  chainId: number;
+  asset: string;
+  payTo: string;
+  symbol: string;
+  decimals: 6;
+  domain: { name: string; version: string };
+  /** Where this rail's `verify`/`settle` go. Undefined means the primary rail's facilitator. */
+  facilitatorUrl?: string;
+  rpcUrl: string;
+  /** Block explorer base, no trailing slash, for receipts and payout rows. */
+  explorer: string;
+};
+
+/**
+ * The tokens this codebase knows how to name on EVM chains. The primary rail (Base) is
+ * described by `X402_NETWORK`; these fill in everything an extra rail does not say. The
+ * Arbitrum entry is USDT0 — the Arbitrum USDT contract, upgraded in place to Tether's V2
+ * token with the LayerZero OFT extension — whose EIP-3009 support and EIP-712 domain
+ * were verified on-chain on 25 Oct 2026 (docs/HACKMERIDIAN-EVM-USDT0-RAIL.md §1).
+ */
+export const KNOWN_EVM_RAILS: Record<string, Omit<EvmRail, "family" | "network" | "chainId" | "payTo" | "decimals" | "facilitatorUrl">> = {
+  "eip155:8453": { asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", symbol: "USDC", domain: { name: "USD Coin", version: "2" }, rpcUrl: "https://mainnet.base.org", explorer: "https://basescan.org" },
+  "eip155:84532": { asset: "0x036CbD53842c5426634e7929541eC2318f3dCF7e", symbol: "USDC", domain: { name: "USDC", version: "2" }, rpcUrl: "https://sepolia.base.org", explorer: "https://sepolia.basescan.org" },
+  "eip155:42161": { asset: "0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9", symbol: "USDT0", domain: { name: "USD₮0", version: "1" }, rpcUrl: "https://arb1.arbitrum.io/rpc", explorer: "https://arbiscan.io" },
+};
+
+export class EvmRailConfigError extends Error {}
 export type StellarNetwork = "stellar:testnet" | "stellar:pubnet";
 export type StellarRail = {
   family: "stellar";
@@ -549,15 +597,123 @@ function buildStellarRail(e: Env): StellarRail | null {
 }
 
 /** The EVM rail as a `Rail`. Requires the receiving address, like `x402Config()`. */
+/** The primary EVM rail, from `X402_NETWORK`: Base, exactly as it has always been configured. */
 export function evmRail(): EvmRail {
-  const { network, chainId, asset, payTo } = x402Config();
-  return { family: "evm", network: network as `eip155:${number}`, chainId, asset, payTo };
+  const { network, chainId, asset, payTo, facilitatorUrl } = x402Config();
+  const known = KNOWN_EVM_RAILS[network];
+  return {
+    family: "evm",
+    network: network as `eip155:${number}`,
+    chainId,
+    asset,
+    payTo,
+    symbol: known && known.asset.toLowerCase() === asset.toLowerCase() ? known.symbol : "USDC",
+    decimals: 6,
+    // The primary rail's domain is still resolved by lib/x402/asset.ts for a custom
+    // X402_ASSET_ADDRESS; this is the known answer for the two Base networks.
+    domain: known && known.asset.toLowerCase() === asset.toLowerCase() ? known.domain : { name: "USDC", version: "2" },
+    facilitatorUrl,
+    rpcUrl: rpcUrl(),
+    explorer: known?.explorer ?? "",
+  };
 }
 
-/** Every rail this deployment can be paid on, EVM first (BUILD H10). */
+type ExtraEvmRailInput = { network?: unknown; asset?: unknown; symbol?: unknown; domain?: unknown; rpcUrl?: unknown; explorer?: unknown; facilitatorUrl?: unknown };
+
+/**
+ * The extra EVM rails from `X402_EXTRA_EVM_RAILS`, each completed from `KNOWN_EVM_RAILS`
+ * and checked for shape. Throws `EvmRailConfigError` naming the entry, so a typo stops
+ * the boot rather than producing a 402 nobody can pay. Memoised per process like
+ * `stellarRail()`; `resetEnv()` in tests clears it through `env()`.
+ */
+export function extraEvmRails(payTo: string | null): EvmRail[] {
+  const raw = env().X402_EXTRA_EVM_RAILS;
+  if (!raw || raw.trim() === "") return [];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (e) {
+    throw new EvmRailConfigError(`X402_EXTRA_EVM_RAILS is not JSON: ${e instanceof Error ? e.message : String(e)}`);
+  }
+  if (!Array.isArray(parsed)) throw new EvmRailConfigError("X402_EXTRA_EVM_RAILS must be a JSON array of rails");
+  const primary = caip2Network(env().X402_NETWORK);
+  const seen = new Set<string>([primary]);
+  return parsed.map((entry, i) => {
+    const e = (entry ?? {}) as ExtraEvmRailInput;
+    const network = typeof e.network === "string" ? e.network : "";
+    if (!/^eip155:\d+$/.test(network)) throw new EvmRailConfigError(`X402_EXTRA_EVM_RAILS[${i}].network must be eip155:<chainId>, got ${JSON.stringify(e.network)}`);
+    if (seen.has(network)) throw new EvmRailConfigError(`X402_EXTRA_EVM_RAILS[${i}] repeats ${network}`);
+    seen.add(network);
+    const known = KNOWN_EVM_RAILS[network];
+    const asset = typeof e.asset === "string" ? e.asset : known?.asset;
+    const symbol = typeof e.symbol === "string" ? e.symbol : known?.symbol;
+    const domain = e.domain && typeof e.domain === "object" ? (e.domain as { name?: unknown; version?: unknown }) : known?.domain;
+    const explorer = typeof e.explorer === "string" ? e.explorer : known?.explorer ?? "";
+    const chainId = Number(network.split(":")[1]);
+    const envRpc = chainId === 42161 ? env().ARBITRUM_RPC_URL : chainId === 1 ? env().ETHEREUM_RPC_URL : chainId === 137 ? env().POLYGON_RPC_URL : undefined;
+    const rpc = typeof e.rpcUrl === "string" ? e.rpcUrl : envRpc && envRpc.length > 0 ? envRpc : known?.rpcUrl;
+    if (!asset || !/^0x[0-9a-fA-F]{40}$/.test(asset)) throw new EvmRailConfigError(`X402_EXTRA_EVM_RAILS[${i}] (${network}) needs an asset address; none known for this network`);
+    if (!symbol || symbol.length === 0) throw new EvmRailConfigError(`X402_EXTRA_EVM_RAILS[${i}] (${network}) needs a symbol`);
+    if (!domain || typeof domain.name !== "string" || typeof domain.version !== "string" || domain.name.length === 0) {
+      throw new EvmRailConfigError(`X402_EXTRA_EVM_RAILS[${i}] (${network}) needs the token's EIP-712 domain {name, version}`);
+    }
+    if (!rpc) throw new EvmRailConfigError(`X402_EXTRA_EVM_RAILS[${i}] (${network}) needs an rpcUrl`);
+    return {
+      family: "evm" as const,
+      network: network as `eip155:${number}`,
+      chainId,
+      asset,
+      payTo: payTo ?? "",
+      symbol,
+      decimals: 6 as const,
+      domain: { name: domain.name, version: domain.version },
+      ...(typeof e.facilitatorUrl === "string" ? { facilitatorUrl: e.facilitatorUrl } : {}),
+      rpcUrl: rpc,
+      explorer,
+    };
+  });
+}
+
+/** Every EVM rail this deployment can be paid on, the primary first. Needs the receiving address. */
+export function evmRails(): EvmRail[] {
+  const primary = evmRail();
+  return [primary, ...extraEvmRails(primary.payTo)];
+}
+
+/**
+ * The same list without the receiving address, for pages that render where no payout
+ * configuration exists (the same reason `paymentChain()` sits beside `x402Config()`).
+ * `payTo` is the empty string on every entry and must not reach a 402.
+ */
+export function evmChains(): EvmRail[] {
+  const { network, chainId, asset } = paymentChain();
+  const known = KNOWN_EVM_RAILS[network];
+  const same = known && known.asset.toLowerCase() === asset.toLowerCase();
+  const primary: EvmRail = {
+    family: "evm",
+    network: network as `eip155:${number}`,
+    chainId,
+    asset,
+    payTo: "",
+    symbol: same ? known.symbol : "USDC",
+    decimals: 6,
+    domain: same ? known.domain : { name: "USDC", version: "2" },
+    rpcUrl: rpcUrl(),
+    explorer: known?.explorer ?? "",
+  };
+  return [primary, ...extraEvmRails(null)];
+}
+
+/** The EVM rail that serves `network`, or null. Without the receiving address when `payTo` is false. */
+export function evmRailFor(network: string, options: { payTo?: boolean } = {}): EvmRail | null {
+  const list = options.payTo === false ? evmChains() : evmRails();
+  return list.find((r) => r.network === network) ?? null;
+}
+
+/** Every rail this deployment can be paid on, EVM first (BUILD H10), the primary EVM rail first of all. */
 export function paymentRails(): Rail[] {
   const stellar = stellarRail();
-  return stellar ? [evmRail(), stellar] : [evmRail()];
+  return stellar ? [...evmRails(), stellar] : evmRails();
 }
 
 /**
@@ -567,7 +723,8 @@ export function paymentRails(): Rail[] {
  */
 export function paymentNetworks(): string[] {
   const stellar = stellarRail();
-  return stellar ? [paymentChain().network, stellar.network] : [paymentChain().network];
+  const evm = evmChains().map((r) => r.network);
+  return stellar ? [...evm, stellar.network] : evm;
 }
 
 /** The Stellar payout signer's secret, or `null` when this deployment holds none (§14.8). */

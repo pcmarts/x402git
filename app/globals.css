@@ -4699,6 +4699,51 @@ tr:target {
   color: var(--ink);
 }
 
+/* Rail chips (25 Oct 2026, rail-marks.tsx): "USDT0 on Arbitrum" with its marks. Mono at
+   label size, the way every other platform fact is set; the marks are 1rem circles with
+   the text's own line as their baseline, so a chip sits inside a sentence or a table cell
+   without changing its height. A text mark (no file held) is the symbol's first letter in
+   a sunk circle, so the row keeps its shape whichever token it names. */
+
+.rail-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-family: var(--font-mono);
+  font-size: var(--size-label);
+  line-height: var(--leading-label);
+  letter-spacing: var(--tracking-normal);
+  color: var(--ink);
+  white-space: nowrap;
+  vertical-align: middle;
+}
+
+.rail-chip .mark {
+  width: 1rem;
+  height: 1rem;
+  flex: none;
+  border-radius: 50%;
+}
+
+.rail-chip .mark + .mark {
+  margin-left: calc(-1 * var(--space-1) + 1px);
+}
+
+.rail-chip .mark-text {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background-color: var(--paper-sunk);
+  border: var(--rule-width) solid var(--rule);
+  font-size: 0.5625rem;
+  font-weight: var(--weight-medium);
+  color: var(--ink-muted);
+}
+
+.rail-chip-text {
+  margin-left: var(--space-1);
+}
+
 /* The terminal alternative under the Stellar button (25 Oct 2026): a closed disclosure
    in the buy box, one quiet line as its summary. No rule under the summary — the box is
    one of the two bordered rectangles in this system and nothing inside it draws lines. */

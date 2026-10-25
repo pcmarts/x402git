@@ -53,6 +53,9 @@ export function buyLinks({ owner, slug, appUrl }: BuyLinksInput): BuyLinks {
 export function chainLabel(network: string): string {
   if (network === "eip155:8453") return "Base";
   if (network === "eip155:84532") return "Base Sepolia";
+  if (network === "eip155:42161") return "Arbitrum";
+  if (network === "eip155:1") return "Ethereum";
+  if (network === "eip155:137") return "Polygon";
   // The Stellar rail (25 Oct 2026). "Stellar" alone is mainnet, the way "Base" is.
   if (network === "stellar:pubnet") return "Stellar";
   if (network === "stellar:testnet") return "Stellar testnet";
