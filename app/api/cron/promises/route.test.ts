@@ -36,7 +36,7 @@ function get(headers: Record<string, string> = {}) {
 /** An open-release listing with one pending release promised for `opensAt`. */
 function seedOpen(slug: string, publicRepo: string, opensAt: string, overrides: Record<string, unknown> = {}) {
   const seeded = seedListing(mock, { owner: "adrian", slug, releases: [{ version: "1.1.0" }] });
-  Object.assign(mock.rows("listing").find((l) => l.id === seeded.listingId)!, { open_release: true, public_repo_url: publicRepo, next_opens_at: opensAt });
+  Object.assign(mock.rows("listing").find((l) => l.id === seeded.listingId)!, { open_release: true, public_repo_url: publicRepo, open_after_days: 30 });
   Object.assign(mock.rows("release").find((r) => r.id === seeded.latest.id)!, {
     promise_status: "pending",
     opens_at: opensAt,

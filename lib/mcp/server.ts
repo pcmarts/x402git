@@ -134,7 +134,7 @@ const paymentOptionsSchema = z
  * after the on-read check, so an agent and the page never disagree about a status.
  */
 const openReleaseSchema = OpenReleaseBlock.nullable().describe(
-  "Present when the release being sold is an open release: sold early from a private repository, promised to go public in `public_repo_url` on `opens_at` under `licence`. `status` is `pending` until the date, then `opened_on_time` (with `evidence_url`, the public commit) or `overdue`; `ineligible` means a check at cut failed and `checks` says which. Null on an ordinary listing.",
+  "Present when the release being sold is an open release: sold early from a private repository, promised to go public in `public_repo_url` on `opens_at` under `licence`. `open_after_days` is the project's standing rule (each release opens that many days after its cut). `status` is `pending` until the date, then `opened_on_time` (with `evidence_url`, the public commit) or `overdue`; `ineligible` means a check at cut failed and `checks` says which. Null on an ordinary listing.",
 );
 
 // ---------------------------------------------------------------------------

@@ -4534,9 +4534,11 @@ tr:target {
 /* The money field. A price field is the one input on this site whose unit matters, so
    the unit is drawn into the control as a sunk affix instead of being spelled out in
    the label and forgotten. The border is the control's; the input inside has none, and
-   the focus ring lands on the pair. */
+   the focus ring lands on the pair. Since 25 Oct 2026 the same pattern carries a prefix
+   that is not money (`github.com/` before a repository path) and a suffix (`days`), so
+   the rules hang off `.affix` itself; `.money` and `.unit` only say which field it is. */
 
-.field.money .affix {
+.field .affix {
   display: flex;
   align-items: stretch;
   width: 100%;
@@ -4547,7 +4549,7 @@ tr:target {
   transition: border-color var(--transition);
 }
 
-.field.money .affix > span {
+.field .affix > span {
   display: flex;
   align-items: center;
   padding-inline: var(--space-3);
@@ -4558,7 +4560,13 @@ tr:target {
   color: var(--ink);
 }
 
-.field.money .affix input {
+/* A suffix (`days`) closes the control instead of opening it: the rule moves to its left. */
+.field .affix > input + span {
+  border-right: 0;
+  border-left: var(--rule-width) solid var(--rule);
+}
+
+.field .affix input {
   flex: 1;
   min-width: 0;
   max-width: none;
@@ -4566,19 +4574,19 @@ tr:target {
   background-color: transparent;
 }
 
-.field.money .affix:hover {
+.field .affix:hover {
   border-color: var(--ink-muted);
 }
 
-.field.money .affix:focus-within {
+.field .affix:focus-within {
   box-shadow: var(--focus-ring);
 }
 
-.field.money .affix input:focus-visible {
+.field .affix input:focus-visible {
   box-shadow: none;
 }
 
-.field.money .affix:has(input:disabled) {
+.field .affix:has(input:disabled) {
   border-color: var(--rule);
   background-color: var(--paper-sunk);
 }
@@ -4586,7 +4594,7 @@ tr:target {
 /* The floor, under the field it constrains. Computed — it is a platform number — so it
    sets in the mono face at label size, in Ash: a constraint on an open box, read at a
    glance, not a suggestion competing with the presets above it. */
-.field.money .floor {
+.field .floor {
   margin: var(--space-2) 0 0;
   max-width: none;
   font-family: var(--font-mono);
@@ -4607,12 +4615,20 @@ tr:target {
    radio beside it says `custom`, and a disabled field would post nothing at all. */
 
 @supports selector(:has(*)) {
-  .field.money {
+  .field.when-custom {
     display: none;
   }
 
-  fieldset:has(.presets input[value="custom"]:checked) .field.money {
+  fieldset:has(.presets input[value="custom"]:checked) .field.when-custom {
     display: block;
+  }
+
+  /* The open-release fieldset (25 Oct 2026): the public repo and the days exist only
+     while the switch says Yes. Hidden, not removed, for the same reason as the custom
+     field above — the values ride along and come back when the switch does. The save
+     route ignores them while the switch is off, so a stale value cannot bounce a save. */
+  fieldset.open-release:has(input[name="open_release"][value="0"]:checked) .open-only {
+    display: none;
   }
 
   /* With the field gone the preset row is the fieldset's last line, and the gap it was
@@ -4620,6 +4636,67 @@ tr:target {
   fieldset:has(.presets input[value="custom"]:not(:checked)) .presets {
     margin-bottom: 0;
   }
+}
+
+/* A Yes/No switch (25 Oct 2026, founder: "a yes/no switch" for whether a listing is an
+   open-source project). Two radios drawn as one segmented control: the chosen half is
+   ink on paper, inverted, the other half ash — a state, not a verdict, so no status
+   ink. The radio itself is laid invisibly over its half, so the click target, the focus
+   ring and the accessible name are the native control's; nothing here is scripted. */
+
+.switch {
+  display: inline-flex;
+  border: var(--rule-width) solid var(--rule-control);
+  border-radius: var(--radius);
+  background-color: var(--paper);
+  margin-bottom: var(--space-2);
+}
+
+.switch label {
+  position: relative;
+  display: block;
+  margin: 0;
+}
+
+.switch label + label {
+  border-left: var(--rule-width) solid var(--rule-control);
+}
+
+.switch input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.switch span {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 4.5rem;
+  min-height: var(--tap);
+  padding: 0 var(--space-4);
+  font-family: var(--font-mono);
+  font-size: var(--size-listing);
+  letter-spacing: var(--tracking-normal);
+  color: var(--ink-muted);
+  transition: background-color var(--transition), color var(--transition);
+}
+
+.switch input:checked + span {
+  background-color: var(--ink);
+  color: var(--paper);
+}
+
+.switch input:focus-visible + span {
+  box-shadow: var(--focus-ring);
+}
+
+.switch label:hover input:not(:checked) + span {
+  color: var(--ink);
 }
 
 /* Reference a creator reads once — how a README renders — kept on the page it applies

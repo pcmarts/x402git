@@ -106,8 +106,8 @@ export async function openEligibility(input: OpenEligibilityInput): Promise<Open
 }
 
 export type OpenStampInput = {
-  listing: Pick<ListingRow, "next_opens_at">;
-  /** The row as it stands before the stamp: `created_at` anchors the 90-day cap, `opens_at` the only-earlier rule. */
+  listing: Pick<ListingRow, "open_after_days">;
+  /** The row as it stands before the stamp: `created_at` anchors the date and the 90-day cap, `opens_at` the only-earlier rule. */
   release: Pick<ReleaseRow, "created_at" | "opens_at">;
   licenceSpdx: string | null;
   checks: OpenCheck[];
@@ -116,19 +116,24 @@ export type OpenStampInput = {
 /**
  * The columns to write for this release's promise. Pure.
  *
- * `opens_at` is the listing's `next_opens_at`, clamped two ways so the write can never
- * trip the database: never later than `created_at + 90 days` (the cap), and never later
- * than an `opens_at` the row already carries (a resumed `pending` cut must not push a
- * stamped date back). A `pending` promise is only ever written when every check passed.
+ * `opens_at` is this release's cut plus the listing's `open_after_days` (founder, 25 Oct
+ * 2026: the offer is "buyers get each release N days early", restated from every cut,
+ * not one calendar date promised in advance). It is clamped two ways so the write can
+ * never trip the database: never later than `created_at + 90 days` (the cap, which a
+ * well-formed listing cannot exceed anyway), and never later than an `opens_at` the row
+ * already carries (a resumed `pending` cut must not push a stamped date back). A
+ * `pending` promise is only ever written when every check passed.
  */
 export function openStamp(input: OpenStampInput): Pick<ReleaseRow, "opens_at" | "open_licence_spdx" | "promise_status" | "open_eligibility" | "promise_checked_at"> {
   const eligible = input.checks.every((c) => c.ok);
 
-  let opensAt: Date | null = input.listing.next_opens_at ? new Date(input.listing.next_opens_at) : null;
-  if (opensAt && Number.isNaN(opensAt.getTime())) opensAt = null;
+  const days = input.listing.open_after_days;
+  const cutAt = new Date(input.release.created_at);
+  let opensAt: Date | null =
+    typeof days === "number" && Number.isInteger(days) && days >= 1 && !Number.isNaN(cutAt.getTime())
+      ? new Date(cutAt.getTime() + Math.min(days, OPEN_RELEASE_MAX_DAYS) * 86_400_000)
+      : null;
   if (opensAt) {
-    const cap = new Date(new Date(input.release.created_at).getTime() + OPEN_RELEASE_MAX_DAYS * 86_400_000);
-    if (opensAt > cap) opensAt = cap;
     const already = input.release.opens_at ? new Date(input.release.opens_at) : null;
     if (already && !Number.isNaN(already.getTime()) && opensAt > already) opensAt = already;
   }

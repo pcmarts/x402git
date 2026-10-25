@@ -799,7 +799,7 @@ describe("open_release in get_listing and how_to_buy (STRATEGY Proof 4: an agent
   function seedOpen(release: Record<string, unknown>) {
     const seeded = seedListing(mock, { releases: [{ version: "1.2.0" }] });
     withManifest("1.2.0");
-    Object.assign(mock.rows("listing").find((l) => l.id === seeded.listingId)!, { open_release: true, public_repo_url: PUBLIC, next_opens_at: "2026-12-01T00:00:00.000Z" });
+    Object.assign(mock.rows("listing").find((l) => l.id === seeded.listingId)!, { open_release: true, public_repo_url: PUBLIC, open_after_days: 30 });
     Object.assign(mock.rows("release").find((r) => r.id === seeded.latest.id)!, {
       opens_at: "2026-12-01T00:00:00.000Z",
       open_licence_spdx: "MIT",
@@ -832,6 +832,7 @@ describe("open_release in get_listing and how_to_buy (STRATEGY Proof 4: an agent
 
     const expected = {
       opens_at: "2026-12-01T00:00:00.000Z",
+      open_after_days: 30,
       public_repo_url: PUBLIC,
       licence: "MIT",
       status: "pending",

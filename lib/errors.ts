@@ -55,7 +55,6 @@ export const ERRORS = {
   public_repo: { status: 422, group: "listing", message: "Only private repositories can be listed. Make the repository private and try again." },
   // Open releases (25 Oct 2026, HackMeridian): the opening date is a promise to the
   // people who already paid, so it can be brought forward and never pushed back.
-  opens_at_only_earlier: { status: 409, group: "listing", message: "The opening date can be brought forward, never pushed back." },
 
   // --- auth (§8.1) -----------------------------------------------------------
   invalid_key: { status: 401, group: "auth", message: "The API key is missing, malformed or revoked." },

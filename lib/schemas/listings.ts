@@ -99,14 +99,23 @@ export const GithubRepoUrl = z
   .regex(GITHUB_REPO_URL_RE, "must be https://github.com/owner/name")
   .meta({ id: "GithubRepoUrl", description: "`https://github.com/owner/name`, nothing after the repository name." });
 
-/**
- * An opening date. A full RFC 3339 timestamp, or a bare `YYYY-MM-DD`, which the service
- * reads as midnight UTC on that day: a maintainer types a day, an agent sends an instant.
- */
-export const OpensAt = z.union([IsoDateTime, z.iso.date()]).meta({ id: "OpensAt", description: "RFC 3339, or `YYYY-MM-DD` for midnight UTC that day." });
-
 /** How many days after a cut the opening date may be, at most. Enforced again by the database. */
 export const OPEN_RELEASE_MAX_DAYS = 90;
+
+/** The three the form offers before "Other" (founder, 25 Oct 2026): a week, a month, the cap. */
+export const OPEN_AFTER_DAYS_PRESETS = [7, 30, 90] as const;
+
+/**
+ * The standing rule on an open-release listing: each release goes public this many days
+ * after it is cut. The cut stamps `opens_at = created_at + open_after_days` on the release,
+ * so the rule is restated from every release rather than promised once as a date.
+ */
+export const OpenAfterDays = z
+  .number()
+  .int()
+  .min(1)
+  .max(OPEN_RELEASE_MAX_DAYS)
+  .meta({ id: "OpenAfterDays", description: `Days from a release's cut to its public opening, 1 to ${OPEN_RELEASE_MAX_DAYS}.` });
 
 export const OpenReleaseStatus = z.enum(["pending", "opened_on_time", "overdue", "not_open", "ineligible"]).meta({
   id: "OpenReleaseStatus",
@@ -130,7 +139,8 @@ export const OpenReleaseCheck = z
  */
 export const OpenReleaseBlock = z
   .object({
-    opens_at: IsoDateTime.nullable().describe("When the code goes public. Can only ever move earlier."),
+    opens_at: IsoDateTime.nullable().describe("When this release goes public: its cut plus `open_after_days`, stamped at cut. Can only ever move earlier. Null on the standing offer, which has no release yet."),
+    open_after_days: OpenAfterDays.nullable().describe("The listing's standing rule: each release goes public this many days after it is cut. Null once the listing stops offering open releases."),
     public_repo_url: z.string().describe("Where it goes public: a different repository from the one being sold."),
     licence: z.string().nullable().describe("The SPDX id the release ships under, read from the sold snapshot."),
     status: OpenReleaseStatus,
@@ -142,7 +152,7 @@ export const OpenReleaseBlock = z
   .meta({
     id: "OpenRelease",
     description:
-      "An open release: sold early from a private repository, promised to go public in `public_repo_url` on `opens_at` under `licence`. After the date the platform checks the promise and `status` says whether it was kept. On the creator's own listing, before any release has been stamped, this is the standing offer the next cut will stamp.",
+      "An open release: sold early from a private repository, promised to go public in `public_repo_url` on `opens_at` under `licence`. After the date the platform checks the promise and `status` says whether it was kept. On the creator's own listing, before any release has been stamped, this is the standing offer (`open_after_days`, no `opens_at`) the next cut will stamp.",
   });
 
 export type OpenReleaseBlockOutput = z.infer<typeof OpenReleaseBlock>;
@@ -150,12 +160,12 @@ export type OpenReleaseCheckOutput = z.infer<typeof OpenReleaseCheck>;
 
 /** The three listing fields behind an open release, shared by create and patch. */
 const OpenReleaseFields = {
-  /** Sell the next release early and promise a public opening. Both fields below are then required. */
+  /** Sell each release early and promise a public opening. Both fields below are then required. */
   open_release: z.boolean().optional(),
   /** Where the code goes public. Must not be the repository being sold (BUILD H6). */
   public_repo_url: GithubRepoUrl.nullable().optional(),
-  /** At most 90 days ahead. Once set it can be brought forward, never pushed back (`409 opens_at_only_earlier`). */
-  next_opens_at: OpensAt.nullable().optional(),
+  /** Days from each cut to its opening, 1 to 90. Applies to releases cut from now on; a release already cut keeps its date. */
+  open_after_days: OpenAfterDays.nullable().optional(),
 };
 
 export const CreateListingRequest = z
@@ -184,7 +194,7 @@ export const CreateListingRequest = z
   .meta({
     id: "CreateListingRequest",
     description:
-      "Rail B needs `ssh_public_key`; Rail A needs `installation_id` and `github_repo_id`. `open_release: true` needs `public_repo_url` and `next_opens_at` too.",
+      "Rail B needs `ssh_public_key`; Rail A needs `installation_id` and `github_repo_id`. `open_release: true` needs `public_repo_url` and `open_after_days` too.",
   });
 
 export const CreateListingResponse = z
@@ -307,7 +317,7 @@ export const PatchListingRequest = z
   .meta({
     id: "PatchListingRequest",
     description:
-      "FR-16: price changes apply to future purchases only. Existing holders keep their stamped terms. An earlier `next_opens_at` also brings forward every pending release of this listing; a later one is refused.",
+      "FR-16: price changes apply to future purchases only. Existing holders keep their stamped terms. `open_after_days` works the same way: it applies to releases cut from now on, and a release already cut keeps the `opens_at` it was sold with.",
   });
 
 /** FR-8. `version` is required when the ref is untagged. */

@@ -582,7 +582,7 @@ export async function patchListing(creator: CreatorRow, listingId: string, input
 
   if (Object.keys(patch).length === 0) {
     throw new ApiError("invalid_request", {
-      message: "Nothing to change. Send at least one of price_micro, update_price_micro, description, trigger_hint, open_release, public_repo_url, next_opens_at.",
+      message: "Nothing to change. Send at least one of price_micro, update_price_micro, description, trigger_hint, open_release, public_repo_url, open_after_days.",
     });
   }
 
@@ -591,19 +591,6 @@ export async function patchListing(creator: CreatorRow, listingId: string, input
 
   const updated = data as ListingRow;
 
-  // An earlier date is a promise to the people who already paid, so every release still
-  // waiting on the old date follows it. "Only earlier" means this can only ever bring a
-  // release forward; the database trigger refuses anything else (migration 20261025160000).
-  if (typeof patch.next_opens_at === "string") {
-    const { error: followError } = await db()
-      .from("release")
-      .update({ opens_at: patch.next_opens_at })
-      .eq("listing_id", listing.id)
-      .eq("promise_status", "pending")
-      .gt("opens_at", patch.next_opens_at);
-    if (followError) throw followError;
-  }
-
   return listingView(updated, creator.handle, await latestPassingRelease(updated.id), creator);
 }
 
@@ -611,61 +598,41 @@ export async function patchListing(creator: CreatorRow, listingId: string, input
 // Open releases (25 Oct 2026, HackMeridian; docs/HACKMERIDIAN-STRATEGY.md §6a)
 // ---------------------------------------------------------------------------
 
-type OpenReleaseInput = Pick<CreateListingInput, "open_release" | "public_repo_url" | "next_opens_at">;
+type OpenReleaseInput = Pick<CreateListingInput, "open_release" | "public_repo_url" | "open_after_days">;
 
 function hasOpenReleaseFields(input: OpenReleaseInput): boolean {
-  return input.open_release !== undefined || input.public_repo_url !== undefined || input.next_opens_at !== undefined;
+  return input.open_release !== undefined || input.public_repo_url !== undefined || input.open_after_days !== undefined;
 }
 
 /**
  * The open-release columns to write, validated against the row as it will stand after
- * the write (`current` is null on create). Four rules, each its own sentence:
+ * the write (`current` is null on create). Two rules, each its own sentence:
  *
- * - **Only earlier.** Once a date is set it can be brought forward, never pushed back,
- *   and never cleared: the date is a promise to the people who already paid. The
- *   database trigger guards the release rows; this guards the listing's own date and
- *   gives the refusal a code (`409 opens_at_only_earlier`) and a sentence.
- * - **At most 90 days ahead.** Measured from now, so a cut that follows is always
- *   inside the database's `created_at + 90 days` cap. A date in the past is allowed —
- *   a release can be promised to a date that has already come, and is checked at once.
  * - **Not the repository being sold.** An open release is sold from a private mirror
  *   and opens into the project's own public repository (BUILD H6). Naming the sold repo
  *   as the place it opens would promise nothing.
- * - **Both fields, when it is on.** A promise with no place or no date is not one.
+ * - **Both fields, when it is on.** A promise with no place or no number of days is not
+ *   one.
+ *
+ * `open_after_days` is a rule, not a date (founder, 25 Oct 2026): each cut stamps
+ * `created_at + open_after_days` on its own release (lib/release/open.ts). So, like a
+ * price (FR-16), changing it touches releases cut from now on and nothing already sold;
+ * the only-earlier guard on a stamped `opens_at` lives on the release row, in the
+ * database, and nothing here ever moves one.
  */
-export function openReleasePatch(current: ListingRow | null, input: OpenReleaseInput, own: { owner: string; name: string } | null, now = new Date()): Record<string, unknown> {
+export function openReleasePatch(current: ListingRow | null, input: OpenReleaseInput, own: { owner: string; name: string } | null): Record<string, unknown> {
   const patch: Record<string, unknown> = {};
   if (input.open_release !== undefined) patch.open_release = input.open_release;
   if (input.public_repo_url !== undefined) patch.public_repo_url = input.public_repo_url;
-  if (input.next_opens_at !== undefined) patch.next_opens_at = normaliseOpensAt(input.next_opens_at, current?.next_opens_at ?? null);
+  if (input.open_after_days !== undefined) patch.open_after_days = input.open_after_days;
 
   // `in`, not `??`: an explicit null in the request means "clear it", and `??` would read
   // that as "leave it alone" and quietly keep the old value.
   const after = {
     open_release: ("open_release" in patch ? patch.open_release : current?.open_release ?? false) as boolean,
     public_repo_url: ("public_repo_url" in patch ? patch.public_repo_url : current?.public_repo_url ?? null) as string | null,
-    next_opens_at: ("next_opens_at" in patch ? patch.next_opens_at : current?.next_opens_at ?? null) as string | null,
+    open_after_days: ("open_after_days" in patch ? patch.open_after_days : current?.open_after_days ?? null) as number | null,
   };
-
-  if (current?.next_opens_at && input.next_opens_at !== undefined) {
-    const was = new Date(current.next_opens_at);
-    if (!after.next_opens_at || new Date(after.next_opens_at) > was) {
-      throw new ApiError("opens_at_only_earlier", {
-        message: `The opening date can be brought forward, never pushed back. It is ${was.toISOString()}; send that or an earlier date.`,
-        details: { field: "next_opens_at", was: was.toISOString(), got: after.next_opens_at },
-      });
-    }
-  }
-
-  if (after.next_opens_at) {
-    const cap = new Date(now.getTime() + OPEN_RELEASE_MAX_DAYS * 86_400_000);
-    if (new Date(after.next_opens_at) > cap) {
-      throw new ApiError("invalid_request", {
-        message: `\`next_opens_at\` must be within ${OPEN_RELEASE_MAX_DAYS} days: on or before ${cap.toISOString().slice(0, 10)}.`,
-        details: { field: "next_opens_at", latest: cap.toISOString() },
-      });
-    }
-  }
 
   if (after.public_repo_url && own) {
     const target = parseGithubRepoUrl(after.public_repo_url);
@@ -685,33 +652,15 @@ export function openReleasePatch(current: ListingRow | null, input: OpenReleaseI
         details: { field: "public_repo_url" },
       });
     }
-    if (!after.next_opens_at) {
+    if (!after.open_after_days) {
       throw new ApiError("invalid_request", {
-        message: `\`next_opens_at\` is required for an open release: the date the code goes public, at most ${OPEN_RELEASE_MAX_DAYS} days ahead.`,
-        details: { field: "next_opens_at" },
+        message: `\`open_after_days\` is required for an open release: how many days after each release is cut it goes public, 1 to ${OPEN_RELEASE_MAX_DAYS}.`,
+        details: { field: "open_after_days" },
       });
     }
   }
 
   return patch;
-}
-
-/**
- * `YYYY-MM-DD` means midnight UTC on that day — except when the row already holds an
- * instant on that same day, which is kept: the dashboard's date field posts the day it
- * shows, and re-saving the form must not quietly move a 17:00 promise to 00:00.
- */
-function normaliseOpensAt(value: string | null, existing: string | null): string | null {
-  if (value === null) return null;
-  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
-    if (existing && new Date(existing).toISOString().slice(0, 10) === value) return new Date(existing).toISOString();
-    return `${value}T00:00:00.000Z`;
-  }
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    throw new ApiError("invalid_request", { message: "`next_opens_at` must be an RFC 3339 timestamp or a `YYYY-MM-DD` date.", details: { field: "next_opens_at" } });
-  }
-  return date.toISOString();
 }
 
 /**

@@ -96,11 +96,12 @@ export function latestReleaseView(release: ReleaseRow | null, handle: string, sl
  * `public_repo_url` is read off the listing, not the release: the check in
  * `lib/release/promise.ts` asks the listing's current URL too, so the two agree.
  */
-export function openReleaseView(listing: Pick<ListingRow, "public_repo_url">, release: ReleaseRow | null): OpenReleaseBlockOutput | null {
+export function openReleaseView(listing: Pick<ListingRow, "public_repo_url" | "open_release" | "open_after_days">, release: ReleaseRow | null): OpenReleaseBlockOutput | null {
   if (!release?.promise_status) return null;
   const evidence = (release.promise_evidence ?? null) as { html_url?: unknown } | null;
   return {
     opens_at: iso(release.opens_at),
+    open_after_days: openAfterDays(listing),
     public_repo_url: listing.public_repo_url ?? "",
     licence: release.open_licence_spdx ?? null,
     status: release.promise_status,
@@ -116,10 +117,13 @@ export function openReleaseView(listing: Pick<ListingRow, "public_repo_url">, re
  * has been stamped: what the next cut will promise. Never shown on a public surface,
  * where only a stamped release speaks (see `openReleaseView`).
  */
-export function openReleaseOffer(listing: Pick<ListingRow, "open_release" | "public_repo_url" | "next_opens_at" | "licence_spdx" | "open_eligibility">): OpenReleaseBlockOutput | null {
-  if (!listing.open_release || !listing.public_repo_url || !listing.next_opens_at) return null;
+export function openReleaseOffer(listing: Pick<ListingRow, "open_release" | "public_repo_url" | "open_after_days" | "licence_spdx" | "open_eligibility">): OpenReleaseBlockOutput | null {
+  const days = openAfterDays(listing);
+  if (!listing.open_release || !listing.public_repo_url || days === null) return null;
   return {
-    opens_at: iso(listing.next_opens_at),
+    // No release, so no date yet: the offer is the rule, and the cut turns it into a day.
+    opens_at: null,
+    open_after_days: days,
     public_repo_url: listing.public_repo_url,
     licence: listing.licence_spdx ?? null,
     status: "pending",
@@ -128,6 +132,13 @@ export function openReleaseOffer(listing: Pick<ListingRow, "open_release" | "pub
     evidence_url: null,
     checks: openReleaseChecks(listing.open_eligibility),
   };
+}
+
+/** The standing rule, or null when the listing is not (or no longer) an open release. */
+function openAfterDays(listing: Pick<ListingRow, "open_release" | "open_after_days">): number | null {
+  if (!listing.open_release) return null;
+  const days = listing.open_after_days;
+  return typeof days === "number" && Number.isInteger(days) && days >= 1 ? days : null;
 }
 
 /** A jsonb `open_eligibility` column as the checks array, dropping anything malformed. */

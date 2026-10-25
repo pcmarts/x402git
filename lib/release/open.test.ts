@@ -85,13 +85,14 @@ describe("openEligibility — computed at cut, never declared (STRATEGY §6a, BU
 
 describe("openStamp — the columns written on the release", () => {
   const cut = "2026-10-25T15:30:00.000Z";
+  const plusDays = (n: number) => new Date(new Date(cut).getTime() + n * 86_400_000).toISOString();
   const ok = [{ id: "licence", ok: true, detail: "" }];
   const bad = [{ id: "licence", ok: true, detail: "" }, { id: "not_yet_public", ok: false, detail: "already public" }];
 
-  it("stamps a pending promise with the listing's date and the sold licence when every check passed", () => {
-    const stamp = openStamp({ listing: { next_opens_at: "2026-12-01T17:00:00.000Z" }, release: { created_at: cut, opens_at: null }, licenceSpdx: "MIT", checks: ok });
+  it("stamps a pending promise at the cut plus the listing's days, with the sold licence, when every check passed", () => {
+    const stamp = openStamp({ listing: { open_after_days: 30 }, release: { created_at: cut, opens_at: null }, licenceSpdx: "MIT", checks: ok });
     expect(stamp).toEqual({
-      opens_at: "2026-12-01T17:00:00.000Z",
+      opens_at: plusDays(30),
       open_licence_spdx: "MIT",
       promise_status: "pending",
       open_eligibility: ok,
@@ -99,30 +100,38 @@ describe("openStamp — the columns written on the release", () => {
     });
   });
 
+  it("counts from this release's own cut, so every release restarts the clock", () => {
+    const later = "2026-11-10T09:00:00.000Z";
+    const stamp = openStamp({ listing: { open_after_days: 7 }, release: { created_at: later, opens_at: null }, licenceSpdx: "MIT", checks: ok });
+    expect(stamp.opens_at).toBe(new Date(new Date(later).getTime() + 7 * 86_400_000).toISOString());
+  });
+
   it("marks the release ineligible when any check failed, and keeps the checks so the page can say which", () => {
-    const stamp = openStamp({ listing: { next_opens_at: "2026-12-01T17:00:00.000Z" }, release: { created_at: cut, opens_at: null }, licenceSpdx: "MIT", checks: bad });
+    const stamp = openStamp({ listing: { open_after_days: 30 }, release: { created_at: cut, opens_at: null }, licenceSpdx: "MIT", checks: bad });
     expect(stamp.promise_status).toBe("ineligible");
-    expect(stamp.opens_at).toBe("2026-12-01T17:00:00.000Z");
+    expect(stamp.opens_at).toBe(plusDays(30));
     expect(stamp.open_eligibility).toEqual(bad);
   });
 
-  it("clamps the date to 90 days after the cut, which is the database's own cap", () => {
-    const stamp = openStamp({ listing: { next_opens_at: "2027-06-01T00:00:00.000Z" }, release: { created_at: cut, opens_at: null }, licenceSpdx: "MIT", checks: ok });
-    expect(stamp.opens_at).toBe(new Date(new Date(cut).getTime() + OPEN_RELEASE_MAX_DAYS * 86_400_000).toISOString());
+  it("clamps a number beyond the cap to 90 days after the cut, which is the database's own cap", () => {
+    const stamp = openStamp({ listing: { open_after_days: 400 }, release: { created_at: cut, opens_at: null }, licenceSpdx: "MIT", checks: ok });
+    expect(stamp.opens_at).toBe(plusDays(OPEN_RELEASE_MAX_DAYS));
     expect(stamp.promise_status).toBe("pending");
   });
 
-  it("never pushes back a date the row already carries (a resumed pending cut)", () => {
-    const stamp = openStamp({ listing: { next_opens_at: "2026-12-15T00:00:00.000Z" }, release: { created_at: cut, opens_at: "2026-12-01T00:00:00.000Z" }, licenceSpdx: "MIT", checks: ok });
-    expect(stamp.opens_at).toBe("2026-12-01T00:00:00.000Z");
+  it("never pushes back a date the row already carries (a resumed pending cut after the days went up)", () => {
+    const stamp = openStamp({ listing: { open_after_days: 60 }, release: { created_at: cut, opens_at: plusDays(30) }, licenceSpdx: "MIT", checks: ok });
+    expect(stamp.opens_at).toBe(plusDays(30));
 
-    const earlier = openStamp({ listing: { next_opens_at: "2026-11-20T00:00:00.000Z" }, release: { created_at: cut, opens_at: "2026-12-01T00:00:00.000Z" }, licenceSpdx: "MIT", checks: ok });
-    expect(earlier.opens_at).toBe("2026-11-20T00:00:00.000Z");
+    const earlier = openStamp({ listing: { open_after_days: 7 }, release: { created_at: cut, opens_at: plusDays(30) }, licenceSpdx: "MIT", checks: ok });
+    expect(earlier.opens_at).toBe(plusDays(7));
   });
 
-  it("is ineligible, never pending, when the listing has no date", () => {
-    const stamp = openStamp({ listing: { next_opens_at: null }, release: { created_at: cut, opens_at: null }, licenceSpdx: "MIT", checks: ok });
-    expect(stamp.opens_at).toBeNull();
-    expect(stamp.promise_status).toBe("ineligible");
+  it("is ineligible, never pending, when the listing has no number of days", () => {
+    for (const days of [null, undefined, 0, -3, 2.5]) {
+      const stamp = openStamp({ listing: { open_after_days: days as number | null }, release: { created_at: cut, opens_at: null }, licenceSpdx: "MIT", checks: ok });
+      expect(stamp.opens_at, String(days)).toBeNull();
+      expect(stamp.promise_status, String(days)).toBe("ineligible");
+    }
   });
 });

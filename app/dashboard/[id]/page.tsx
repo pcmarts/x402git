@@ -66,7 +66,7 @@ import { PLATFORM_FEE_BPS } from "@/lib/core/access";
 import { RESALE_COMPATIBLE_SPDX } from "@/lib/licence";
 import { toMicro } from "@/lib/db/types";
 import { appUrl } from "@/lib/env";
-import { MIN_PRICE_MICRO, OPEN_RELEASE_MAX_DAYS, PRICE_PRESETS_MICRO, UPDATE_PRICE_PRESETS_MICRO } from "@/lib/schemas";
+import { MIN_PRICE_MICRO, OPEN_AFTER_DAYS_PRESETS, OPEN_RELEASE_MAX_DAYS, PRICE_PRESETS_MICRO, UPDATE_PRICE_PRESETS_MICRO } from "@/lib/schemas";
 import { openReleaseChecks } from "@/lib/listings/view";
 import { DESCRIPTION_LIMIT, requireDashboard, TRIGGER_HINT_LIMIT } from "@/lib/web/dashboard";
 import { normalizeReport, type ScanReport } from "@/lib/scan/report";
@@ -350,13 +350,6 @@ type Check = {
   fix?: string;
 };
 
-/** `YYYY-MM-DD` in UTC for `<input type="date">`, or empty. */
-function dateInput(iso: string | null | undefined): string {
-  if (!iso) return "";
-  const date = new Date(iso);
-  return Number.isNaN(date.getTime()) ? "" : date.toISOString().slice(0, 10);
-}
-
 export default async function ListingDashboardPage({
   params,
   searchParams,
@@ -422,6 +415,15 @@ export default async function ListingDashboardPage({
   const osvStalled = Boolean(scanReport?.osv_error) && newest?.scan === "pending";
   // Open releases: the checks the newest cut ran, else the listing's last copy of them.
   const openChecks = openReleaseChecks(newest?.open_eligibility ?? listing.open_eligibility);
+  const isOpen = listing.open_release === true;
+  const openAfterDays = typeof listing.open_after_days === "number" ? listing.open_after_days : null;
+  // The form shows the path after a drawn `github.com/`; the row holds the URL.
+  const publicRepoPath = (listing.public_repo_url ?? "").replace(/^https:\/\/github\.com\//, "");
+  // The placeholder is a real-looking path, not `owner/name` (founder: that reads as a
+  // request for the owner's name). A private mirror is usually the public project's name
+  // plus a suffix, so the guess strips one; `pcmarts/open-release-demo-next` suggests
+  // `pcmarts/open-release-demo`.
+  const publicSlugGuess = listing.slug.replace(/-(next|private|mirror|early|pro|paid)$/i, "") || listing.slug;
   // The repository this listing sells, as somewhere a creator can go (2026-09-01,
   // founder). Null when GitHub cannot be asked, and then there is no link — the same
   // rule the avatar follows: a placeholder for a fact is worse than the fact's absence.
@@ -779,7 +781,7 @@ export default async function ListingDashboardPage({
                 `price_choice` is `custom`. Hidden, not disabled: a disabled field posts
                 nothing, and the value has to survive the round trip when somebody
                 switches back to it. */}
-              <div className="field money">
+              <div className="field money when-custom">
                 <label className="sr-only" htmlFor="price_custom">
                   Custom price, in dollars
                 </label>
@@ -828,7 +830,7 @@ export default async function ListingDashboardPage({
                   Something else
                 </label>
               </div>
-              <div className="field money">
+              <div className="field money when-custom">
                 <label className="sr-only" htmlFor="update_custom">
                   Custom later-release price, in dollars
                 </label>
@@ -856,50 +858,97 @@ export default async function ListingDashboardPage({
                 take?" and the reason this file's header says there is one Save. */}
           </section>
 
-          {/* Open releases (25 Oct 2026, HackMeridian; docs/HACKMERIDIAN-STRATEGY.md §6a).
-              Inside the one form, so the one Save carries it in the same PATCH as the
-              price. A checkbox, a URL and a date, and one sentence saying what they
-              promise. The checks under it are read off the newest cut — computed, never
-              declared — so a maintainer sees what a buyer will see. */}
+          {/* Open releases (25 Oct 2026, HackMeridian; docs/HACKMERIDIAN-STRATEGY.md §6a;
+              reshaped that evening on the founder's direction). Inside the one form, so the
+              one Save carries it in the same PATCH as the price. Three controls and as few
+              words as will hold them: a Yes/No switch, the public repo typed after a drawn
+              `github.com/`, and how many days after each cut it goes public — a preset row
+              like the price, because a maintainer means "a week" or "a month", not a date
+              to be re-promised after every release. The two dependent controls are on
+              screen only while the switch says Yes. The checks under them are read off the
+              newest cut — computed, never declared — so a maintainer sees what a buyer will. */}
           <section id="open-release">
-            <h2>Open release</h2>
-            <fieldset>
-              <legend>Early access, then open</legend>
+            <h2>Open source</h2>
+            <fieldset className="open-release">
+              <legend>Early access</legend>
               <div className="field">
-                <label htmlFor="open_release">
-                  <input type="checkbox" id="open_release" name="open_release" value="1" defaultChecked={listing.open_release === true} /> Sell the
-                  next release early, then open it
-                </label>
-                <small>
-                  The code goes public in this repo on this date. You can bring the date forward later, never push it back. Sell from a
-                  private mirror of the project; the public repo is where it opens.
-                </small>
-              </div>
-              <div className="field">
-                <div className="field-head">
-                  <label htmlFor="public_repo_url">Public repository</label>
+                <span className="field-label" id="open-release-question">
+                  Is this an open-source project?
+                </span>
+                <div className="switch" role="radiogroup" aria-labelledby="open-release-question">
+                  <label>
+                    <input type="radio" name="open_release" value="0" defaultChecked={!isOpen} />
+                    <span>No</span>
+                  </label>
+                  <label>
+                    <input type="radio" name="open_release" value="1" defaultChecked={isOpen} />
+                    <span>Yes</span>
+                  </label>
                 </div>
-                <input
-                  type="url"
-                  id="public_repo_url"
-                  name="public_repo_url"
-                  placeholder="https://github.com/owner/name"
-                  pattern="https://github\.com/[A-Za-z0-9-]{1,39}/[A-Za-z0-9._-]{1,100}"
-                  title="https://github.com/owner/name, nothing after the repository name"
-                  defaultValue={listing.public_repo_url ?? ""}
-                />
+                <small>Yes: buyers get each release first. It goes public a set number of days later, in the project&rsquo;s own repo.</small>
               </div>
-              <div className="field">
+              <div className="field open-only">
                 <div className="field-head">
-                  <label htmlFor="next_opens_at">Opens on</label>
+                  <label htmlFor="public_repo">Public repo</label>
                 </div>
-                {/* A plain date: a maintainer promises a day. The API also takes an instant,
-                    and re-saving the day it shows keeps the instant (lib/listings/service.ts). */}
-                <input type="date" id="next_opens_at" name="next_opens_at" defaultValue={dateInput(listing.next_opens_at)} max={dateInput(new Date(Date.now() + OPEN_RELEASE_MAX_DAYS * 86_400_000).toISOString())} />
-                <small>
-                  At most {OPEN_RELEASE_MAX_DAYS} days ahead.
-                  {listing.next_opens_at ? ` Currently ${formatDateTime(listing.next_opens_at)}.` : ""}
-                </small>
+                <span className="affix">
+                  <span aria-hidden="true">github.com/</span>
+                  <input
+                    id="public_repo"
+                    name="public_repo"
+                    defaultValue={publicRepoPath}
+                    placeholder={`${creator.handle}/${publicSlugGuess}`}
+                    pattern="(https://(www\\.)?github\\.com/)?[A-Za-z0-9-]{1,39}/[A-Za-z0-9._-]{1,100}/?"
+                    title={`The repository path, like ${creator.handle}/${publicSlugGuess}`}
+                    autoComplete="off"
+                    spellCheck={false}
+                  />
+                </span>
+                <small>Where the code goes public. Not the private repo you are selling.</small>
+              </div>
+              <div className="field open-only">
+                <span className="field-label">Goes public after</span>
+                <div className="presets">
+                  {OPEN_AFTER_DAYS_PRESETS.map((preset) => (
+                    <label key={preset} htmlFor={`open-after-${preset}`}>
+                      <input type="radio" id={`open-after-${preset}`} name="open_after_choice" value={String(preset)} defaultChecked={openAfterDays === preset} />
+                      {preset} days
+                    </label>
+                  ))}
+                  <label htmlFor="open-after-custom-choice">
+                    <input
+                      type="radio"
+                      id="open-after-custom-choice"
+                      name="open_after_choice"
+                      value="custom"
+                      defaultChecked={openAfterDays !== null && !(OPEN_AFTER_DAYS_PRESETS as readonly number[]).includes(openAfterDays)}
+                    />
+                    Other
+                  </label>
+                </div>
+                {/* Like the custom price: on screen only while Other is checked, hidden
+                    rather than disabled so the value survives switching back. */}
+                <div className="field unit when-custom">
+                  <label className="sr-only" htmlFor="open_after_custom">
+                    Days until it goes public, 1 to {OPEN_RELEASE_MAX_DAYS}
+                  </label>
+                  <span className="affix">
+                    <input
+                      id="open_after_custom"
+                      name="open_after_custom"
+                      defaultValue={openAfterDays ?? ""}
+                      inputMode="numeric"
+                      pattern="([1-9]|[1-8][0-9]|90)"
+                      title={`A whole number of days, 1 to ${OPEN_RELEASE_MAX_DAYS}`}
+                      aria-describedby="open-after-floor"
+                    />
+                    <span aria-hidden="true">days</span>
+                  </span>
+                  <p className="floor" id="open-after-floor">
+                    1 to {OPEN_RELEASE_MAX_DAYS} days.
+                  </p>
+                </div>
+                <small>Counted from the day each release is cut. Releases already cut keep their date.</small>
               </div>
               {openChecks.length > 0 ? (
                 <div className="field">

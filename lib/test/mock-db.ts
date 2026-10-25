@@ -157,7 +157,7 @@ function defaultsFor(table: string, now: string): Row {
         // Open releases (20261025160000): off unless a test says otherwise.
         open_release: false,
         public_repo_url: null,
-        next_opens_at: null,
+        open_after_days: null,
         open_eligibility: null,
       };
     case "release":

@@ -23,7 +23,7 @@
  */
 
 import { handle } from "@/lib/errors";
-import { micro } from "@/lib/schemas";
+import { micro, OPEN_RELEASE_MAX_DAYS } from "@/lib/schemas";
 import { creatorApi } from "@/lib/web/api-client";
 import { back, DESCRIPTION_LIMIT, requireActor, TRIGGER_HINT_LIMIT } from "@/lib/web/dashboard";
 import { parsePriceInput, validatePrice } from "@/lib/web/money";
@@ -75,23 +75,33 @@ export const POST = handle(async (req: Request, ctx: { params: Promise<{ id: str
     });
   }
 
-  const body: Record<string, string | boolean> = {
+  const body: Record<string, string | boolean | number> = {
     price_micro: micro.serialize(priceMicro),
     update_price_micro: micro.serialize(updateMicro),
   };
   if (description) body.description = description;
   if (triggerHint) body.trigger_hint = triggerHint;
 
-  // Open releases (25 Oct 2026). The checkbox is always sent — an unticked box posts
-  // nothing, and "leave it alone" would make it impossible to turn off. The URL and the
-  // day are sent only when filled, like the two text fields: the API refuses an open
-  // release with either missing, and names the field. The day crosses as `YYYY-MM-DD`;
-  // the service reads it as midnight UTC, or keeps an instant already set on that day.
-  body.open_release = form.get("open_release") === "1";
-  const publicRepoUrl = String(form.get("public_repo_url") ?? "").trim();
-  const opensOn = String(form.get("next_opens_at") ?? "").trim();
-  if (publicRepoUrl) body.public_repo_url = publicRepoUrl;
-  if (opensOn) body.next_opens_at = opensOn;
+  // Open releases (25 Oct 2026, reshaped the same evening on the founder's direction).
+  // The switch is a Yes/No radio pair, so one value always posts and "No" can turn it
+  // off. The other two fields cross only while the switch is on: with it off they are
+  // hidden, and a stale value in a hidden field must not be able to bounce the save.
+  // The repo is typed as `owner/name` after a drawn `github.com/` prefix and widened to
+  // the URL the API stores here; a pasted full URL is accepted too. The days are a
+  // preset or "Other" plus a typed number, read like the price presets above.
+  const openRelease = form.get("open_release") === "1";
+  body.open_release = openRelease;
+  if (openRelease) {
+    const publicRepo = publicRepoUrlFrom(String(form.get("public_repo") ?? ""));
+    if (publicRepo) body.public_repo_url = publicRepo;
+    const choice = String(form.get("open_after_choice") ?? "").trim();
+    const typed = String(form.get("open_after_custom") ?? "").trim();
+    const days = choice !== "custom" && /^\d+$/.test(choice) ? Number(choice) : typed === "" ? null : /^\d+$/.test(typed) ? Number(typed) : Number.NaN;
+    if (days !== null && (!Number.isInteger(days) || days < 1 || days > OPEN_RELEASE_MAX_DAYS)) {
+      return back(target, { error: `Days until a release goes public must be a whole number from 1 to ${OPEN_RELEASE_MAX_DAYS}. Nothing was saved.` });
+    }
+    if (days !== null) body.open_after_days = days;
+  }
 
   const result = await creatorApi<{ description?: string | null; trigger_hint?: string | null }>({
     method: "PATCH",
@@ -112,6 +122,22 @@ export const POST = handle(async (req: Request, ctx: { params: Promise<{ id: str
         : `Saved. Still needed before publishing: ${missing.join(" and ")}.`,
   });
 });
+
+/**
+ * `owner/name`, `github.com/owner/name`, or the full URL with or without `.git` and a
+ * trailing slash, to the `https://github.com/owner/name` the API stores. Anything else is
+ * passed through untouched so the API's own validation names the field.
+ */
+function publicRepoUrlFrom(raw: string): string {
+  const trimmed = raw.trim();
+  if (trimmed === "") return "";
+  const path = trimmed
+    .replace(/^https?:\/\//i, "")
+    .replace(/^(www\.)?github\.com\//i, "")
+    .replace(/\.git$/i, "")
+    .replace(/\/+$/, "");
+  return /^[A-Za-z0-9-]{1,39}\/[A-Za-z0-9._-]{1,100}$/.test(path) ? `https://github.com/${path}` : trimmed;
+}
 
 function choose(choice: FormDataEntryValue | null, custom: FormDataEntryValue | null): bigint {
   const selected = String(choice ?? "").trim();

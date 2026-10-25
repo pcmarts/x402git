@@ -1326,7 +1326,7 @@ describe("the open-release block (docs/HACKMERIDIAN-STRATEGY.md §6a, Proof 4)",
   /** The seeded listing as an open release, with its selling release stamped as given. */
   function seedOpen(release: Record<string, unknown>) {
     seed();
-    Object.assign(mock.rows("listing")[0], { open_release: true, public_repo_url: PUBLIC, next_opens_at: "2026-12-01T00:00:00.000Z" });
+    Object.assign(mock.rows("listing")[0], { open_release: true, public_repo_url: PUBLIC, open_after_days: 30 });
     Object.assign(mock.rows("release").find((r) => r.id === RELEASE_ID)!, {
       opens_at: "2026-12-01T00:00:00.000Z",
       open_licence_spdx: "MIT",

@@ -327,7 +327,7 @@ registerRoute({
   path: "/api/listings",
   summary: "Create a listing",
   description:
-    "Rail B (`source: hosted`) provisions a private repo and adds `ssh_public_key` as a write deploy key for that repo only (FR-7, §14.6); the 201 carries the remote, the default branch and github.com's SSH host key fingerprints so the next call is `git push`. Rail A (`source: github`) needs `installation_id` plus either `github_repo_id` or `repo: \"owner/name\"`, and the repository must be **private** — a public one is refused with `422 public_repo` (FR-10). Caps: 3 unpublished listings per creator (D2c). Open releases (25 Oct 2026): `open_release: true` with `public_repo_url` and `next_opens_at` sells the next release early from this private repository and promises it goes public in that other, public one by that date; the repository being sold is still private and still refused if public.",
+    "Rail B (`source: hosted`) provisions a private repo and adds `ssh_public_key` as a write deploy key for that repo only (FR-7, §14.6); the 201 carries the remote, the default branch and github.com's SSH host key fingerprints so the next call is `git push`. Rail A (`source: github`) needs `installation_id` plus either `github_repo_id` or `repo: \"owner/name\"`, and the repository must be **private** — a public one is refused with `422 public_repo` (FR-10). Caps: 3 unpublished listings per creator (D2c). Open releases (25 Oct 2026): `open_release: true` with `public_repo_url` and `open_after_days` sells each release early from this private repository and promises it goes public in that other, public one that many days after it is cut; the repository being sold is still private and still refused if public.",
   auth: "apiKey",
   request: CreateListingRequest,
   responses: [{ status: 201, description: "Created, in `draft`.", schema: CreateListingResponse }],
@@ -362,12 +362,12 @@ registerRoute({
   path: "/api/listings/{id}",
   summary: "Change price, update price, description, trigger hint or the open-release promise",
   description:
-    "FR-16: price changes apply to future purchases only. Explicit API values are never rounded (FR-12). Open releases (25 Oct 2026): `open_release: true` with `public_repo_url` (a different, public repository — never the one being sold) and `next_opens_at` (at most 90 days ahead; a bare `YYYY-MM-DD` is midnight UTC) makes the next cut an open release. Once set, `next_opens_at` can only move earlier — a later date is `409 opens_at_only_earlier` — and an earlier date also brings forward every pending release.",
+    "FR-16: price changes apply to future purchases only. Explicit API values are never rounded (FR-12). Open releases (25 Oct 2026): `open_release: true` with `public_repo_url` (a different, public repository — never the one being sold) and `open_after_days` (1 to 90) makes every cut from now on an open release that goes public that many days after it is cut. Like a price, the number applies to future cuts only: a release already cut keeps the `opens_at` it was sold with.",
   auth: "apiKey",
   params: [id],
   request: PatchListingRequest,
   response: ListingResponse,
-  errors: ["invalid_request", "invalid_key", "insufficient_scope", "not_found", "retired", "opens_at_only_earlier", "rate_limited"],
+  errors: ["invalid_request", "invalid_key", "insufficient_scope", "not_found", "retired", "rate_limited"],
 });
 
 registerRoute({

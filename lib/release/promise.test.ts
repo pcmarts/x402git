@@ -39,7 +39,7 @@ beforeEach(() => {
   setDb(mock.client as unknown as Db);
   resetPromiseCache();
   const creator = seedCreator(mock);
-  listing = seedListing(mock, creator, { open_release: true, public_repo_url: PUBLIC, next_opens_at: PAST }) as ListingRow;
+  listing = seedListing(mock, creator, { open_release: true, public_repo_url: PUBLIC, open_after_days: 30 }) as ListingRow;
 });
 
 afterEach(() => {

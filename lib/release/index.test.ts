@@ -806,13 +806,11 @@ describe("changelogFor", () => {
 
 describe("cutRelease — stamping the open-release promise (lib/release/open.ts)", () => {
   const PUBLIC = "https://github.com/octo/widget-public";
-  const inDays = (n: number) => new Date(Date.now() + n * 86_400_000).toISOString();
-
   function openListing(overrides: Record<string, unknown> = {}) {
-    Object.assign(mock.rows("listing")[0], { open_release: true, public_repo_url: PUBLIC, next_opens_at: inDays(30), ...overrides });
+    Object.assign(mock.rows("listing")[0], { open_release: true, public_repo_url: PUBLIC, open_after_days: 30, ...overrides });
   }
 
-  it("stamps a pending promise with the date, the sold licence and four passing checks", async () => {
+  it("stamps a pending promise at the cut plus the listing's days, with the sold licence and four passing checks", async () => {
     openListing();
     const github = stubPublicGithub({ repos: { "octo/widget-public": { private: false } }, commits: { "octo/widget-public": [] } });
     setPublicGithub(github);
@@ -823,7 +821,7 @@ describe("cutRelease — stamping the open-release promise (lib/release/open.ts)
     const release = result.release;
     expect(release.scan).toBe("pass");
     expect(release.promise_status).toBe("pending");
-    expect(release.opens_at).toBe(mock.rows("listing")[0].next_opens_at);
+    expect(new Date(release.opens_at!).getTime()).toBe(new Date(release.created_at).getTime() + 30 * 86_400_000);
     expect(release.open_licence_spdx).toBe("MIT");
     expect((release.open_eligibility as { id: string; ok: boolean }[]).map((c) => `${c.id}:${c.ok}`)).toEqual([
       "licence:true",
@@ -874,8 +872,8 @@ describe("cutRelease — stamping the open-release promise (lib/release/open.ts)
     expect(failing).toContain("licence");
   });
 
-  it("clamps a date the listing carries beyond the cap to 90 days after the cut", async () => {
-    openListing({ next_opens_at: inDays(120) });
+  it("clamps a number the listing carries beyond the cap to 90 days after the cut", async () => {
+    openListing({ open_after_days: 120 });
     setPublicGithub(stubPublicGithub({ repos: { "octo/widget-public": { private: false } } }));
 
     const result = await cutRelease({ listingId: "l1", ref: "refs/tags/v1.2.0" });

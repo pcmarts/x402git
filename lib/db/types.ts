@@ -126,14 +126,15 @@ export type ListingRow = {
   retired_at: Timestamptz | null;
   created_at: Timestamptz;
   /**
-   * Open releases (migration 20261025160000). The listing-level offer: the code opens in
-   * `public_repo_url` on `next_opens_at`, copied onto each release at cut time.
-   * `open_eligibility` is the last listing-time check. Optional in the type only because
-   * pre-migration fixtures construct rows without them.
+   * Open releases (migrations 20261025160000 and 20261025200000). The listing-level offer:
+   * each release goes public in `public_repo_url` `open_after_days` days after it is cut;
+   * the cut stamps the resulting `opens_at` on the release. `open_eligibility` is the last
+   * listing-time check. Optional in the type only because pre-migration fixtures construct
+   * rows without them.
    */
   open_release?: boolean;
   public_repo_url?: string | null;
-  next_opens_at?: Timestamptz | null;
+  open_after_days?: number | null;
   open_eligibility?: unknown | null;
 };
 
