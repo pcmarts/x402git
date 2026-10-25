@@ -8,8 +8,8 @@ title = "x402git"
 [extend]
 useDefault = true
 
-# The singular [allowlist] table, not [[allowlists]]: gitleaks-action pins gitleaks 8.24,
-# which predates the plural form.
+# The singular [allowlist] table, not [[allowlists]], so older releases read it too.
+# CI installs gitleaks 8.30.1, the release the maintainers run locally.
 [allowlist]
 description = "Public test fixtures"
 regexTarget = "match"
