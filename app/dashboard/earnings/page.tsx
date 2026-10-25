@@ -118,7 +118,7 @@ export default async function EarningsPage({ searchParams }: { searchParams: Pro
         </dl>
         <p className="written measure">
           Net earnings sweep to that address automatically, {days} days after each sale, on the chain and in the token each sale was
-          paid in. There is no parameter anywhere for sending a payout somewhere else; changing the address takes 48 hours and a
+          paid in. There is no parameter anywhere for sending a payout somewhere else; changing the address takes a
           signature from the one bound now.
         </p>
         {payouts.length === 0 ? (

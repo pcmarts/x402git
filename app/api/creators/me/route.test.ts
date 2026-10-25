@@ -41,6 +41,7 @@ afterEach(() => {
   resetDb();
   vi.unstubAllGlobals();
   resetScreeningCache();
+  delete process.env.PAYOUT_REBIND_DELAY_HOURS;
 });
 
 async function stepUp(signer = account, address = account.address, context: string | null = null) {
@@ -83,7 +84,19 @@ describe("GET /api/creators/me", () => {
 });
 
 describe("PATCH /api/creators/me (FR-5)", () => {
-  it("queues a payout address change for 48 hours instead of applying it", async () => {
+  it("applies a payout address change at once by default (25 Oct 2026, 23:30: no delay, nothing typed)", async () => {
+    const res = await PATCH(request("PATCH", { payout_address: next.address, step_up: await rebindStepUp(next.address) }));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.payout_address).toBe(next.address);
+    expect(body.pending_payout_address).toBeNull();
+    expect(body.rebind_effective_at).toBeNull();
+    expect(body.effective_at).toBeNull();
+    expect(mock.rows("creator")[0].payout_address).toBe(next.address.toLowerCase());
+  });
+
+  it("queues a payout address change for 48 hours instead of applying it, when the deployment runs the delay", async () => {
+    process.env.PAYOUT_REBIND_DELAY_HOURS = "48";
     const before = Date.now();
     const res = await PATCH(request("PATCH", { payout_address: next.address, step_up: await rebindStepUp(next.address) }));
     expect(res.status).toBe(200);

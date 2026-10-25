@@ -14,9 +14,12 @@
  *   const body = UpdateCreatorRequest.parse(await req.json());
  *   await requireStepUp(creator, body.step_up);
  *
- * The rebind rule that goes with it (§7.6): a payout change takes effect after 48
+ * The rebind rule that went with it (§7.6): a payout change takes effect after 48
  * hours and sweeps continue to the old address until then. `rebindEffectiveAt()`
- * computes that instant; the money slice enforces it.
+ * computes that instant and the abuse-contact change still uses it. The *payout* change
+ * is instant since 25 Oct 2026, 23:30 (`payoutRebindDelayHours`, below): the queue is
+ * one setting away, and the pending columns, the promotion in the sweep and the
+ * "effective at" lines all stay in the code for when it comes back.
  */
 
 import type { CreatorRow } from "@/lib/db/types";
@@ -29,6 +32,27 @@ export const REBIND_DELAY_HOURS = 48;
 
 export function rebindEffectiveAt(now = new Date()): Date {
   return new Date(now.getTime() + REBIND_DELAY_HOURS * 3600 * 1000);
+}
+
+/**
+ * How long a *payout address* change waits before it lands, in hours. `0` since 25 Oct
+ * 2026 (HackMeridian; the founder: "lets remove the 48 hour delay, we're early days so
+ * lets just make it instant - we don't need this mentioned in the ux, just push it all to
+ * the back burner"): a change signed off by the wallet bound now applies at once.
+ * `PAYOUT_REBIND_DELAY_HOURS=48` brings §7.6's queue back without a code change.
+ */
+export function payoutRebindDelayHours(): number {
+  const raw = process.env.PAYOUT_REBIND_DELAY_HOURS;
+  if (raw === undefined || raw.trim() === "") return 0;
+  const hours = Number(raw);
+  if (!Number.isFinite(hours) || hours < 0) throw new Error(`PAYOUT_REBIND_DELAY_HOURS must be a non-negative number of hours, got ${JSON.stringify(raw)}`);
+  return hours;
+}
+
+/** When a payout change lands, or null when it lands now. */
+export function payoutRebindEffectiveAt(now = new Date()): Date | null {
+  const hours = payoutRebindDelayHours();
+  return hours > 0 ? new Date(now.getTime() + hours * 3600 * 1000) : null;
 }
 
 /**

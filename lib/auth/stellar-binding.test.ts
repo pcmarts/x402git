@@ -1,15 +1,16 @@
 /**
  * Binding a Stellar payout address (JOURNEYS C2–C5, BUILD W2 tests 6, 7, 8, 9, 11): the
- * Horizon trustline gate, the addition-now / change-in-48h rule, type-to-confirm, and
+ * Horizon trustline gate, the addition-now / change rule (at once by default, queued when
+ * `PAYOUT_REBIND_DELAY_HOURS` is set), and
  * which requests open an empty rail (the 25 Oct 2026 one-signature addition).
  */
 
 import { Keypair } from "@stellar/stellar-sdk";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { StellarRail } from "@/lib/env";
 import { STELLAR_CONTRACT_PAYER } from "@/lib/test/stellar";
 import { REBIND_DELAY_HOURS } from "./step-up";
-import { confirmsAddress, currentStellarPayoutAddress, inspectStellarPayoutAccount, railBeingAdded, stellarBindPatch, stellarBindReason, trustlineCopy } from "./stellar-binding";
+import { currentStellarPayoutAddress, inspectStellarPayoutAccount, railBeingAdded, stellarBindPatch, stellarBindReason, trustlineCopy } from "./stellar-binding";
 
 const G = Keypair.random().publicKey();
 const G2 = Keypair.random().publicKey();
@@ -109,8 +110,11 @@ describe("inspectStellarPayoutAccount (the trustline gate)", () => {
   });
 });
 
-describe("stellarBindPatch (addition now, change in 48h)", () => {
+describe("stellarBindPatch (addition now; a change at once, or queued when the deployment runs a delay)", () => {
   const now = new Date("2026-10-25T15:00:00Z");
+  afterEach(() => {
+    delete process.env.PAYOUT_REBIND_DELAY_HOURS;
+  });
   const inspected = { meta: { network: "stellar:testnet", address: G, trustline: { code: "tUSDT0", issuer: ISSUER, authorized: true }, checked_at: now.toISOString() }, verifiedAt: now.toISOString() };
 
   it("an EVM-only creator adding Stellar is live at once (C3)", () => {
@@ -126,7 +130,15 @@ describe("stellarBindPatch (addition now, change in 48h)", () => {
     });
   });
 
-  it("a creator who already has a Stellar address gets a queued change, effective in exactly 48 hours (C5)", () => {
+  it("a creator who already has a Stellar address gets the change at once by default (C5, 25 Oct 2026 23:30)", () => {
+    const out = stellarBindPatch({ payout_address: EVM, stellar_payout_address: G2, pending_stellar_payout_address: null }, inspected, now);
+    expect(out.applied).toBe("changed");
+    expect(out.effectiveAt).toBeNull();
+    expect(out.patch).toMatchObject({ stellar_payout_address: G, pending_stellar_payout_address: null, stellar_rebind_effective_at: null, stellar_payout_meta: inspected.meta });
+  });
+
+  it("a creator who already has a Stellar address gets a queued change, effective in exactly 48 hours, when the deployment runs the delay (C5)", () => {
+    process.env.PAYOUT_REBIND_DELAY_HOURS = "48";
     const out = stellarBindPatch({ payout_address: EVM, stellar_payout_address: G2, pending_stellar_payout_address: null }, inspected, now);
     expect(out.applied).toBe("queued");
     expect(out.effectiveAt).toBe(new Date(now.getTime() + REBIND_DELAY_HOURS * 3600 * 1000).toISOString());
@@ -135,7 +147,8 @@ describe("stellarBindPatch (addition now, change in 48h)", () => {
     expect(out.patch).not.toHaveProperty("stellar_payout_address");
   });
 
-  it("a Stellar-only creator (identity is the G…, BUILD H5) changing it is also a 48h change", () => {
+  it("a Stellar-only creator (identity is the G…, BUILD H5) changing it is also queued under the delay", () => {
+    process.env.PAYOUT_REBIND_DELAY_HOURS = "48";
     const out = stellarBindPatch({ payout_address: G2, stellar_payout_address: null, pending_stellar_payout_address: null }, inspected, now);
     expect(out.applied).toBe("queued");
     expect(currentStellarPayoutAddress({ payout_address: G2, stellar_payout_address: null })).toBe(G2);
@@ -147,24 +160,6 @@ describe("stellarBindPatch (addition now, change in 48h)", () => {
   });
 });
 
-describe("confirmsAddress (type-to-confirm, test 8)", () => {
-  it("accepts the whole address or its last six characters, in any case", () => {
-    expect(confirmsAddress(G, G)).toBe(true);
-    expect(confirmsAddress(G.toLowerCase(), G)).toBe(true);
-    expect(confirmsAddress(` ${G.slice(-6).toLowerCase()} `, G)).toBe(true);
-  });
-
-  it("refuses one character off, a different length, and nothing", () => {
-    const tail = G.slice(-6);
-    const off = `${tail.slice(0, 5)}${tail.endsWith("A") ? "B" : "A"}`;
-    expect(confirmsAddress(off, G)).toBe(false);
-    expect(confirmsAddress(G.slice(-5), G)).toBe(false);
-    expect(confirmsAddress(G.slice(-7), G)).toBe(false);
-    expect(confirmsAddress("", G)).toBe(false);
-    expect(confirmsAddress(undefined, G)).toBe(false);
-    expect(confirmsAddress(G2, G)).toBe(false);
-  });
-});
 
 describe("railBeingAdded (25 Oct 2026: an empty rail opens on the new wallet's proof alone)", () => {
   const proof = { nonce: "n", signature: "s" };

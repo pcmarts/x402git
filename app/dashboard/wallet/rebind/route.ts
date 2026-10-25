@@ -40,6 +40,6 @@ export const POST = handle(async (req: Request) => {
 
   const when = result.data?.rebind_effective_at;
   return back("/dashboard/wallet", {
-    ok: `Change queued${when ? `, effective ${when}` : ""}. Payouts keep going to the current address until then.`,
+    ok: when ? `Change queued, effective ${when}. Payouts keep going to the current address until then.` : "Payout address changed. Payouts go to the new address from now on.",
   });
 });

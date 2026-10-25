@@ -61,3 +61,52 @@ describe("signAs", () => {
     expect(await verifyMessage({ address: account.address, message: "m", signature: sig as `0x${string}` })).toBe(true);
   });
 });
+
+import { pickAccount, proveAddress } from "./wallet-bind";
+
+describe("pickAccount (25 Oct 2026, 23:30: a different wallet is one press)", () => {
+  function pickingWallet(permissions: "ok" | { code: number }): Eip1193Provider & { asked: string[] } {
+    const asked: string[] = [];
+    return {
+      asked,
+      async request({ method }) {
+        asked.push(method);
+        if (method === "wallet_requestPermissions") {
+          if (permissions === "ok") return [{ parentCapability: "eth_accounts" }];
+          throw permissions;
+        }
+        if (method === "eth_requestAccounts") return [account.address];
+        throw new Error(`unexpected ${method}`);
+      },
+    };
+  }
+
+  it("opens the wallet's account picker, then reads the account it settled on", async () => {
+    const wallet = pickingWallet("ok");
+    await expect(pickAccount(wallet)).resolves.toBe(account.address);
+    expect(wallet.asked).toEqual(["wallet_requestPermissions", "eth_requestAccounts"]);
+  });
+
+  it("falls through to the connected account when the wallet has no picker (4200 / -32601)", async () => {
+    await expect(pickAccount(pickingWallet({ code: 4200 }))).resolves.toBe(account.address);
+    await expect(pickAccount(pickingWallet({ code: -32601 }))).resolves.toBe(account.address);
+  });
+
+  it("rethrows the person's own refusal (4001)", async () => {
+    await expect(pickAccount(pickingWallet({ code: 4001 }))).rejects.toMatchObject({ code: 4001 });
+  });
+});
+
+describe("proveAddress", () => {
+  it("fetches the challenge for the given address and signs as it", async () => {
+    const wallet = fakeWallet();
+    const message = `x402git wants to verify ${account.address}\nnonce: xyz`;
+    const fetch = async (url: string) => {
+      expect(url).toBe(`/api/auth/challenge?address=${account.address}&purpose=address_proof`);
+      return new Response(JSON.stringify({ nonce: "xyz", message }), { status: 200 });
+    };
+    const out = await proveAddress(wallet, account.address, { fetch: fetch as unknown as typeof globalThis.fetch, baseUrl: "" });
+    expect(out).toMatchObject({ address: account.address, nonce: "xyz" });
+    expect(await verifyMessage({ address: account.address, message, signature: out.signature as `0x${string}` })).toBe(true);
+  });
+});

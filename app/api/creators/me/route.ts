@@ -28,22 +28,27 @@
  * nothing already flowing is redirected — the new rail had no money on it. The accepted
  * risk: a stolen GitHub session could add a payout address for a rail the creator had not
  * yet opened. An agent key still sends both for an addition: §14.7 assumes that key
- * leaks, and the case above rests on a GitHub sign-in it does not have. A `step_up` or
- * `confirm_address` sent on an addition is still verified, and the write only lands while
+ * leaks, and the case above rests on a GitHub sign-in it does not have. A `step_up`
+ * sent on an addition is still verified, and the write only lands while
  * the rail is still empty, so an addition can never overwrite an address that appeared
  * while the request was in flight.
  *
- * Changing an address (C5, the 48-hour rebind of either family) is unchanged: step-up
- * from the wallet bound now, naming the new address, and type-to-confirm. Money already
- * flowing is what those protect.
+ * Changing an address (C5, either family) is the step-up from the wallet bound now,
+ * naming the new address — money already flowing is what it protects — plus, when the
+ * dashboard sends one, the new address's own proof. Since 25 Oct 2026, 23:30 (founder:
+ * "remove the 48 hour delay … make it instant"; "drop that requirement" on the typed
+ * characters) nothing is typed to confirm, and the change lands at once unless the
+ * deployment runs a rebind delay (`payoutRebindDelayHours`, lib/auth/step-up.ts), in
+ * which case it is queued and the sweep promotes it as before. `confirm_address` is
+ * accepted and ignored so older clients keep working.
  */
 
 import { type NextRequest, NextResponse } from "next/server";
 import { type AuthedCreator, requireCreator } from "@/lib/auth/api-key";
 import { dbAddress, normaliseAddress } from "@/lib/auth/challenge";
 import { enforceLimit } from "@/lib/auth/rate-limit";
-import { confirmsAddress, inspectStellarPayoutAccount, railBeingAdded, stellarBindPatch } from "@/lib/auth/stellar-binding";
-import { rebindContext, rebindEffectiveAt, requireStepUp } from "@/lib/auth/step-up";
+import { inspectStellarPayoutAccount, railBeingAdded, stellarBindPatch } from "@/lib/auth/stellar-binding";
+import { payoutRebindEffectiveAt, rebindContext, rebindEffectiveAt, requireStepUp } from "@/lib/auth/step-up";
 import { consumeChallenge } from "@/lib/auth/challenge";
 import { db } from "@/lib/db";
 import type { CreatorRow } from "@/lib/db/types";
@@ -74,16 +79,13 @@ export const PATCH = handle(async (req: NextRequest) => {
   const rebindTo = body.payout_address !== undefined ? normaliseAddress(body.payout_address) : null;
   const stellarTo = body.stellar_payout_address !== undefined ? normaliseAddress(body.stellar_payout_address) : null;
 
-  // JOURNEYS C4: the only `payout_address` that can land at once is an EVM address added
-  // to a Stellar-only account, proved by its own signature. Anything else is a change.
+  // JOURNEYS C4: an EVM address proved by its own signature on a Stellar-only account is
+  // an addition. The same proof on an EVM account is a change that also proves its
+  // destination (25 Oct 2026, 23:30: the dashboard's change flow connects the new wallet,
+  // so it signs); the step-up below still decides whether the change may happen.
   const identityFamily = addressFamily(creator.payout_address);
-  const addingEvm = rebindTo !== null && body.payout_proof !== undefined;
-  if (addingEvm && (identityFamily !== "stellar" || addressFamily(rebindTo) !== "evm")) {
-    throw new ApiError("invalid_request", {
-      message: "payout_proof is only for adding an EVM address to a Stellar-only account. To change the EVM address, send payout_address alone; it takes effect after 48 hours.",
-      details: { field: "payout_proof" },
-    });
-  }
+  const provesEvm = rebindTo !== null && body.payout_proof !== undefined;
+  const addingEvm = provesEvm && identityFamily === "stellar" && addressFamily(rebindTo) === "evm";
   // An EVM account keeps an EVM payout_address: moving it to a G… would take Base off every
   // listing. A Stellar wallet is `stellar_payout_address`.
   if (rebindTo !== null && identityFamily === "evm" && addressFamily(rebindTo) !== "evm") {
@@ -99,22 +101,8 @@ export const PATCH = handle(async (req: NextRequest) => {
   const proofAlone =
     adding !== null && creator.apiKey.kind === "session" && body.abuse_contact_url === undefined && body.abuse_contact_email === undefined;
 
-  // Type-to-confirm comes before any signature is spent: a typo is the cheapest thing to
-  // bounce on, and both nonces stay usable for the retry. Optional on a proof-alone
-  // addition, and checked when sent.
-  const confirmDue = !proofAlone || body.confirm_address !== undefined;
-  if (stellarTo !== null && confirmDue && !confirmsAddress(body.confirm_address, stellarTo)) {
-    throw new ApiError("invalid_request", {
-      message: "confirm_address must be the Stellar address being bound, or its last six characters.",
-      details: { field: "confirm_address" },
-    });
-  }
-  if (addingEvm && confirmDue && !confirmsAddress(body.confirm_address, rebindTo)) {
-    throw new ApiError("invalid_request", {
-      message: "confirm_address must be the EVM address being added, or its last six characters.",
-      details: { field: "confirm_address" },
-    });
-  }
+  // Nothing is typed to confirm an address (25 Oct 2026, 23:30, founder): the new
+  // wallet's own signature is the proof of the destination.
 
   const stepUpTarget = rebindTo ?? stellarTo;
   if (!proofAlone || body.step_up !== undefined) {
@@ -161,8 +149,8 @@ export const PATCH = handle(async (req: NextRequest) => {
     if (addingEvm && creator.pending_payout_address) {
       throw new ApiError("invalid_request", { message: "A payout address change is already queued. Add the EVM address after it takes effect." });
     }
-    if (addingEvm && body.payout_proof) {
-      // C4: the new EVM address proves itself, as the G… does in C3.
+    if (body.payout_proof) {
+      // C4, and a change from the dashboard: the new EVM address proves itself, as the G… does in C3.
       try {
         await consumeChallenge(next, body.payout_proof.nonce, body.payout_proof.signature, "address_proof");
       } catch (e) {
@@ -181,8 +169,16 @@ export const PATCH = handle(async (req: NextRequest) => {
       // wrote it here (BUILD §2.5); a row seeded without it would otherwise lose the rail.
       if (!creator.stellar_payout_address) patch.stellar_payout_address = creator.payout_address;
     } else {
-      patch.pending_payout_address = dbAddress(next);
-      patch.rebind_effective_at = effectiveAt.toISOString();
+      // A change: at once, or queued when the deployment runs a rebind delay (header).
+      const landsAt = payoutRebindEffectiveAt(now);
+      if (landsAt === null) {
+        patch.payout_address = dbAddress(next);
+        patch.pending_payout_address = null;
+        patch.rebind_effective_at = null;
+      } else {
+        patch.pending_payout_address = dbAddress(next);
+        patch.rebind_effective_at = landsAt.toISOString();
+      }
     }
   }
 
@@ -201,7 +197,7 @@ export const PATCH = handle(async (req: NextRequest) => {
   if (error) throw error;
   if (!data) {
     throw new ApiError("invalid_request", {
-      message: "That rail got a payout address while this request was being signed, so nothing was changed. Reload the wallet page: changing it now is a 48-hour change, signed off by the wallet bound now.",
+      message: "That rail got a payout address while this request was being signed, so nothing was changed. Reload the wallet page: changing it now is signed off by the wallet bound now.",
     });
   }
   const updated = data as CreatorRow;
@@ -220,7 +216,10 @@ export const PATCH = handle(async (req: NextRequest) => {
       pending_abuse_contact_url: updated.pending_abuse_contact_url,
       pending_abuse_contact_email: updated.pending_abuse_contact_email,
       // Non-null only when something was queued: a Stellar *addition* is applied, not queued.
-      effective_at: stellarTo !== null && rebindTo === null ? stellarEffectiveAt : iso(updated.rebind_effective_at ?? updated.abuse_contact_effective_at),
+      effective_at:
+        stellarTo !== null && rebindTo === null
+          ? stellarEffectiveAt
+          : iso(updated.rebind_effective_at ?? (body.abuse_contact_url !== undefined || body.abuse_contact_email !== undefined ? updated.abuse_contact_effective_at : null)),
     }),
     { headers: { "cache-control": "no-store" } },
   );

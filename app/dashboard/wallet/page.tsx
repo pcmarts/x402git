@@ -24,8 +24,8 @@
  * page prints the exact steps, with the issuer to copy, and a Refresh.
  *
  * Once bound, the page is two sections, one per rail, each with its address and one
- * action: add it (live at once: C3 for Stellar, C4 for EVM) or change it (48 hours,
- * signed off by the wallet bound now and typed to confirm: C5). A Stellar-only creator
+ * action: add it (live at once: C3 for Stellar, C4 for EVM) or change it (signed off by the
+ * wallet bound now: C5; at once since 25 Oct 2026 23:30 unless the deployment runs a rebind delay). A Stellar-only creator
  * who adds an EVM wallet ends up with the EVM address as the identity and the G… as the
  * Stellar payout address, the same row as an EVM creator who added Stellar.
  *
@@ -34,7 +34,8 @@
  * have the stellar wallet confirm? Feels needless."): connect the new wallet, sign once,
  * done. The rail had no money on it, so there is nothing for the other wallet to protect;
  * PATCH /api/creators/me's header has the reasoning and the accepted risk. Changing keeps
- * the sign-off and the six characters, because money is already flowing there.
+ * the sign-off, because money is already flowing there; the typed characters and the 48-hour
+ * wait went at 23:30 the same evening (founder: "drop that requirement"; "make it instant").
  */
 
 import type { Metadata } from "next";
@@ -42,7 +43,6 @@ import { BindWallet, EvmWallet, StellarWallet } from "@/app/_components/bind-wal
 import { CopyButton } from "@/app/_components/copy-button";
 import { Notice } from "@/app/_components/notice";
 import { currentStellarPayoutAddress, inspectStellarPayoutAccount, stellarBindReason } from "@/lib/auth/stellar-binding";
-import { REBIND_DELAY_HOURS } from "@/lib/auth/step-up";
 import { type StellarRail, paymentChain, stellarRail } from "@/lib/env";
 import { ApiError } from "@/lib/errors";
 import { currentCreator, currentSession, signInPath } from "@/lib/web/current";
@@ -128,8 +128,8 @@ export default async function WalletPage({
           </p>
           {queued ? (
             <p className="written measure">
-              You are signing from the address bound now, to authorise payouts moving to <span className="computed">{queued}</span> in{" "}
-              {REBIND_DELAY_HOURS} hours. That is the point of the delay: an API key alone cannot do this.
+              You are signing from the address bound now, to authorise payouts moving to <span className="computed">{queued}</span>. An API key alone
+              cannot do this.
             </p>
           ) : null}
           <form method="post" action={bound ? "/dashboard/wallet/rebind" : "/dashboard/wallet/bind"} id="sign-form">
@@ -164,7 +164,7 @@ export default async function WalletPage({
             </div>
             {addressFamily(address) === "evm" ? <BindWallet mode="sign" address={address} message={challenge.message} signatureFieldId="signature" /> : null}
             <p className="actions">
-              <button type="submit">{bound ? `Queue the change (${REBIND_DELAY_HOURS}h delay)` : "Bind this address"}</button>
+              <button type="submit">{bound ? "Change the address" : "Bind this address"}</button>
               <a href="/dashboard/wallet">Start over</a>
             </p>
           </form>
@@ -191,13 +191,19 @@ export default async function WalletPage({
                   <details>
                     <summary>
                       <span className="label">Change the EVM wallet</span>
-                      <span className="computed">{REBIND_DELAY_HOURS}h delay</span>
+                      <span className="computed">signed by your current wallet</span>
                     </summary>
                     <p className="written measure">
-                      A change takes {REBIND_DELAY_HOURS} hours to land. Nothing announces it, so look here if you did not ask for one. Payouts on {chainName} keep going to the
-                      current address until then — that delay is the whole defence against someone who has taken your API key.
+                      Pick the new account in your wallet and sign; then the account you are paid at now signs off. Payouts on {chainName} go to the new wallet from
+                      then on.
                     </p>
-                    <AddressForm bound={bound} />
+                    <EvmWallet action="/dashboard/wallet/evm" change={{ identity: bound }} />
+                    <details>
+                      <summary>
+                        <span className="label">Change by hand</span>
+                      </summary>
+                      <AddressForm bound={bound} />
+                    </details>
                   </details>
                 </>
               ) : (
@@ -291,11 +297,11 @@ export default async function WalletPage({
           <details>
             <summary>
               <span className="label">{stellarBound ? "Change the Stellar wallet" : "Add a Stellar wallet"}</span>
-              {stellarBound ? <span className="computed">{REBIND_DELAY_HOURS}h delay</span> : <span className="computed">live at once</span>}
+              <span className="computed">{stellarBound ? "signed by your current wallet" : "live at once"}</span>
             </summary>
             <p className="written measure">
               {stellarBound
-                ? `A change takes ${REBIND_DELAY_HOURS} hours to land, and Stellar payouts keep going to the current wallet until then. The new wallet signs, then the wallet you are paid at now signs off, then you type the last six characters.`
+                ? "Connect the new Stellar wallet and sign; then the wallet you are paid at now signs off. Stellar payouts go to the new wallet from then on."
                 : "Connect a Stellar wallet and sign one message. It is live at once, and nothing already bound moves."}{" "}
               The new wallet must already allow {rail.asset.code}; if it does not, you will be told exactly what to add.
             </p>

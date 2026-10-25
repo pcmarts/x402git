@@ -44,9 +44,30 @@ export async function signAs(provider: Eip1193Provider, address: string, message
   return (await provider.request({ method: "personal_sign", params: [utf8ToHex(message), held] })) as string;
 }
 
+/**
+ * Ask the wallet to show its account picker, then say which account it settled on
+ * (25 Oct 2026, 23:30; the founder: "allow me to just choose a new wallet by pressing a
+ * button"). MetaMask and Coinbase Wallet open the picker on `wallet_requestPermissions`;
+ * a wallet that does not know the method (EIP-1193 4200, JSON-RPC -32601) falls through to
+ * `eth_requestAccounts`, which is the connected account. A refusal (4001) is the person's,
+ * and is rethrown.
+ */
+export async function pickAccount(provider: Eip1193Provider): Promise<string> {
+  try {
+    await provider.request({ method: "wallet_requestPermissions", params: [{ eth_accounts: {} }] });
+  } catch (error) {
+    if ((error as { code?: unknown } | null)?.code === 4001) throw error;
+  }
+  return connectedAddress(provider);
+}
+
 /** First bind: connect, fetch a challenge for the connected address, sign it. */
 export async function connectAndSign(provider: Eip1193Provider, transport: Transport): Promise<SignedChallenge> {
-  const address = await connectedAddress(provider);
+  return proveAddress(provider, await connectedAddress(provider), transport);
+}
+
+/** An `address_proof` for `address`: fetch its challenge, sign as that account. */
+export async function proveAddress(provider: Eip1193Provider, address: string, transport: Transport): Promise<SignedChallenge> {
   const res = await transport.fetch(`${transport.baseUrl}/api/auth/challenge?address=${address}&purpose=address_proof`, {
     headers: { accept: "application/json" },
   });

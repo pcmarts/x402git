@@ -2696,3 +2696,30 @@ agent key: a headless registration has nothing else to hold.
 **Consequences.** `OnboardResult` no longer carries `agentKey`, and the one-time box
 cookie is set only by `/dashboard/key/rotate`. A creator with no agent row signs in with
 `DEFAULT_SCOPES` on the session key, as already happened after a scan revoked the key.
+
+## 2026-10-25 — Changing a payout wallet: two buttons, nothing typed, no wait
+
+**Context.** Changing a bound payout address was the one slow ceremony left on the
+wallet page: a by-hand form (type the new address, fetch a challenge, sign it in the
+wallet, paste the signature), the last six characters of the address typed back, and a
+48-hour queue before payouts moved. HackMeridian evening, founder: "allow me to just
+choose a new wallet by pressing a button - i don't like this whole manually challenge ux";
+"i don't like the whole 'Type the last six characters' … lets just drop that requirement";
+"lets remove the 48 hour delay, we're early days so lets just make it instant - we don't
+need this mentioned in the ux, just push it all to the back burner".
+
+**Decision.** A change is two signatures and lands at once. On `/dashboard/wallet`, the
+EVM change opens the wallet's account picker (`wallet_requestPermissions`), the new
+account signs an `address_proof`, then the account bound now signs the step-up that names
+it; the Stellar change is the same two steps through the Wallets Kit. Nothing is typed to
+confirm: `confirm_address` is accepted and ignored on `PATCH /api/creators/me`. The
+48-hour queue is a setting, `PAYOUT_REBIND_DELAY_HOURS`, `0` by default; the pending
+columns, the promotion in the sweep and the "effective at" lines stay in the code for
+when it is set. The by-hand form stays under a disclosure for hardware and remote wallets.
+The step-up itself stays: it is what keeps a leaked API key, or a stolen session alone,
+from redirecting money. The abuse-contact change keeps its 48 hours.
+
+**Consequences.** `payout_proof` is accepted on an EVM→EVM change (it proves the
+destination), not only on a Stellar-only account adding EVM. The terms (`lib/terms.ts`)
+still say a change "takes effect after 48 hours"; that line needs a terms revision, which
+is a legal text and was not changed tonight. FR-5 / §7.6 are amended by this entry.

@@ -4,9 +4,9 @@
  *
  * 25 Oct 2026, ~21:30 (HackMeridian; the founder: "Do we need to have the stellar wallet
  * confirm? Feels needless."): adding a Stellar wallet to an account with none is
- * Freighter's proof alone, and the form sends nothing else. Changing one keeps the
- * sign-off from the wallet bound now and type-to-confirm, and this route says so before
- * any nonce is spent.
+ * the new wallet's proof alone, and the form sends nothing else. Changing one keeps the
+ * sign-off from the wallet bound now, and this route says so before any nonce is spent.
+ * Nothing is typed and nothing waits since 25 Oct 2026, 23:30.
  */
 
 import { Keypair } from "@stellar/stellar-sdk";
@@ -116,14 +116,7 @@ describe("POST /dashboard/wallet/stellar — adding is Freighter's proof alone (
     expect(mock.rows("challenge").every((c) => (c.used_at ?? null) === null)).toBe(true);
   });
 
-  it("sends a change without the six characters back too", async () => {
-    seedCreator({ stellar_payout_address: CURRENT });
-    const res = await post({ stellar_address: G, ...(await proof()), step_up_nonce: "n", step_up_signature: "s" });
-    expect(outcome(res).error).toMatch(/last six characters/);
-    expect(patched).toHaveLength(0);
-  });
-
-  it("queues a change for 48 hours with the sign-off from the EVM wallet and the six characters", async () => {
+  it("changes the Stellar wallet at once with the sign-off from the EVM wallet, nothing typed (25 Oct 2026, 23:30)", async () => {
     seedCreator({ stellar_payout_address: CURRENT });
     const stepUp = await issueChallenge(evm.address, "step_up", rebindContext(G));
     const res = await post({
@@ -131,9 +124,9 @@ describe("POST /dashboard/wallet/stellar — adding is Freighter's proof alone (
       ...(await proof()),
       step_up_nonce: stepUp.nonce,
       step_up_signature: await evm.signMessage({ message: stepUp.message }),
-      confirm_address: G.slice(-6),
     });
-    expect(outcome(res).ok).toMatch(/Change queued/);
-    expect(mock.rows("creator")[0]).toMatchObject({ stellar_payout_address: CURRENT, pending_stellar_payout_address: G });
+    expect(outcome(res).ok).toMatch(/Stellar wallet changed/);
+    expect(Object.keys(patched[0]).sort()).toEqual(["stellar_payout_address", "stellar_proof", "step_up"]);
+    expect(mock.rows("creator")[0]).toMatchObject({ stellar_payout_address: G, pending_stellar_payout_address: null });
   });
 });

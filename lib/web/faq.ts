@@ -91,7 +91,7 @@ export const FAQ: { group: string; items: QA[] }[] = [
       },
       {
         q: "Can I send my earnings somewhere else?",
-        a: "Only to the address you bound. There is no field anywhere in the product for a different destination, which is what makes a leaked API key useless to a thief. Changing the bound address requires a signature from the current one and takes effect after 48 hours.",
+        a: "Only to the address you bound. There is no field anywhere in the product for a different destination, which is what makes a leaked API key useless to a thief. Changing the bound address requires a signature from the current one.",
       },
       {
         q: "Are there refunds?",

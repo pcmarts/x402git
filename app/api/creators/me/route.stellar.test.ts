@@ -1,11 +1,12 @@
 /**
  * Binding a Stellar payout address through the API (JOURNEYS C3/C5, BUILD W2 tests 6–9,
  * 12; BATTLE-TEST finding 14): the trustline gate, step-up from the wallet bound now,
- * the SEP-53 proof from the new account, type-to-confirm, addition-now / change-in-48h,
- * and a Stellar-only creator's profile not 400ing.
+ * the SEP-53 proof from the new account, addition-now / change (at once by default since
+ * 25 Oct 2026 23:30; queued when `PAYOUT_REBIND_DELAY_HOURS` is set), and a Stellar-only
+ * creator's profile not 400ing. `confirm_address` is accepted and ignored since the same
+ * evening; the requests here still send it to prove that.
  *
- * Most cases here authenticate with an agent key, which still steps up and types to
- * confirm for an addition. The 25 Oct 2026 decision (adding an empty rail from a
+ * Most cases here authenticate with an agent key, which still steps up for an addition. The 25 Oct 2026 decision (adding an empty rail from a
  * dashboard session key is the new wallet's proof alone; a change is unchanged) has its
  * own block at the end, with a session key.
  */
@@ -65,6 +66,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  delete process.env.PAYOUT_REBIND_DELAY_HOURS;
   resetDb();
   vi.unstubAllGlobals();
   resetScreeningCache();
@@ -170,15 +172,12 @@ describe("PATCH /api/creators/me — adding a Stellar payout address (C3)", () =
     expect(mock.rows("creator")[0].stellar_payout_address ?? null).toBeNull();
   });
 
-  it("refuses a confirm_address one character off, before spending any nonce (test 8)", async () => {
+  it("ignores confirm_address (25 Oct 2026, 23:30): a wrong one blocks nothing", async () => {
     seedCreator();
     withTrustline();
-    const tail = G.slice(-6);
-    const off = `${tail.slice(0, 5)}${tail.endsWith("A") ? "B" : "A"}`;
-    const res = await PATCH(request("PATCH", { stellar_payout_address: G, confirm_address: off, stellar_proof: await stellarProof(), step_up: await evmStepUp(G) }));
-    expect(res.status).toBe(400);
-    expect((await res.json()).details).toMatchObject({ field: "confirm_address" });
-    expect(mock.rows("challenge").every((c) => c.used_at === null)).toBe(true);
+    const res = await PATCH(request("PATCH", { stellar_payout_address: G, confirm_address: "zzzzzz", stellar_proof: await stellarProof(), step_up: await evmStepUp(G) }));
+    expect(res.status).toBe(200);
+    expect(mock.rows("creator")[0].stellar_payout_address).toBe(G);
   });
 
   it("requires the Stellar account's own proof", async () => {
@@ -191,7 +190,8 @@ describe("PATCH /api/creators/me — adding a Stellar payout address (C3)", () =
 });
 
 describe("PATCH /api/creators/me — changing the Stellar payout address (C5)", () => {
-  it("queues the change for 48 hours and keeps paying the current address until then", async () => {
+  it("queues the change for 48 hours and keeps paying the current address until then, when the deployment runs the delay", async () => {
+    process.env.PAYOUT_REBIND_DELAY_HOURS = "48";
     const current = other.publicKey();
     seedCreator({ stellar_payout_address: current });
     withTrustline();
@@ -208,7 +208,8 @@ describe("PATCH /api/creators/me — changing the Stellar payout address (C5)", 
     expect(mock.rows("creator")[0]).toMatchObject({ stellar_payout_address: current, pending_stellar_payout_address: G });
   });
 
-  it("a Stellar-only creator changing their address steps up with the bound G… (SEP-53) and waits 48 hours", async () => {
+  it("a Stellar-only creator changing their address steps up with the bound G… (SEP-53) and waits 48 hours, when the deployment runs the delay", async () => {
+    process.env.PAYOUT_REBIND_DELAY_HOURS = "48";
     const identity = other;
     seedCreator({ payout_address: identity.publicKey() });
     withTrustline();
@@ -267,20 +268,32 @@ describe("PATCH /api/creators/me — a Stellar-only creator adds an EVM address 
     expect(mock.rows("creator")[0].payout_address).toBe(G);
   });
 
-  it("refuses a confirm_address that does not match, before spending any nonce", async () => {
+  it("ignores a confirm_address that does not match (C4, 25 Oct 2026 23:30)", async () => {
     seedCreator({ payout_address: G, stellar_payout_address: G });
     const res = await PATCH(request("PATCH", { payout_address: evm.address, payout_proof: await evmProof(), confirm_address: "zzzzzz", step_up: await stellarStepUp(evm.address) }));
-    expect(res.status).toBe(400);
-    expect((await res.json()).details).toMatchObject({ field: "confirm_address" });
-    expect(mock.rows("challenge").every((c) => c.used_at === null || c.used_at === undefined)).toBe(true);
+    expect(res.status).toBe(200);
+    expect(mock.rows("creator")[0].payout_address).toBe(evm.address.toLowerCase());
   });
 
-  it("refuses payout_proof on an account whose identity is already EVM", async () => {
+  it("takes payout_proof on an EVM account as the destination's proof of a change, which lands at once (25 Oct 2026, 23:30)", async () => {
     seedCreator();
     const next = privateKeyToAccount(generatePrivateKey());
-    const res = await PATCH(request("PATCH", { payout_address: next.address, payout_proof: await evmProof(next), confirm_address: next.address, step_up: await evmStepUp(next.address) }));
+    const res = await PATCH(request("PATCH", { payout_address: next.address, payout_proof: await evmProof(next), step_up: await evmStepUp(next.address) }));
+    expect(res.status).toBe(200);
+    expect(mock.rows("creator")[0]).toMatchObject({ payout_address: next.address.toLowerCase(), pending_payout_address: null });
+    expect(mock.rows("challenge").every((c) => c.used_at !== null)).toBe(true);
+  });
+
+  it("refuses a forged payout_proof on a change, and writes nothing", async () => {
+    seedCreator();
+    const next = privateKeyToAccount(generatePrivateKey());
+    const stranger = privateKeyToAccount(generatePrivateKey());
+    const challenge = await issueChallenge(next.address, "address_proof");
+    const forged = { nonce: challenge.nonce, signature: await stranger.signMessage({ message: challenge.message }) };
+    const res = await PATCH(request("PATCH", { payout_address: next.address, payout_proof: forged, step_up: await evmStepUp(next.address) }));
     expect(res.status).toBe(400);
-    expect((await res.json()).details).toMatchObject({ field: "payout_proof" });
+    expect((await res.json()).code).toBe("payout_address_unverified");
+    expect(mock.rows("creator")[0].payout_address).toBe(evm.address.toLowerCase());
   });
 
   it("refuses moving an EVM account's payout_address to a G… (Base would vanish from every listing)", async () => {
@@ -294,7 +307,7 @@ describe("PATCH /api/creators/me — a Stellar-only creator adds an EVM address 
 
 describe("PATCH /api/creators/me — adding an empty rail from a dashboard session is the new wallet's proof alone (25 Oct 2026)", () => {
   // The founder, 25 Oct 2026 ~21:30: adding a wallet is "connect the new wallet, sign
-  // once, done". A change keeps the step-up and type-to-confirm (route.ts header).
+  // once, done". A change keeps the step-up (route.ts header); nothing is typed since 23:30.
   let sessionKey: string;
 
   beforeEach(() => {
@@ -375,12 +388,11 @@ describe("PATCH /api/creators/me — adding an empty rail from a dashboard sessi
     expect(mock.rows("creator")[0].stellar_payout_address ?? null).toBeNull();
   });
 
-  it("checks a confirm_address sent on an addition, before spending the proof", async () => {
+  it("ignores a confirm_address sent on an addition", async () => {
     seedCreator({ payout_address: G, stellar_payout_address: G });
     const res = await fromSession({ payout_address: evm.address, payout_proof: await evmProof(), confirm_address: "zzzzzz" });
-    expect(res.status).toBe(400);
-    expect((await res.json()).details).toMatchObject({ field: "confirm_address" });
-    expect(mock.rows("challenge").every((c) => (c.used_at ?? null) === null)).toBe(true);
+    expect(res.status).toBe(200);
+    expect(mock.rows("creator")[0].payout_address).toBe(evm.address.toLowerCase());
   });
 
   it("still refuses to change an existing Stellar address without step_up (C5)", async () => {
@@ -412,12 +424,16 @@ describe("PATCH /api/creators/me — adding an empty rail from a dashboard sessi
     expect(mock.rows("creator")[0].pending_payout_address ?? null).toBeNull();
   });
 
-  it("still requires confirm_address on a change, even with the step-up", async () => {
+  it("a change with the step-up lands at once, nothing typed (25 Oct 2026, 23:30)", async () => {
     seedCreator({ stellar_payout_address: other.publicKey() });
     withTrustline();
     const res = await fromSession({ stellar_payout_address: G, stellar_proof: await stellarProof(), step_up: await evmStepUp(G) });
-    expect(res.status).toBe(400);
-    expect((await res.json()).details).toMatchObject({ field: "confirm_address" });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.stellar_payout_address).toBe(G);
+    expect(body.pending_stellar_payout_address).toBeNull();
+    expect(body.effective_at).toBeNull();
+    expect(mock.rows("creator")[0]).toMatchObject({ stellar_payout_address: G, pending_stellar_payout_address: null });
   });
 
   it("an agent key still steps up to add EVM to a Stellar-only account", async () => {
@@ -428,13 +444,10 @@ describe("PATCH /api/creators/me — adding an empty rail from a dashboard sessi
     expect(mock.rows("creator")[0].payout_address).toBe(G);
   });
 
-  it("an abuse-contact change riding on an addition still needs step_up (and so the confirm too)", async () => {
+  it("an abuse-contact change riding on an addition still needs step_up", async () => {
     seedCreator();
     withTrustline();
-    const bare = await fromSession({ stellar_payout_address: G, stellar_proof: await stellarProof(), abuse_contact_email: "abuse@example.com" });
-    expect(bare.status).toBe(400);
-    expect((await bare.json()).details).toMatchObject({ field: "confirm_address" });
-    const res = await fromSession({ stellar_payout_address: G, stellar_proof: await stellarProof(), confirm_address: G.slice(-6), abuse_contact_email: "abuse@example.com" });
+    const res = await fromSession({ stellar_payout_address: G, stellar_proof: await stellarProof(), abuse_contact_email: "abuse@example.com" });
     expect(res.status).toBe(403);
     expect((await res.json()).code).toBe("step_up_required");
     expect(mock.rows("creator")[0].stellar_payout_address ?? null).toBeNull();

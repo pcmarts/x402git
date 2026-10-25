@@ -5,7 +5,9 @@
  * 25 Oct 2026, ~21:30 (HackMeridian; the founder: "lets not have the confirm the last 6
  * digits of your evm wallet - a lot of hassle."): a Stellar-only creator adds an EVM
  * wallet with that wallet's own proof and nothing else — no Freighter sign-off, nothing
- * typed. A step-up and confirm sent by a hand-built form are still passed through.
+ * typed. A step-up sent by a form is passed through; a confirm is dropped (nothing is typed
+ * since 23:30). Changing an EVM account's wallet (C5) is the new account's proof plus the
+ * sign-off from the account bound now, and lands at once.
  */
 
 import { Keypair } from "@stellar/stellar-sdk";
@@ -104,7 +106,7 @@ describe("POST /dashboard/wallet/evm — adding is the EVM wallet's proof alone 
     expect(patched).toHaveLength(0);
   });
 
-  it("passes a step-up and a confirm through when a hand-built form sends them, and the API checks them", async () => {
+  it("passes a step-up through when a form sends one, and drops a confirm", async () => {
     const stepUp = await issueChallenge(G, "step_up", rebindContext(evm.address));
     const res = await post({
       ...(await proof()),
@@ -112,8 +114,46 @@ describe("POST /dashboard/wallet/evm — adding is the EVM wallet's proof alone 
       step_up_signature: stellar.signMessage(stepUp.message).toString("base64"),
       confirm_address: "zzzzzz",
     });
-    expect(Object.keys(patched[0]).sort()).toEqual(["confirm_address", "payout_address", "payout_proof", "step_up"]);
-    expect(outcome(res).error).toMatch(/confirm_address/);
-    expect(mock.rows("creator")[0].payout_address).toBe(G);
+    expect(Object.keys(patched[0]).sort()).toEqual(["payout_address", "payout_proof", "step_up"]);
+    expect(outcome(res).ok).toMatch(/EVM wallet added/);
+    expect(mock.rows("creator")[0].payout_address).toBe(evm.address.toLowerCase());
+  });
+});
+
+describe("POST /dashboard/wallet/evm — changing an EVM account's wallet is two signatures and lands at once (25 Oct 2026, 23:30)", () => {
+  const next = privateKeyToAccount(generatePrivateKey());
+
+  beforeEach(() => {
+    mock.rows("creator").length = 0;
+    mock.seed("creator", [{ id: CREATOR_ID, handle: "adrian", payout_address: evm.address.toLowerCase(), onboarded_via: "web", terms_version: "2026-08-29" }]);
+  });
+
+  async function nextProof() {
+    const challenge = await issueChallenge(next.address, "address_proof");
+    return { evm_address: next.address, proof_nonce: challenge.nonce, proof_signature: await next.signMessage({ message: challenge.message }) };
+  }
+
+  it("without the sign-off from the wallet bound now, sends the reader back before the API is called", async () => {
+    const res = await post(await nextProof());
+    expect(outcome(res).error).toMatch(/Sign with the wallet bound now/);
+    expect(patched).toHaveLength(0);
+    expect(mock.rows("creator")[0].payout_address).toBe(evm.address.toLowerCase());
+  });
+
+  it("with the new account's proof and the current account's sign-off, the address changes now", async () => {
+    const stepUp = await issueChallenge(evm.address, "step_up", rebindContext(next.address));
+    const res = await post({ ...(await nextProof()), step_up_nonce: stepUp.nonce, step_up_signature: await evm.signMessage({ message: stepUp.message }) });
+    expect(res.status).toBe(303);
+    expect(outcome(res).ok).toMatch(/EVM wallet changed/);
+    expect(Object.keys(patched[0]).sort()).toEqual(["payout_address", "payout_proof", "step_up"]);
+    expect(mock.rows("creator")[0]).toMatchObject({ payout_address: next.address.toLowerCase(), pending_payout_address: null });
+  });
+
+  it("refuses a sign-off from some other key, and writes nothing", async () => {
+    const stranger = privateKeyToAccount(generatePrivateKey());
+    const stepUp = await issueChallenge(evm.address, "step_up", rebindContext(next.address));
+    const res = await post({ ...(await nextProof()), step_up_nonce: stepUp.nonce, step_up_signature: await stranger.signMessage({ message: stepUp.message }) });
+    expect(outcome(res).error).toBeTruthy();
+    expect(mock.rows("creator")[0].payout_address).toBe(evm.address.toLowerCase());
   });
 });

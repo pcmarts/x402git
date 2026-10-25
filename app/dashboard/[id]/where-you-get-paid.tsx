@@ -50,7 +50,7 @@ export function isOffered(rail: PayoutRail, offered: readonly string[] | null): 
   return rail.address !== null && (offered === null || offered.includes(rail.network));
 }
 
-/** A rebind in its 48-hour window, already shortened and formatted by the server. */
+/** A queued rebind (only when the deployment runs a rebind delay), already shortened and formatted by the server. */
 export type PendingMove = { address: string; at: string };
 
 export function WhereYouGetPaid({

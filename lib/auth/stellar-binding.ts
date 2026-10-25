@@ -26,7 +26,7 @@ import type { CreatorRow } from "@/lib/db/types";
 import { type StellarRail, stellarRail } from "@/lib/env";
 import { ApiError, describeThrown } from "@/lib/errors";
 import { STELLAR_ACCOUNT_SHAPE, addressFamily, canonicalAddress } from "@/lib/x402/stellar";
-import { rebindEffectiveAt } from "./step-up";
+import { payoutRebindEffectiveAt } from "./step-up";
 
 /** `creator.stellar_payout_meta` (migration 20261025090100). */
 export type StellarPayoutMeta = {
@@ -147,7 +147,7 @@ export function currentStellarPayoutAddress(creator: Pick<CreatorRow, "payout_ad
 
 export type StellarBindOutcome = {
   /** `added`: live now (JOURNEYS C3). `queued`: takes effect at `effectiveAt` (C5). */
-  applied: "added" | "queued";
+  applied: "added" | "changed" | "queued";
   effectiveAt: string | null;
   patch: Record<string, unknown>;
 };
@@ -165,7 +165,7 @@ export function stellarBindPatch(
   const current = currentStellarPayoutAddress(creator);
   if (current === next) throw new ApiError("invalid_request", { message: "That is already your Stellar payout address." });
   if ((creator.pending_stellar_payout_address ?? null) === next) {
-    throw new ApiError("invalid_request", { message: "That change is already queued. It takes effect when the 48-hour delay passes." });
+    throw new ApiError("invalid_request", { message: "That change is already queued. It takes effect when the delay passes." });
   }
 
   const common = { stellar_payout_meta: inspected.meta, stellar_payout_verified_at: inspected.verifiedAt };
@@ -176,7 +176,17 @@ export function stellarBindPatch(
       patch: { ...common, stellar_payout_address: next, pending_stellar_payout_address: null, stellar_rebind_effective_at: null },
     };
   }
-  const effectiveAt = rebindEffectiveAt(now).toISOString();
+  // 25 Oct 2026, 23:30 (founder): a change lands at once unless the deployment runs a
+  // rebind delay, in which case it is queued as before and the sweep promotes it.
+  const landsAt = payoutRebindEffectiveAt(now);
+  if (landsAt === null) {
+    return {
+      applied: "changed",
+      effectiveAt: null,
+      patch: { ...common, stellar_payout_address: next, pending_stellar_payout_address: null, stellar_rebind_effective_at: null },
+    };
+  }
+  const effectiveAt = landsAt.toISOString();
   return {
     applied: "queued",
     effectiveAt,
@@ -191,7 +201,7 @@ export function stellarBindPatch(
  * - `stellar` (JOURNEYS C3): a `stellar_payout_address` on an account with no Stellar
  *   address bound and an identity that is not itself a `G…`.
  * - `evm` (C4): a `payout_address` sent with `payout_proof` to an account whose identity
- *   is a `G…`. On such an account `payout_address` without a proof is the 48-hour rebind.
+ *   is a `G…`. On such an account `payout_address` without a proof is a change.
  *
  * 25 Oct 2026, ~21:30 (HackMeridian; the founder: "lets not have the confirm the last 6
  * digits of your evm wallet - a lot of hassle. Do we need to have the stellar wallet
@@ -212,15 +222,6 @@ export function railBeingAdded(
     return addressFamily(creator.payout_address) === "stellar" && addressFamily(body.payout_address) === "evm" ? "evm" : null;
   }
   return null;
-}
-
-/** Type-to-confirm: the whole address, or its last six characters, case-insensitively (an EVM address is checksummed mixed-case). */
-export function confirmsAddress(confirm: string | null | undefined, address: string): boolean {
-  if (!confirm) return false;
-  const typed = confirm.trim().toUpperCase();
-  if (typed.length === 0) return false;
-  const target = address.toUpperCase();
-  return typed === target || (typed.length === 6 && target.endsWith(typed));
 }
 
 /** The `details.reason` off a refusal, when there is one — for a page to branch on. */

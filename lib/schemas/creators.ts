@@ -62,7 +62,7 @@ export const CreatorMeResponse = z
     creator_id: z.uuid(),
     handle: Handle,
     payout_address: AnyAddress,
-    /** FR-5: set by a PATCH; takes effect at `rebind_effective_at` (48h). */
+    /** FR-5: set by a PATCH when the deployment runs a rebind delay; takes effect at `rebind_effective_at`. None by default since 25 Oct 2026. */
     pending_payout_address: AnyAddress.nullable(),
     rebind_effective_at: IsoDateTime.nullable(),
     /**
@@ -96,8 +96,8 @@ export const CreatorMeResponse = z
  *
  * 25 Oct 2026 (HackMeridian, `railBeingAdded` in lib/auth/stellar-binding.ts): *adding*
  * a payout rail the account has no address on yet, from a dashboard session key, needs
- * only the new address's own proof. No `step_up`, no `confirm_address`; either is still
- * verified if sent. An agent key still sends both.
+ * only the new address's own proof. No `step_up`; one is still verified if sent
+ * (`confirm_address` is accepted and ignored since 25 Oct 2026). An agent key still sends both.
  */
 export const UpdateCreatorRequest = z
   .object({
@@ -106,8 +106,8 @@ export const UpdateCreatorRequest = z
      * An EIP-191 `address_proof` challenge signed by `payout_address` itself. Only for a
      * Stellar-only account adding an EVM address (JOURNEYS C4): the EVM address is live at
      * once and the G… stays the Stellar payout address. From a session key the proof is
-     * all it takes; an agent key also sends `step_up` from the bound G… and
-     * `confirm_address`. Without it, a `payout_address` change waits 48 hours.
+     * all it takes; an agent key also sends `step_up` from the bound
+     * G…. On an EVM account the same proof rides a change and proves its destination.
      */
     payout_proof: SignedChallenge.optional(),
     /**
@@ -115,15 +115,15 @@ export const UpdateCreatorRequest = z
      * `stellar_proof` from the new account itself. An addition (no Stellar address yet) is
      * live at once, and from a session key that proof is all it takes. A change, or an
      * addition from an agent key, also needs `step_up` from the identity address (minted
-     * with `new_payout_address=<this G…>`) and `confirm_address`; a change takes effect
-     * after 48 hours. The account must hold an authorised trustline in the deployment's
+     * with `new_payout_address=<this G…>`); a change takes effect at once unless the deployment
+     * runs a rebind delay (`PAYOUT_REBIND_DELAY_HOURS`). The account must hold an authorised trustline in the deployment's
      * Stellar asset, or the request is `invalid_request` with
      * `details.reason = "no_trustline"`.
      */
     stellar_payout_address: StellarAccount.optional(),
     /** A SEP-53 `address_proof` challenge signed by `stellar_payout_address` itself. */
     stellar_proof: SignedChallenge.optional(),
-    /** Type-to-confirm: the whole address being bound (`stellar_payout_address`, or `payout_address` with `payout_proof`), or its last six characters. Required on a change; optional on a session-key addition, and checked when sent. */
+    /** Deprecated 25 Oct 2026: accepted and ignored. Nothing is typed to confirm an address. */
     confirm_address: z.string().min(1).max(64).optional(),
     abuse_contact_url: HttpsUrl.nullable().optional(),
     abuse_contact_email: Email.nullable().optional(),

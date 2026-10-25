@@ -305,7 +305,7 @@ registerRoute({
   path: "/api/creators/me",
   summary: "Change payout address or abuse contact",
   description:
-    "FR-5. Both need `step_up` — a signature from the *currently* bound payout address — except adding a payout rail the account has no address on yet (`stellar_payout_address` with `stellar_proof` on an EVM account, `payout_address` with `payout_proof` on a Stellar-only one), which from a dashboard session key needs only that proof and is live at once. A payout change must be signed over a challenge minted with `new_payout_address=<the new address>` on GET /api/auth/challenge, so the signature names where the money will go. A payout change takes effect after 48 hours and sweeps continue to the old address until then; an abuse-contact change also takes 48 hours and is announced to the old contact.",
+    "FR-5. Both need `step_up` — a signature from the *currently* bound payout address — except adding a payout rail the account has no address on yet (`stellar_payout_address` with `stellar_proof` on an EVM account, `payout_address` with `payout_proof` on a Stellar-only one), which from a dashboard session key needs only that proof and is live at once. A payout change must be signed over a challenge minted with `new_payout_address=<the new address>` on GET /api/auth/challenge, so the signature names where the money will go. A payout change takes effect at once, or after the configured rebind delay and sweeps continue to the old address until then; an abuse-contact change also takes 48 hours and is announced to the old contact.",
   auth: "apiKey",
   request: UpdateCreatorRequest,
   response: UpdateCreatorResponse,

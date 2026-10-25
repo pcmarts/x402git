@@ -164,8 +164,10 @@ export function BindWallet(props: Props) {
 // has no address on yet (C3 here, C4 in `EvmWallet`) is: connect the new wallet, sign
 // once, and the form posts. The proof shows control of the destination, the page is a
 // signed-in GitHub session, and nothing already flowing moves; PATCH /api/creators/me's
-// header has the accepted risk. Changing an address (C5) keeps the three steps: the new
-// wallet proves itself, the wallet bound now signs off, and the creator types the last six.
+// header has the accepted risk. Changing an address (C5) is two steps: the new wallet
+// proves itself and the wallet bound now signs off. The typed characters and the 48-hour
+// wait went at 23:30 the same evening (founder: "drop that requirement"; "make it instant").
+// A change lands when the form posts unless the deployment runs a rebind delay.
 
 type KitModule = typeof import("@/lib/web/stellar-checkout");
 type Kit = Awaited<ReturnType<KitModule["loadKit"]>>;
@@ -237,7 +239,7 @@ type StellarProps =
   /**
    * Beside an existing identity. Adding (C3, `change: false`): one button, the new wallet's
    * proof alone, then POST. Changing (C5, `change: true`): the new wallet proves the G…, the
-   * wallet bound now signs off, type to confirm.
+   * wallet bound now signs off.
    */
   | { mode: "add"; action: string; networkPassphrase: string; identity: string; identityFamily: "evm" | "stellar"; change: boolean };
 
@@ -250,7 +252,6 @@ export function StellarWallet(props: StellarProps) {
   const [noEvmWallet, setNoEvmWallet] = useState(false);
   const [proved, setProved] = useState<string | null>(null);
   const [steppedUp, setSteppedUp] = useState(false);
-  const [confirm, setConfirm] = useState("");
   /** An addition's form has been posted: the button stays down while the page navigates. */
   const [sent, setSent] = useState(false);
   const alive = useRef(true);
@@ -398,8 +399,7 @@ export function StellarWallet(props: StellarProps) {
     );
   }
 
-  const confirmOk = confirm.trim().length === 6 || (proved !== null && confirm.trim().toUpperCase() === proved);
-  const ready = proved !== null && steppedUp && confirmOk;
+  const ready = proved !== null && steppedUp;
   const currentWalletLabel = props.identityFamily === "evm" ? "Sign with your current wallet" : "Sign with your current Stellar wallet";
 
   return (
@@ -421,28 +421,13 @@ export function StellarWallet(props: StellarProps) {
         </p>
         {proved ? (
           <p className="written wrap">
-            Stellar wallet: <span className="computed">{proved}</span>
+            New Stellar wallet: <span className="computed">{proved}</span>
           </p>
         ) : null}
 
-        <div className="field">
-          <label htmlFor="confirm_address">3. Type the last six characters of the Stellar address to confirm</label>
-          <input
-            id="confirm_address"
-            name="confirm_address"
-            value={confirm}
-            onChange={(e) => setConfirm(e.target.value)}
-            maxLength={56}
-            autoComplete="off"
-            spellCheck={false}
-            placeholder={proved ? proved.slice(-6) : "······"}
-            disabled={proved === null}
-          />
-        </div>
-
         <p className="actions">
           <button type="submit" data-variant="primary" disabled={!ready}>
-            {`Queue the change (${REBIND_DELAY_HOURS_LABEL} delay)`}
+            Change the Stellar wallet
           </button>
         </p>
       </form>
@@ -464,17 +449,25 @@ export function StellarWallet(props: StellarProps) {
 }
 
 /**
- * JOURNEYS C4, the mirror of `StellarWallet` adding: a Stellar-only creator adds an EVM
- * address. One button (25 Oct 2026, see the note above `StellarWallet`): the EVM wallet
- * connects and signs an `address_proof` for the new `0x…`, and the form posts. No sign-off
- * from Freighter and nothing to type. Live at once, like C3.
+ * JOURNEYS C4 and C5 for the EVM wallet. Adding (no `change`): one button — the EVM wallet
+ * connects and signs an `address_proof` for the new `0x…`, and the form posts. Live at once.
+ *
+ * Changing (`change: { identity }`; 25 Oct 2026, 23:30, the founder: "allow me to just
+ * choose a new wallet by pressing a button - i don't like this whole manually challenge
+ * ux"): two buttons in place of the by-hand form. 1. the wallet's account picker opens
+ * (`pickAccount`) and the new account signs an `address_proof`; 2. the account bound now
+ * signs the step-up that names the new one. Nothing to type, and no wait: the change
+ * lands when the form posts, unless the deployment runs a rebind delay. The by-hand form
+ * stays under a disclosure on the page for hardware and remote wallets.
  */
-export function EvmWallet({ action }: { action: string }) {
+export function EvmWallet({ action, change }: { action: string; change?: { identity: string } }) {
   const [mounted, setMounted] = useState(false);
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState<null | "new" | "step_up">(null);
   const [sent, setSent] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [noEvmWallet, setNoEvmWallet] = useState(false);
+  const [proved, setProved] = useState<string | null>(null);
+  const [steppedUp, setSteppedUp] = useState(false);
   const alive = useRef(true);
   const formRef = useRef<HTMLFormElement>(null);
 
@@ -486,66 +479,156 @@ export function EvmWallet({ action }: { action: string }) {
     };
   }, []);
 
+  const setField = useCallback((name: string, value: string) => {
+    const el = formRef.current?.elements.namedItem(name) as HTMLInputElement | null;
+    if (el) el.value = value;
+  }, []);
+
+  const provider = useCallback(async (): Promise<Eip1193Provider | null> => {
+    const { detectProvider } = await import("@/lib/web/wallet-checkout");
+    return detectProvider(window as unknown as { ethereum?: Eip1193Provider });
+  }, []);
+
   const connectAndProve = useCallback(async () => {
     setError(null);
-    setBusy(true);
+    setBusy("new");
     try {
-      const { detectProvider } = await import("@/lib/web/wallet-checkout");
-      const provider = detectProvider(window as unknown as { ethereum?: Eip1193Provider });
-      if (!provider) {
+      const p = await provider();
+      if (!p) {
         setNoEvmWallet(true);
         return;
       }
-      const { connectAndSign } = await import("@/lib/web/wallet-bind");
-      const signed = await connectAndSign(provider, { fetch: window.fetch.bind(window), baseUrl: "" });
+      const bind = await import("@/lib/web/wallet-bind");
+      // A change opens the account picker, so "a different wallet" is one press rather than
+      // a trip into the extension's menu; an addition takes whatever account is connected.
+      const address = change ? await bind.pickAccount(p) : await bind.connectedAddress(p);
+      if (change && address.toLowerCase() === change.identity.toLowerCase()) {
+        throw new Error(`${address} is the wallet you are paid at now. Pick a different account in your wallet, then try again.`);
+      }
+      const signed = await bind.proveAddress(p, address, { fetch: window.fetch.bind(window), baseUrl: "" });
       if (!alive.current) return;
-      const form = formRef.current;
-      if (!form) return;
-      (form.elements.namedItem("evm_address") as HTMLInputElement).value = signed.address;
-      (form.elements.namedItem("proof_nonce") as HTMLInputElement).value = signed.nonce;
-      (form.elements.namedItem("proof_signature") as HTMLInputElement).value = signed.signature;
-      setSent(true);
-      form.submit();
+      setField("evm_address", signed.address);
+      setField("proof_nonce", signed.nonce);
+      setField("proof_signature", signed.signature);
+      if (!change) {
+        setSent(true);
+        formRef.current?.submit();
+        return;
+      }
+      // A different wallet after a sign-off: the sign-off named the old address, so it is spent.
+      if (proved && proved !== signed.address) setSteppedUp(false);
+      setProved(signed.address);
     } catch (e) {
       const { mapThrown } = await import("@/lib/web/wallet-checkout");
       if (alive.current) setError(mapThrown(e).message);
     } finally {
-      if (alive.current) setBusy(false);
+      if (alive.current) setBusy(null);
     }
-  }, []);
+  }, [change, proved, provider, setField]);
+
+  const stepUp = useCallback(async () => {
+    if (!change || !proved) return;
+    setError(null);
+    setBusy("step_up");
+    try {
+      const p = await provider();
+      if (!p) {
+        setNoEvmWallet(true);
+        return;
+      }
+      // FR-5: the account bound *now* authorises the change, and its challenge names the
+      // incoming address so the signature is good for this one change and nothing else.
+      const { nonce, message } = await fetchChallenge(change.identity, "step_up", proved);
+      const { pickAccount, signAs } = await import("@/lib/web/wallet-bind");
+      // The picker again, so the account bound now can be chosen without leaving the page.
+      await pickAccount(p);
+      const signature = await signAs(p, change.identity, message);
+      if (!alive.current) return;
+      setField("step_up_nonce", nonce);
+      setField("step_up_signature", signature);
+      setSteppedUp(true);
+    } catch (e) {
+      const { mapThrown } = await import("@/lib/web/wallet-checkout");
+      if (alive.current) setError(mapThrown(e).message);
+    } finally {
+      if (alive.current) setBusy(null);
+    }
+  }, [change, proved, provider, setField]);
 
   if (!mounted) return null;
 
+  const install = noEvmWallet ? (
+    <p className="written" role="status">
+      No EVM wallet in this browser.{" "}
+      <a href="https://metamask.io/download/" rel="noopener noreferrer" target="_blank">
+        Install MetaMask
+      </a>{" "}
+      or another wallet, then reload this page.
+    </p>
+  ) : null;
+  const errorLine = error ? (
+    <p role="alert" data-status="fail" className="written">
+      {error}
+    </p>
+  ) : null;
+
+  if (!change) {
+    return (
+      <div className="buy-state">
+        <form method="post" action={action} ref={formRef}>
+          <input type="hidden" name="evm_address" />
+          <input type="hidden" name="proof_nonce" />
+          <input type="hidden" name="proof_signature" />
+          <button type="button" data-variant="primary" onClick={connectAndProve} disabled={busy !== null || sent}>
+            {busy ? "Waiting for your wallet…" : sent ? "Adding…" : "Connect MetaMask and sign"}
+          </button>
+        </form>
+        <p role="status" className="buy-status">
+          {busy === null && !sent && !noEvmWallet ? "Your wallet will ask you to connect, then to sign a short message. Nothing is sent on-chain and nothing costs gas." : null}
+        </p>
+        {install}
+        {errorLine}
+      </div>
+    );
+  }
+
+  const ready = proved !== null && steppedUp;
   return (
     <div className="buy-state">
-      <form method="post" action={action} ref={formRef}>
+      <form method="post" action={action} ref={formRef} onSubmit={() => setSent(true)}>
         <input type="hidden" name="evm_address" />
         <input type="hidden" name="proof_nonce" />
         <input type="hidden" name="proof_signature" />
-        <button type="button" data-variant="primary" onClick={connectAndProve} disabled={busy || sent}>
-          {busy ? "Waiting for your wallet…" : sent ? "Adding…" : "Connect MetaMask and sign"}
-        </button>
+        <input type="hidden" name="step_up_nonce" />
+        <input type="hidden" name="step_up_signature" />
+
+        <p className="actions">
+          <button type="button" data-variant={proved ? undefined : "primary"} onClick={connectAndProve} disabled={busy !== null || sent}>
+            {busy === "new" ? "Waiting for your wallet…" : proved ? "Use a different wallet" : "1. Pick the new wallet and sign"}
+          </button>
+          <button type="button" data-variant={proved && !steppedUp ? "primary" : undefined} onClick={stepUp} disabled={busy !== null || proved === null || steppedUp || sent}>
+            {busy === "step_up" ? "Waiting for your wallet…" : steppedUp ? "Signed off" : "2. Sign with your current wallet"}
+          </button>
+        </p>
+        {proved ? (
+          <p className="written wrap">
+            New EVM wallet: <span className="computed">{proved}</span>
+          </p>
+        ) : null}
+
+        <p className="actions">
+          <button type="submit" data-variant="primary" disabled={!ready || sent}>
+            {sent ? "Changing…" : "Change the EVM wallet"}
+          </button>
+        </p>
       </form>
       <p role="status" className="buy-status">
-        {!busy && !sent && !noEvmWallet ? "Your wallet will ask you to connect, then to sign a short message. Nothing is sent on-chain and nothing costs gas." : null}
+        {proved === null && !noEvmWallet
+          ? "Your wallet's account picker opens: choose the new account and sign. Then the account you are paid at now signs off. Nothing is sent on-chain and nothing costs gas."
+          : null}
       </p>
-      {noEvmWallet ? (
-        <p className="written" role="status">
-          No EVM wallet in this browser.{" "}
-          <a href="https://metamask.io/download/" rel="noopener noreferrer" target="_blank">
-            Install MetaMask
-          </a>{" "}
-          or another wallet, then reload this page.
-        </p>
-      ) : null}
-      {error ? (
-        <p role="alert" data-status="fail" className="written">
-          {error}
-        </p>
-      ) : null}
+      {install}
+      {errorLine}
     </div>
   );
 }
-
-/** FR-5 / §7.6, spelled for a button. Kept as a string so this client file imports nothing server-only. */
-const REBIND_DELAY_HOURS_LABEL = "48h";
