@@ -16,7 +16,7 @@
  *      at the moment they were expecting to have bought something.
  */
 
-import { encodePaymentRequiredHeader } from "@x402/core/http";
+import { decodePaymentSignatureHeader, encodePaymentRequiredHeader } from "@x402/core/http";
 import { privateKeyToAccount } from "viem/accounts";
 import { describe, expect, it } from "vitest";
 import {
@@ -41,6 +41,8 @@ const KEY = "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d"
 const account = privateKeyToAccount(KEY);
 
 const USDC = "0x036CbD53842c5426634e7929541eC2318f3dCF7e";
+/** Arbitrum One USDT0, the 25 Oct 2026 rail (lib/env.ts KNOWN_EVM_RAILS). */
+const USDT0_ARBITRUM = "0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9";
 const PAY_TO = "0x1111111111111111111111111111111111111111";
 const BASE = "https://x402git.test";
 
@@ -147,27 +149,34 @@ const challengeRoute: Route = {
  * JSON body and the `PAYMENT-REQUIRED` header. The header is the one a v2 client reads,
  * so a fixture that only had the body would test a code path no server produces.
  */
-function paymentRequired(overrides: { amount?: string; quoteId?: string; kind?: string } = {}): Route {
+type AcceptRail = { network: string; asset: string; extra: { name: string; version: string } };
+
+/** Base Sepolia USDC, the one accept every 402 had before 25 Oct 2026. */
+const BASE_SEPOLIA_ACCEPT: AcceptRail = { network: "eip155:84532", asset: USDC, extra: { name: "USDC", version: "2" } };
+/** Arbitrum USDT0, whose EIP-712 domain name carries the ₮ (docs/HACKMERIDIAN-EVM-USDT0-RAIL.md §1). */
+const ARBITRUM_ACCEPT: AcceptRail = { network: "eip155:42161", asset: USDT0_ARBITRUM, extra: { name: "USD₮0", version: "1" } };
+
+function paymentRequired(overrides: { amount?: string; quoteId?: string; kind?: string; rails?: AcceptRail[] } = {}): Route {
   const amount = overrides.amount ?? "9000000";
   const resource = `${BASE}/api/r/examples/humanizer`;
   const description = "examples/humanizer v1.0.0 — release. Signed download, 5-minute URL.";
-  const accept = {
+  const accepts = (overrides.rails ?? [BASE_SEPOLIA_ACCEPT]).map((rail) => ({
     scheme: "exact",
-    network: "eip155:84532",
+    network: rail.network,
     amount,
-    asset: USDC,
+    asset: rail.asset,
     payTo: PAY_TO,
     maxTimeoutSeconds: 300,
-    extra: { name: "USDC", version: "2" },
+    extra: rail.extra,
     maxAmountRequired: amount,
     resource,
     description,
     mimeType: "application/zip",
-  };
+  }));
   const body = {
     x402Version: 2 as const,
     resource: { url: resource, description, mimeType: "application/zip" },
-    accepts: [accept],
+    accepts,
     extra: {
       kind: overrides.kind ?? "new",
       version: "1.0.0",
@@ -245,9 +254,11 @@ describe("ensureChain", () => {
     expect(provider.chainId).toBe(84532);
   });
 
-  it("knows Base and Base Sepolia by their hex ids", () => {
+  it("knows Base, Base Sepolia and Arbitrum by their hex ids", () => {
     expect(CHAINS[84532].hex).toBe("0x14a34");
     expect(CHAINS[8453].hex).toBe("0x2105");
+    expect(CHAINS[42161].hex).toBe("0xa4b1");
+    expect(explorerTxUrl(42161, "0xdead")).toBe("https://arbiscan.io/tx/0xdead");
     expect(explorerTxUrl(84532, "0xdead")).toBe("https://sepolia.basescan.org/tx/0xdead");
     expect(explorerAddressUrl(8453, "0xbeef")).toBe("https://basescan.org/address/0xbeef");
     expect(explorerAddressUrl(1, "0xbeef")).toBeNull();
@@ -316,6 +327,59 @@ describe("buyWithWallet", () => {
 
     const methods = provider.calls.map((c) => c.method);
     expect(methods.indexOf("wallet_switchEthereumChain")).toBeLessThan(methods.indexOf("eth_signTypedData_v4"));
+  });
+
+  /**
+   * 25 Oct 2026 (EVM USDT0): a creator paid on Base and Arbitrum gets a 402 with an accept
+   * per chain, Base first. The x402 client takes the first entry it has a scheme for, so a
+   * buyer who chose "USDT0 on Arbitrum" on the page would have signed for USDC on Base.
+   */
+  it("pays the Arbitrum accept, not accepts[0], when the buyer chose Arbitrum", async () => {
+    const provider = fakeProvider({ chainId: 42161 });
+    const { fetch: f, seen } = fakeFetch({
+      "/api/r/examples/humanizer": [
+        paymentRequired({ rails: [BASE_SEPOLIA_ACCEPT, ARBITRUM_ACCEPT] }),
+        { status: 200, body: GRANT, headers: settlementHeader("0xa4b1") },
+      ],
+    });
+
+    const result = await buyWithWallet({ provider, ...ref, chainId: 42161, transport: { fetch: f, baseUrl: BASE } });
+    expect(result).toMatchObject({ ok: true, txHash: "0xa4b1", kind: "paid" });
+
+    const payload = decodePaymentSignatureHeader(seen[1].headers["payment-signature"]);
+    expect(payload.accepted.network).toBe("eip155:42161");
+    expect(payload.accepted.asset).toBe(USDT0_ARBITRUM);
+    expect(payload.accepted.extra).toMatchObject({ name: "USD₮0", version: "1" });
+    // The wallet signed one EIP-712 struct, for Arbitrum's chain id and USDT0's domain.
+    const signed = provider.calls.filter((c) => c.method === "eth_signTypedData_v4");
+    expect(signed).toHaveLength(1);
+    const typed = JSON.parse((signed[0].params as [string, string])[1]) as { domain: { chainId: number; name: string; verifyingContract: string } };
+    expect(typed.domain).toMatchObject({ chainId: 42161, name: "USD₮0" });
+    expect(typed.domain.verifyingContract.toLowerCase()).toBe(USDT0_ARBITRUM.toLowerCase());
+  });
+
+  it("still pays Base when the buyer chose Base and the 402 also offers Arbitrum", async () => {
+    const provider = fakeProvider();
+    const { fetch: f, seen } = fakeFetch({
+      "/api/r/examples/humanizer": [
+        paymentRequired({ rails: [ARBITRUM_ACCEPT, BASE_SEPOLIA_ACCEPT] }),
+        { status: 200, body: GRANT, headers: settlementHeader("0xba5e") },
+      ],
+    });
+
+    const result = await buyWithWallet({ provider, ...ref, chainId: 84532, transport: { fetch: f, baseUrl: BASE } });
+    expect(result).toMatchObject({ ok: true, kind: "paid" });
+    expect(decodePaymentSignatureHeader(seen[1].headers["payment-signature"]).accepted.network).toBe("eip155:84532");
+  });
+
+  it("signs nothing when the 402 no longer offers the chosen chain, and says to reload", async () => {
+    const provider = fakeProvider({ chainId: 42161 });
+    const { fetch: f, seen } = fakeFetch({ "/api/r/examples/humanizer": paymentRequired() });
+
+    const result = await buyWithWallet({ provider, ...ref, chainId: 42161, transport: { fetch: f, baseUrl: BASE } });
+    expect(result).toEqual({ ok: false, code: "rail_unavailable", message: CHECKOUT_MESSAGES.rail_unavailable, retryable: false });
+    expect(provider.calls.some((c) => c.method === "eth_signTypedData_v4")).toBe(false);
+    expect(seen).toHaveLength(1);
   });
 
   it("reads insufficient_balance off the paid request and says how to fix it", async () => {
@@ -458,7 +522,40 @@ describe("fetchEntitlements", () => {
       receiptUrl: null,
       latestVersion: null,
       update: null,
+      network: null,
+      asset: null,
     });
+  });
+
+  it("carries the rail each purchase settled on, when the server sends it (25 Oct 2026)", async () => {
+    const provider = fakeProvider();
+    const { fetch: f } = fakeFetch({
+      "/api/auth/challenge": challengeRoute,
+      "/api/entitlements": {
+        status: 200,
+        body: {
+          address: account.address,
+          entitlements: [
+            {
+              owner: "examples",
+              slug: "humanizer",
+              version: "1.0.0",
+              gross_micro: "9000000",
+              kind: "new",
+              granted_at: "2026-10-25T19:00:00.000Z",
+              tx_hash: "0xabc",
+              all_versions: false,
+              network: "eip155:42161",
+              asset: USDT0_ARBITRUM,
+            },
+          ],
+        },
+      },
+    });
+
+    const [one] = await fetchEntitlements(provider, account.address, { fetch: f, baseUrl: BASE });
+    expect(one.network).toBe("eip155:42161");
+    expect(one.asset).toBe(USDT0_ARBITRUM);
   });
 
   it("carries the receipt link and a newer release, priced as bigint", async () => {

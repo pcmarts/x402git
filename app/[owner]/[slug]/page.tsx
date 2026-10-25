@@ -89,11 +89,10 @@ import { headers } from "next/headers";
 import { notFound } from "next/navigation";
 import { type Reading, StorefrontColophon, StorefrontMark } from "@/app/_components/chrome";
 import { BuyBar } from "@/app/_components/buy-bar";
-import { BuyWithFreighter } from "@/app/_components/buy-with-freighter";
-import { BuyWithWallet } from "@/app/_components/buy-with-wallet";
 import { CopyEndpoint } from "@/app/_components/copy-endpoint";
 import { CreatorStrip } from "@/app/_components/creator-strip";
 import { Icon, iconFor } from "@/app/_components/icons";
+import { type EvmChain, PayBlock } from "@/app/_components/pay-block";
 import { ClipScript, ClipToggle, ReadmeSection, TRUST_BODY_ID } from "@/app/_components/readme-more";
 import { WebMcpTools } from "@/app/_components/webmcp";
 import { OpenReleaseBlock } from "./open-release";
@@ -101,7 +100,7 @@ import { StellarPay } from "./stellar-pay";
 import { chainLabel } from "@/lib/buy-links";
 import { type ListingRef, type PaymentOption, paymentOptionsFor, quote, toPaymentRequirements } from "@/lib/core/access";
 import { toMicro } from "@/lib/db/types";
-import { appUrl, stellarRail } from "@/lib/env";
+import { appUrl, type EvmRail, evmChains, stellarRail } from "@/lib/env";
 import type { StellarCheckoutConfig } from "@/lib/web/stellar-checkout";
 import { record } from "@/lib/events";
 import { isLikelyBot } from "@/lib/web/user-agent";
@@ -147,7 +146,7 @@ import {
 import { formatPrice, updatesLabel } from "@/lib/web/money";
 import { renderMarkdown } from "@/lib/analysis/markdown";
 import { sanitiseHtml } from "@/lib/web/sanitise-html";
-import { chainInfo } from "@/lib/web/wallet-checkout";
+import { CHAINS, chainInfo } from "@/lib/web/wallet-checkout";
 
 export const dynamic = "force-dynamic";
 
@@ -272,6 +271,37 @@ function stellarCheckoutConfig(option: PaymentOption): StellarCheckoutConfig | n
   }
 }
 
+/**
+ * The chain facts each EVM row of the pay block needs (25 Oct 2026, EVM USDT0): id, name,
+ * explorer and token, as plain data for a client component. From `evmChains()` — the rails
+ * without a receiving address, which a page may read on any deployment — and, for an
+ * option the list cannot describe (a misconfigured `X402_EXTRA_EVM_RAILS` throws), from
+ * the browser checkout's own chain table, so a Base listing never loses its button to a
+ * typo in an extra rail.
+ */
+function evmPayChains(options: PaymentOption[]): EvmChain[] {
+  let rails: EvmRail[] = [];
+  try {
+    rails = evmChains();
+  } catch {
+    rails = [];
+  }
+  return options
+    .filter((o) => o.network.startsWith("eip155:"))
+    .map((o) => {
+      const rail = rails.find((r) => r.network === o.network);
+      const chainId = rail?.chainId ?? Number(o.network.split(":")[1]);
+      const known = chainInfo(chainId);
+      return {
+        network: o.network,
+        chainId,
+        chainName: CHAINS[chainId]?.name ?? chainLabel(o.network),
+        explorer: rail?.explorer || known.explorer,
+        symbol: rail?.symbol ?? o.asset_symbol,
+      };
+    });
+}
+
 export default async function ListingPage({ params, searchParams }: Params) {
   const { owner, slug } = await params;
   const query = searchParams ? await searchParams : {};
@@ -371,14 +401,14 @@ export default async function ListingPage({ params, searchParams }: Params) {
 
   // Which networks this listing can be paid on, from the creator's bound addresses
   // (JOURNEYS B0 *[today, Must]*, BATTLE-TEST finding 4, 25 Oct 2026). The same function
-  // builds the 402's `accepts`, so the box and the paywall cannot disagree. The EVM
-  // button renders only when Base is offered: on a Stellar-only creator's listing it
-  // used to walk a MetaMask visitor to a 402 it could not pay. Stellar renders as text
-  // (stellar-pay.tsx), alone or under the button.
+  // builds the 402's `accepts`, so the box and the paywall cannot disagree: a rail the
+  // creator cannot be paid on has no row, so a MetaMask visitor is never walked to a 402
+  // it cannot pay. Amended the evening of 25 Oct 2026 (EVM USDT0): every option is a row
+  // of the pay block (pay-block.tsx) — USDT0 on Arbitrum, USDC on Base, the Stellar token
+  // — and the chosen row carries the one button; the terminal line stays under it, closed.
   const options = paymentOptionsFor(creator, listing);
-  const evmOption = options.find((o) => o.network.startsWith("eip155:")) ?? null;
   const stellarOption = options.find((o) => o.network.startsWith("stellar:")) ?? null;
-  const chain = evmOption ? chainInfo(Number(evmOption.network.split(":")[1])) : null;
+  const evmPay = evmPayChains(options);
   // What the Freighter button needs from the rail: network, passphrase, public endpoints
   // and the token. Picked field by field, so nothing else in the rail's config (the
   // facilitator key) can ever reach a client component.
@@ -475,8 +505,15 @@ export default async function ListingPage({ params, searchParams }: Params) {
                 </small>
               </p>
 
-              {evmOption && chain ? (
-                <BuyWithWallet
+              {/* One row per way to pay, the chosen one carrying the button (pay-block.tsx);
+                  then the Stellar terminal line, closed. All from the same
+                  `payment_options` as the 402. Only the network and the token cross to the
+                  client — never the `how` sentences, which are for agents. */}
+              {options.length > 0 ? (
+                <PayBlock
+                  options={options.map(({ network, asset_symbol }) => ({ network, asset_symbol }))}
+                  chains={evmPay}
+                  stellar={stellarConfig}
                   owner={creator.handle}
                   slug={listing.slug}
                   version={latest.version}
@@ -484,29 +521,12 @@ export default async function ListingPage({ params, searchParams }: Params) {
                   updatePriceMicro={updatePrice.toString()}
                   priceLabel={price === 0n ? "free" : formatPrice(price)}
                   updatePriceLabel={updatePrice === 0n ? "free" : formatPrice(updatePrice)}
-                  chainId={chain.id}
-                  chainName={chain.name}
-                  forSale={status === "live"}
-                  sizeLabel={latest.size_bytes ? formatBytes(Number(latest.size_bytes)) : undefined}
-                />
-              ) : null}
-              {/* The Stellar button (buy-with-freighter.tsx), then the terminal line under
-                  it, closed. Both render from the same `payment_options` entry as the 402. */}
-              {stellarOption && stellarConfig ? (
-                <BuyWithFreighter
-                  owner={creator.handle}
-                  slug={listing.slug}
-                  version={latest.version}
-                  priceMicro={price.toString()}
-                  priceLabel={price === 0n ? "free" : formatPrice(price)}
-                  chainName={chainLabel(stellarOption.network)}
-                  config={stellarConfig}
                   forSale={status === "live"}
                   sizeLabel={latest.size_bytes ? formatBytes(Number(latest.size_bytes)) : undefined}
                 />
               ) : null}
               {stellarOption ? <StellarPay owner={creator.handle} slug={listing.slug} option={stellarOption} forSale={status === "live"} /> : null}
-              {!evmOption && !stellarOption ? (
+              {options.length === 0 ? (
                 <p className="written buy-fallback">
                   This listing cannot be bought on this site yet: its creator is paid on a network this deployment does not offer.
                 </p>

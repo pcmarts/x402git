@@ -1257,8 +1257,17 @@ describe("the trust checklist in the buy column (§5, amended 14 Sep 2026)", () 
 describe("the Pay area follows payment_options (JOURNEYS B0 [today, Must], BATTLE-TEST finding 4)", () => {
   afterEach(() => {
     clearStellarEnv();
+    delete process.env.X402_EXTRA_EVM_RAILS;
     resetEnv();
   });
+
+  /** The pay block alone: from its opening tag to the terminal disclosure or the agent prompt. */
+  function payBlock(markup: string): string {
+    const start = markup.indexOf('<div class="pay-block"');
+    expect(start, "the pay block renders").toBeGreaterThan(-1);
+    const ends = [markup.indexOf('class="buy-terminal"', start), markup.indexOf("Buy with your agent", start)].filter((i) => i > -1);
+    return markup.slice(start, Math.min(...ends));
+  }
 
   it("renders the EVM button alone when the creator is paid on Base only", async () => {
     seed();
@@ -1267,6 +1276,12 @@ describe("the Pay area follows payment_options (JOURNEYS B0 [today, Must], BATTL
     expect(markup).toContain("Turn on JavaScript to pay from this page");
     // The WebMCP script names the CLI in its how-to steps; the Pay area itself must not.
     expect(markup).not.toContain("<code>npx x402git-stellar");
+    // One way to pay is the chip and its button: no "Pay with", no radios (25 Oct 2026).
+    const block = payBlock(markup);
+    expect(block).toContain("data-single");
+    expect(block).toContain("USDC on Base Sepolia");
+    expect(block).not.toContain("Pay with");
+    expect(block).not.toContain('type="radio"');
   });
 
   it("hides the EVM button and renders the Freighter button plus the closed terminal line for a Stellar-only creator", async () => {
@@ -1292,18 +1307,68 @@ describe("the Pay area follows payment_options (JOURNEYS B0 [today, Must], BATTL
     expect(markup).toContain("Buy with your agent");
   });
 
-  it("shows both buttons, Base first, and the terminal line under them when the creator takes both", async () => {
+  /**
+   * 25 Oct 2026 (EVM USDT0, JOURNEYS B0): the two stacked buttons became one block — a
+   * row per option, the chosen row carrying the button. What `curl` gets before mount is
+   * the rows as static chips, Base first as the 402 orders them, and one fallback line:
+   * the first row's.
+   */
+  it("shows one row per option, Base first, one fallback line, and the terminal line under them when the creator takes both", async () => {
     setStellarTestnetEnv();
     resetEnv();
     seed();
     mock.rows("creator")[0].stellar_payout_address = STELLAR_CREATOR;
 
     const markup = await html();
-    expect(markup).toContain("Turn on JavaScript to pay from this page, or pay from the terminal — see");
-    expect(markup).toContain("Turn on JavaScript to pay from this page with a Stellar wallet");
+    const block = payBlock(markup);
+    expect(block).toContain("Pay with");
+    expect(block.split('class="pay-row"').length - 1).toBe(2);
+    expect(block.indexOf("USDC on Base Sepolia")).toBeLessThan(block.indexOf("USDC on Stellar testnet"));
+    // One line for a reader without script, not one per rail.
+    expect(block.split("Turn on JavaScript").length - 1).toBe(1);
+    expect(block).toContain("Turn on JavaScript to pay from this page, or pay from the terminal — see");
+    // No radio before mount: a control that cannot work is not in the server HTML.
+    expect(block).not.toContain('type="radio"');
     expect(markup).toContain("<code>npx x402git-stellar buy adrian/humanizer</code>");
-    expect(markup.indexOf("pay from the terminal — see")).toBeLessThan(markup.indexOf("with a Stellar wallet"));
-    expect(markup.indexOf("with a Stellar wallet")).toBeLessThan(markup.indexOf("x402git-stellar buy"));
+    expect(markup.indexOf('class="pay-block"')).toBeLessThan(markup.indexOf("x402git-stellar buy"));
+  });
+
+  it("renders Base, Arbitrum and Stellar rows for a creator with both address families", async () => {
+    process.env.X402_EXTRA_EVM_RAILS = JSON.stringify([{ network: "eip155:42161" }]);
+    setStellarTestnetEnv();
+    resetEnv();
+    seed();
+    mock.rows("creator")[0].stellar_payout_address = STELLAR_CREATOR;
+
+    const block = payBlock(await html());
+    expect(block.split('class="pay-row"').length - 1).toBe(3);
+    const base = block.indexOf("USDC on Base Sepolia");
+    const arbitrum = block.indexOf("USDT0 on Arbitrum");
+    const stellar = block.indexOf("USDC on Stellar testnet");
+    expect(base).toBeGreaterThan(-1);
+    expect(arbitrum).toBeGreaterThan(base);
+    expect(stellar).toBeGreaterThan(arbitrum);
+    // The official marks, beside the words (rail-marks.tsx), never instead of them.
+    expect(block).toContain('src="/logos/usdt0.svg"');
+    expect(block).toContain('src="/logos/arbitrum.svg"');
+    expect(block).toContain('src="/logos/base.svg"');
+    // The buyer sees their token, never where the creator is paid.
+    expect(block).not.toContain(STELLAR_CREATOR);
+    expect(block).not.toContain("0x");
+  });
+
+  it("offers no Arbitrum row to a Stellar-only creator, even on a deployment that runs Arbitrum", async () => {
+    process.env.X402_EXTRA_EVM_RAILS = JSON.stringify([{ network: "eip155:42161" }]);
+    setStellarTestnetEnv();
+    resetEnv();
+    seed();
+    mock.rows("creator")[0].payout_address = STELLAR_CREATOR;
+
+    const block = payBlock(await html());
+    expect(block).toContain("data-single");
+    expect(block).toContain("USDC on Stellar testnet");
+    expect(block).not.toContain("Arbitrum");
+    expect(block).not.toContain("Base");
   });
 
   it("points a Stellar holder of a retired listing at fetch, and sells nothing", async () => {

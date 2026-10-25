@@ -37,37 +37,14 @@ import { x402Client } from "@x402/core/client";
 import { x402HTTPClient } from "@x402/core/http";
 import { ExactEvmScheme } from "@x402/evm/exact/client";
 import { createWalletClient, custom, defineChain, toHex } from "viem";
-import { NETWORK_TOKEN } from "./checkout-copy";
+import { type Eip1193Provider, NETWORK_TOKEN, TOKEN_TOKEN } from "./checkout-copy";
 
 // --- the wallet ---------------------------------------------------------------
 
-/** The slice of EIP-1193 this module uses. Deliberately not viem's, so a test can fake it. */
-export type Eip1193Provider = {
-  request(args: { method: string; params?: readonly unknown[] | object }): Promise<unknown>;
-  /** EIP-5749 / multi-wallet pages expose the installed set here. */
-  providers?: Eip1193Provider[];
-  isMetaMask?: boolean;
-  isCoinbaseWallet?: boolean;
-  isRabby?: boolean;
-};
-
-/** `window`, as much of it as this module is allowed to know about. */
-export type ProviderRoot = { ethereum?: Eip1193Provider } | undefined;
-
-/**
- * The injected wallet, or null when there is none.
- *
- * When several extensions are installed they collide on `window.ethereum` and the
- * survivors are listed under `.providers`. Preference order is Coinbase Wallet, then
- * MetaMask, then Rabby, then whatever is first — Coinbase first because this is USDC on
- * Base and that is the wallet most likely to already hold some.
- */
-export function detectProvider(root: ProviderRoot): Eip1193Provider | null {
-  const injected = root?.ethereum;
-  if (!injected) return null;
-  const set = Array.isArray(injected.providers) && injected.providers.length > 0 ? injected.providers : [injected];
-  return set.find((p) => p.isCoinbaseWallet) ?? set.find((p) => p.isMetaMask) ?? set.find((p) => p.isRabby) ?? set[0] ?? null;
-}
+// Detection lives in `checkout-copy.ts` since 25 Oct 2026, so the pay block can name the
+// installed wallet on first paint without this module's viem; re-exported so every
+// existing `import { detectProvider } from "@/lib/web/wallet-checkout"` still reads.
+export { detectProvider, type Eip1193Provider, type ProviderRoot, walletName } from "./checkout-copy";
 
 // --- the chain ------------------------------------------------------------------
 
@@ -82,9 +59,10 @@ export type ChainInfo = {
 };
 
 /**
- * The two chains this product settles on. A chain that is not here can still be paid
- * on — the switch just cannot offer to add it, because inventing an RPC URL for a
- * network we do not run on would be worse than saying so.
+ * The chains this product settles on: Base, Base Sepolia, and since 25 Oct 2026 Arbitrum
+ * One (USDT0). A chain that is not here can still be paid on — the switch just cannot
+ * offer to add it, because inventing an RPC URL for a network we do not run on would be
+ * worse than saying so.
  */
 export const CHAINS: Record<number, ChainInfo> = {
   8453: { id: 8453, hex: "0x2105", name: "Base", rpcUrls: ["https://mainnet.base.org"], explorer: "https://basescan.org" },
@@ -118,14 +96,15 @@ export function explorerAddressUrl(chainId: number, address: string): string | n
 // --- outcomes --------------------------------------------------------------------
 
 /**
- * The §9 error catalogue, plus the four failures that only exist in a browser: no
- * wallet installed, the person said no, the wallet is on the wrong chain, and the
- * network went away.
+ * The §9 error catalogue, plus the failures that only exist in a browser: no wallet
+ * installed, the person said no, the wallet is on the wrong chain, the network went
+ * away, and (25 Oct 2026) the 402 no longer offers the rail the buyer picked on the page.
  */
 export type CheckoutErrorCode =
   | "no_wallet"
   | "rejected"
   | "wrong_chain"
+  | "rail_unavailable"
   | "insufficient_balance"
   | "price_changed"
   | "settlement_pending"
@@ -141,13 +120,16 @@ export type CheckoutErrorCode =
 
 /**
  * What the button says when each of them happens. Every sentence names the problem and
- * the way out, and none of them mentions a status code.
+ * the way out, and none of them mentions a status code. Neither the chain nor the token
+ * is spelled here: `{network}` and `{token}` are filled in where the message is rendered
+ * (`withRail`, lib/web/checkout-copy.ts), from the row the buyer chose.
  */
 export const CHECKOUT_MESSAGES: Record<CheckoutErrorCode, string> = {
   no_wallet: "No wallet found in this browser. Install Coinbase Wallet or MetaMask, then reload this page.",
   rejected: "Cancelled in your wallet. Nothing was charged.",
   wrong_chain: `Your wallet is on the wrong network. Switch it to ${NETWORK_TOKEN} and try again.`,
-  insufficient_balance: `Not enough USDC on ${NETWORK_TOKEN} — top up and try again.`,
+  rail_unavailable: `This listing no longer takes ${TOKEN_TOKEN} on ${NETWORK_TOKEN}. Reload the page to see how to pay.`,
+  insufficient_balance: `Not enough ${TOKEN_TOKEN} on ${NETWORK_TOKEN} — top up and try again.`,
   price_changed: "The price changed while you were paying. Press buy again for the current price.",
   settlement_pending: "Your payment was signed but has not confirmed yet. Nothing was charged twice — press buy again to finish it.",
   settlement_timeout: "Settlement did not confirm in time. Press buy again with the same wallet; you cannot be charged twice for it.",
@@ -393,7 +375,10 @@ export type CheckoutInput = {
   provider: Eip1193Provider;
   owner: string;
   slug: string;
-  /** The chain this deployment settles on. 84532 in development, 8453 in production. */
+  /**
+   * The chain of the row the buyer chose: 84532 or 8453 for Base, 42161 for Arbitrum
+   * USDT0. The payment is made on `eip155:<chainId>` and nowhere else.
+   */
   chainId: number;
   transport: Transport;
   /**
@@ -430,11 +415,20 @@ export async function buyWithWallet(input: CheckoutInput): Promise<CheckoutResul
     if (unpaid.status !== 402) return mapApiError(unpaid.status, await safeJson(unpaid));
 
     const body402 = (await unpaid.json()) as Record<string, unknown>;
+    const network = `eip155:${chainId}`;
     const httpClient = clientFor(provider, address, chainId);
     const required = httpClient.getPaymentRequiredResponse((name) => unpaid.headers.get(name), body402);
 
+    // The rail the buyer chose, and only it (25 Oct 2026). A creator paid on Base and
+    // Arbitrum gets a 402 with an accept per chain, and the x402 client takes the first
+    // one it has a scheme for — so without this a buyer who picked USDT0 on Arbitrum
+    // would be asked to sign for USDC on Base. The client is also registered for this
+    // one network (`clientFor`), so the filter and the scheme agree.
+    const accepts = required.accepts.filter((a) => a.network === network && a.scheme === "exact");
+    if (accepts.length === 0) return failure("rail_unavailable");
+
     // The wallet signs the EIP-3009 authorization here, and only here.
-    const payload = await httpClient.createPaymentPayload(required);
+    const payload = await httpClient.createPaymentPayload({ ...required, accepts });
     const quoteId = (body402.extra as { quote_id?: string } | undefined)?.quote_id ?? "";
 
     const paid = await transport.fetch(resourceUrl, {
@@ -500,6 +494,13 @@ export type Entitlement = {
   latestVersion: string | null;
   /** A newer release than this row owns, priced for this wallet. `0n` = included. */
   update: { version: string; priceMicro: bigint } | null;
+  /**
+   * The rail it settled on (CAIP-2) and the token contract paid, when the API says
+   * (25 Oct 2026): `/purchases` puts a "USDT0 on Arbitrum" chip on the row. Null from a
+   * server that predates the fields, and the row then shows the amount alone.
+   */
+  network: string | null;
+  asset: string | null;
 };
 
 /**
@@ -535,6 +536,8 @@ export async function fetchEntitlements(
     receiptUrl: typeof e.receipt_url === "string" ? e.receipt_url : null,
     latestVersion: typeof e.latest_version === "string" ? e.latest_version : null,
     update: isUpdate(e.update) ? { version: e.update.version, priceMicro: BigInt(e.update.price_micro) } : null,
+    network: typeof e.network === "string" && e.network.length > 0 ? e.network : null,
+    asset: typeof e.asset === "string" && e.asset.length > 0 ? e.asset : null,
   }));
 }
 
@@ -573,6 +576,9 @@ function grantResult(grant: GrantBody, txHash: string | null, kind: CheckoutSucc
  *
  * `spendControls: false` because the price is the server's: this client is paying a
  * quote a person just read on the page, not policing a budget.
+ *
+ * Registered for `eip155:<chainId>` alone (25 Oct 2026), so even an unfiltered 402 could
+ * not make it sign on a chain the buyer did not pick.
  */
 function clientFor(provider: Eip1193Provider, address: `0x${string}`, chainId: number): x402HTTPClient {
   const info = chainInfo(chainId);
@@ -592,7 +598,8 @@ function clientFor(provider: Eip1193Provider, address: `0x${string}`, chainId: n
 
   return new x402HTTPClient(
     x402Client.fromConfig({
-      schemes: [{ network: "eip155:*", client: new ExactEvmScheme(signer) }],
+      // This chain only, not `eip155:*`: the buyer chose one rail on the page.
+      schemes: [{ network: `eip155:${chainId}`, client: new ExactEvmScheme(signer) }],
       spendControls: false,
     }),
   );

@@ -14,10 +14,16 @@
  * button sends — and Freighter is reached at click time, never on load. What the extension
  * is asked to sign is one Soroban auth entry for the exact amount on the page; the XLM fee
  * is the facilitator's, so a buyer needs the token and nothing else.
+ *
+ * Amended 25 Oct 2026 (EVM USDT0): this is now the Stellar row of the pay block
+ * (pay-block.tsx), shown when that row is chosen. The failure copy fills `{token}` and
+ * `{network}` through the same `withRail` the EVM row uses, in place of the
+ * `replaceAll("USDC", …)` it carried while the catalogue still spelled the token.
  */
 
 import { track } from "@vercel/analytics";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { withRail } from "@/lib/web/checkout-copy";
 import type { CheckoutResult } from "@/lib/web/wallet-checkout";
 import type { Freighter, StellarAccount, StellarCheckoutConfig } from "@/lib/web/stellar-checkout";
 
@@ -200,7 +206,7 @@ export function BuyWithFreighter(props: Props) {
 
       {result && !result.ok ? (
         <p role="alert" data-status="fail" className="written">
-          {result.message.replaceAll("USDC", symbol).replaceAll("{network}", chainName)}
+          {withRail(result.message, { network: chainName, token: symbol })}
         </p>
       ) : null}
     </div>

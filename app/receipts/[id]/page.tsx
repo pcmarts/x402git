@@ -13,14 +13,20 @@
  * fresh signature from the wallet that paid (FR-19).
  *
  * Server-rendered and complete in the HTML (§14.1), and never indexed.
+ *
+ * Amended 25 Oct 2026 (EVM USDT0): the Paid line is a rail chip — "USDT0 on Arbitrum",
+ * with its marks — named from the purchase's own `network` and `asset`, not from what the
+ * creator offers today. A receipt is a fact about a payment that already happened: a
+ * creator who later stops taking Arbitrum does not turn an Arbitrum receipt into "paid on".
  */
 
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { SiteFooter, SiteHeader } from "@/app/_components/chrome";
+import { RailChip } from "@/app/_components/rail-marks";
 import { chainLabel, stellarExplorerTxUrl } from "@/lib/buy-links";
-import { paymentOptionsFor, resolveListing } from "@/lib/core/access";
 import { toMicro } from "@/lib/db/types";
+import { evmRailFor, KNOWN_EVM_RAILS, stellarRail } from "@/lib/env";
 import { loadReceipt, verifyReceiptToken } from "@/lib/receipts";
 import { termsInfo } from "@/lib/terms";
 import { currentSession } from "@/lib/web/current";
@@ -42,6 +48,37 @@ export const metadata: Metadata = {
 
 const KIND_LABEL = { new: "purchase", update: "update", free: "free take" } as const;
 
+/**
+ * The token a purchase was paid in, and where its transaction is readable, from the row's
+ * own `network` and `asset` (25 Oct 2026). EVM: the deployment's rail for that chain when
+ * its contract is the one paid, else the codebase's known token for it (a rail since
+ * switched off still has a name). Stellar: the rail's code when it is the contract paid.
+ * A symbol this deployment cannot vouch for is null, and the line says "paid on" instead.
+ */
+function paidIn(network: string, asset: string | null, txHash: string | null): { symbol: string | null; txUrl: string | null } {
+  if (network.startsWith("stellar:")) {
+    const rail = safely(stellarRail);
+    const same = rail !== null && rail.network === network && (!asset || asset === rail.asset.contract);
+    return { symbol: same ? rail.asset.code : null, txUrl: txHash ? stellarExplorerTxUrl(network, txHash) : null };
+  }
+  const rail = safely(() => evmRailFor(network, { payTo: false }));
+  const known = KNOWN_EVM_RAILS[network];
+  const paid = (candidate: string | undefined) => Boolean(candidate && (!asset || candidate.toLowerCase() === asset.toLowerCase()));
+  const symbol = rail && paid(rail.asset) ? rail.symbol : known && paid(known.asset) ? known.symbol : null;
+  const explorer = rail?.explorer || known?.explorer || "";
+  const fallback = txHash ? explorerTxUrl(Number(network.split(":")[1]), txHash) : null;
+  return { symbol, txUrl: txHash ? (explorer ? `${explorer}/tx/${txHash}` : fallback) : null };
+}
+
+/** A rail read that cannot take the receipt down with it: a misconfigured rail names no token. */
+function safely<T>(read: () => T | null): T | null {
+  try {
+    return read();
+  } catch {
+    return null;
+  }
+}
+
 export default async function ReceiptPage({ params, searchParams }: Props) {
   const { id } = await params;
   const { t } = await searchParams;
@@ -55,19 +92,13 @@ export default async function ReceiptPage({ params, searchParams }: Props) {
 
   // The network is the purchase's own (BATTLE-TEST finding 24, 25 Oct 2026), never the
   // deployment's chain: a receipt for a Stellar payment on a deployment that also takes
-  // Base must say Stellar and link stellar.expert. The token's name comes from the same
-  // function that offers it on the listing, so no symbol is spelled here; a network the
-  // creator no longer takes prints as "paid on …" with the amount in dollars.
+  // Base must say Stellar and link stellar.expert, and an Arbitrum one arbiscan. The token
+  // is the row's own (`paidIn`), so no symbol is spelled here; one this deployment cannot
+  // name prints as "paid on …" with the amount in dollars.
   const network = purchase.network;
   const chainName = chainLabel(network);
   const stellar = network.startsWith("stellar:");
-  const txUrl = purchase.txHash
-    ? stellar
-      ? stellarExplorerTxUrl(network, purchase.txHash)
-      : explorerTxUrl(Number(network.split(":")[1]), purchase.txHash)
-    : null;
-  const resolved = await resolveListing({ owner, slug });
-  const symbol = resolved ? (paymentOptionsFor(resolved.creator, resolved.listing).find((o) => o.network === network)?.asset_symbol ?? null) : null;
+  const { symbol, txUrl } = paidIn(network, purchase.asset, purchase.txHash);
   const terms = termsInfo();
   const listingPath = `/${owner}/${slug}`;
 
@@ -95,7 +126,12 @@ export default async function ReceiptPage({ params, searchParams }: Props) {
           <dl>
             <dt>Paid</dt>
             <dd>
-              {formatAmount(purchase.grossMicro)} <span className="muted">{symbol ? `${symbol} on ${chainName}` : `paid on ${chainName}`}</span>
+              {formatAmount(purchase.grossMicro)}{" "}
+              {symbol ? (
+                <RailChip network={network} symbol={symbol} />
+              ) : (
+                <span className="muted">paid on {chainName}</span>
+              )}
             </dd>
             <dt>Transaction</dt>
             <dd className="wrap">

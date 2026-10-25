@@ -11,17 +11,21 @@
  * reader before any wallet is connected, and to `curl`. The agent line sits in the small
  * print rather than behind the JavaScript check, because the buyer-operator whose agents
  * paid is reading with script on.
+ *
+ * Amended 25 Oct 2026 (EVM USDT0): the page hands the table the name of every token this
+ * deployment knows, by network — the rails it runs and the ones the codebase knows by
+ * contract — so each row can say "USDT0 on Arbitrum" without the client reading env.
  */
 
 import type { Metadata } from "next";
 import { Purchases } from "@/app/_components/purchases";
-import { appUrl, paymentChain } from "@/lib/env";
+import { appUrl, evmChains, KNOWN_EVM_RAILS, stellarRail } from "@/lib/env";
 import { agentPurchasesPrompt } from "@/lib/web/agent-prompt";
 import { currentSession } from "@/lib/web/current";
-import { chainInfo } from "@/lib/web/wallet-checkout";
 import { AgentLogos } from "../_components/agent-logos";
 import { AgentPrompt } from "../_components/agent-prompt";
 import { SiteFooter, SiteHeader } from "../_components/chrome";
+import type { RailNames } from "../_components/purchases";
 
 export const dynamic = "force-dynamic";
 
@@ -34,9 +38,26 @@ export const metadata: Metadata = {
   robots: { index: false },
 };
 
+/** Known tokens first, then this deployment's own rails over them. A misconfigured rail names nothing. */
+function railNames(): RailNames {
+  const names: RailNames = {};
+  for (const [network, known] of Object.entries(KNOWN_EVM_RAILS)) names[network] = { asset: known.asset, symbol: known.symbol };
+  try {
+    for (const rail of evmChains()) names[rail.network] = { asset: rail.asset, symbol: rail.symbol };
+  } catch {
+    // X402_EXTRA_EVM_RAILS did not parse: the known table still names Base and Arbitrum.
+  }
+  try {
+    const stellar = stellarRail();
+    if (stellar) names[stellar.network] = { asset: stellar.asset.contract, symbol: stellar.asset.code };
+  } catch {
+    // The Stellar rail is misconfigured; its rows show the amount alone.
+  }
+  return names;
+}
+
 export default async function PurchasesPage() {
   const session = await currentSession();
-  const chain = chainInfo(paymentChain().chainId);
   const prompt = agentPurchasesPrompt({ appUrl: appUrl() });
 
   return (
@@ -52,7 +73,7 @@ export default async function PurchasesPage() {
           Re-download anything it bought, even after the creator stops selling it.
         </p>
 
-        <Purchases chainName={chain.name} />
+        <Purchases rails={railNames()} />
 
         {/* Stellar buyers re-download from the command line at the event (25 Oct 2026,
             BATTLE-TEST finding 23): the wallet button above speaks to EVM wallets only,

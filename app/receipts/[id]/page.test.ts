@@ -132,4 +132,29 @@ describe("a receipt names the network the purchase settled on, not the deploymen
     expect(baseHtml).toContain('href="https://sepolia.basescan.org/tx/');
     expect(baseHtml).not.toContain("x402git-stellar");
   });
+
+  /**
+   * 25 Oct 2026 (EVM USDT0): the Paid line is a rail chip named from the purchase's own
+   * network and contract, so an Arbitrum receipt says USDT0 and links arbiscan — on a
+   * deployment that has since stopped running the Arbitrum rail, too.
+   */
+  it("says USDT0 on Arbitrum with its marks and links arbiscan for an Arbitrum purchase", async () => {
+    const listing = seedListing(mock, { releases: [{ version: "1.2.0" }] });
+    const id = seedPurchase(mock, {
+      listingId: listing.listingId,
+      releaseId: listing.latest.id,
+      buyer: BUYER,
+      network: "eip155:42161",
+      chainId: 42161,
+      asset: "0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9",
+    });
+
+    const html = await render(id, receiptToken(id));
+    expect(html).toContain('class="rail-chip" data-network="eip155:42161"');
+    expect(html).toContain("USDT0 on Arbitrum");
+    expect(html).toContain('src="/logos/usdt0.svg"');
+    expect(html).toContain('src="/logos/arbitrum.svg"');
+    expect(html).toContain('href="https://arbiscan.io/tx/0x' + "ef".repeat(32) + '"');
+    expect(html).not.toContain("basescan.org");
+  });
 });

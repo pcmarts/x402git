@@ -4744,6 +4744,155 @@ tr:target {
   margin-left: var(--space-1);
 }
 
+/* A chip under an amount in a table (the Paid cell on /purchases): the cell's nowrap is
+   for the number, and a phone's four columns cannot also hold "USDT0 on Arbitrum" on one
+   line, so the chip's words may wrap there and nowhere else. */
+
+td.num .rail-chip {
+  white-space: normal;
+  text-align: left;
+}
+
+td.num .rail-chip-text {
+  min-width: 0;
+}
+
+/* The pay block (25 Oct 2026, pay-block.tsx): one row per way to pay, the chosen row
+   carrying the box's one button. A row is a radio drawn the way `.switch` draws its
+   halves — the native input laid invisibly over the whole row, so the click target, the
+   arrow keys, the focus ring and the accessible name are the browser's — with a 1rem
+   ring beside the chip that fills with ink when chosen: a state, not a verdict, so no
+   status ink and no accent. The wallet line is help, so it is the ash text face at label
+   size, and it drops under the chip on a narrow box rather than squeezing it. No rules
+   between rows: the box is a bordered rectangle and nothing inside it draws lines. */
+
+.pay-block {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.pay-block .pay-label {
+  margin: 0 0 var(--space-1);
+  max-width: none;
+  font-family: var(--font-mono);
+  font-size: var(--size-label);
+  font-weight: var(--weight-medium);
+  line-height: var(--leading-label);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  color: var(--ink-muted);
+}
+
+.pay-row {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.pay-row[data-selected] + .pay-row {
+  margin-top: var(--space-2);
+}
+
+.pay-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0 var(--space-3);
+  min-width: 0;
+  min-height: var(--tap);
+}
+
+.pay-pick {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: var(--tap);
+  margin: 0;
+  font-size: var(--size-listing);
+  font-weight: var(--weight-regular);
+  letter-spacing: var(--tracking-normal);
+  text-transform: none;
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.pay-pick input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  max-width: none;
+  height: 100%;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.pay-dot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 1rem;
+  height: 1rem;
+  border: var(--rule-width) solid var(--rule-control);
+  border-radius: 50%;
+  background-color: var(--paper);
+  transition: border-color var(--transition);
+}
+
+.pay-pick input:checked + .pay-dot {
+  border-color: var(--ink);
+}
+
+.pay-pick input:checked + .pay-dot::after {
+  content: "";
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background-color: var(--ink);
+}
+
+.pay-pick input:focus-visible + .pay-dot {
+  box-shadow: var(--focus-ring);
+}
+
+.pay-pick:hover input:not(:checked) + .pay-dot {
+  border-color: var(--ink);
+}
+
+.pay-wallet {
+  margin-left: auto;
+  font-family: var(--font-text);
+  font-size: var(--size-label);
+  line-height: var(--leading-label);
+  color: var(--ink-muted);
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+/* The chosen row's button sits under its chip, full width of the box, as `.buy-state`
+   already lays it out. One option has no choice to make: the chip, then the button. */
+
+.pay-action {
+  min-width: 0;
+}
+
+.pay-block .pay-one {
+  display: flex;
+  align-items: center;
+  min-height: var(--tap);
+  margin: 0;
+  max-width: none;
+}
+
 /* The terminal alternative under the Stellar button (25 Oct 2026): a closed disclosure
    in the buy box, one quiet line as its summary. No rule under the summary — the box is
    one of the two bordered rectangles in this system and nothing inside it draws lines. */

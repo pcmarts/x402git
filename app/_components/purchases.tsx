@@ -19,10 +19,30 @@
  * purchase lasts five minutes by design; keeping one in `localStorage` to save a click
  * would hand a working download link to anything that can read the browser's storage,
  * so every download re-proves the wallet and asks the server for a fresh one (FR-19).
+ *
+ * Amended 25 Oct 2026 (EVM USDT0): one EVM address now pays on more than one chain, so
+ * the address line stopped naming one ("0x… on Base" was wrong for an Arbitrum row) and
+ * each row's Paid cell carries its own rail chip — "USDT0 on Arbitrum" — from the row's
+ * `network` and `asset` and the names the server page hands down (`rails`). A row whose
+ * rail this deployment cannot name, or a server that does not send `network` yet, shows
+ * the amount alone.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { CheckoutFailure, Eip1193Provider, Entitlement } from "@/lib/web/wallet-checkout";
+import { RailChip } from "./rail-marks";
+
+/** Token names by network, from the server: `{ "eip155:42161": { asset: "0xFd08…", symbol: "USDT0" } }`. */
+export type RailNames = Record<string, { asset: string; symbol: string }>;
+
+/** The row's token, when its network is named and its contract is that rail's. */
+export function rowSymbol(item: Pick<Entitlement, "network" | "asset">, rails: RailNames): string | null {
+  if (!item.network) return null;
+  const rail = rails[item.network];
+  if (!rail) return null;
+  if (item.asset && item.asset.toLowerCase() !== rail.asset.toLowerCase()) return null;
+  return rail.symbol;
+}
 
 type Phase = "idle" | "connecting" | "signing" | "loading" | "ready";
 
@@ -36,7 +56,7 @@ function busyLabel(phase: Phase): string {
 /** A cancel here cancelled a signature, not a payment — so it says that, not checkout's line. */
 const CANCELLED = "Cancelled in your wallet. Nothing was signed.";
 
-export function Purchases({ chainName }: { chainName: string }) {
+export function Purchases({ rails = {} }: { rails?: RailNames }) {
   const [mounted, setMounted] = useState(false);
   const [phase, setPhase] = useState<Phase>("idle");
   const [address, setAddress] = useState<string | null>(null);
@@ -142,7 +162,7 @@ export function Purchases({ chainName }: { chainName: string }) {
   return (
     <>
       <p role="status" className="facts">
-        <span className="computed">{address}</span> on {chainName}
+        <span className="computed">{address}</span>
       </p>
 
       {error ? (
@@ -206,7 +226,15 @@ export function Purchases({ chainName }: { chainName: string }) {
                     ) : null}
                   </td>
                   <td data-col="optional">{item.grantedAt.slice(0, 10)}</td>
-                  <td className="num">{usd(item.grossMicro)}</td>
+                  <td className="num">
+                    {usd(item.grossMicro)}
+                    {item.network && rowSymbol(item, rails) ? (
+                      <>
+                        <br />
+                        <RailChip network={item.network} symbol={rowSymbol(item, rails) as string} short />
+                      </>
+                    ) : null}
+                  </td>
                   <td>
                     <button type="button" onClick={() => download(fetchable)} disabled={busySlug === key}>
                       {busySlug === key ? "Fetching…" : included && item.update ? `Download v${item.update.version}` : "Download"}

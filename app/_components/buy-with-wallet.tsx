@@ -18,11 +18,18 @@
  * The x402 client is imported inside the click handler rather than at module scope:
  * `@x402/core`, `@x402/evm` and viem together are the largest thing on the site, and a
  * reader who does not press buy never downloads any of it.
+ *
+ * Amended 25 Oct 2026 (HackMeridian, EVM USDT0): the button is one row of the pay block
+ * (pay-block.tsx) and pays the rail that row names — `chainId`, `chainName` and `symbol`
+ * come from the row, `buyWithWallet` signs only that chain's accept, and the copy says
+ * the row's token ("Pay $9 in USDT0", "Not enough USDT0 on Arbitrum"). When the block
+ * knows the installed wallet it passes `walletName`, so the first press reads
+ * "Buy — $9 with MetaMask", the way the Stellar row reads "with Freighter".
  */
 
 import { track } from "@vercel/analytics";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { withNetwork } from "@/lib/web/checkout-copy";
+import { withRail } from "@/lib/web/checkout-copy";
 import type { CheckoutResult, Eip1193Provider, Ownership } from "@/lib/web/wallet-checkout";
 
 type BuyWithWalletProps = {
@@ -36,9 +43,15 @@ type BuyWithWalletProps = {
   /** Already rendered by `formatPrice`, so the button and the price agree exactly. */
   priceLabel: string;
   updatePriceLabel: string;
-  /** The chain this deployment settles on: 84532 in development, 8453 in production. */
+  /** The chain of the row this button pays on: 84532 or 8453 for Base, 42161 for Arbitrum. */
   chainId: number;
   chainName: string;
+  /** The token the row pays in ("USDC", "USDT0"), for the labels and the failure copy. */
+  symbol: string;
+  /** The rail's block explorer base, for a chain `CHAINS` does not name. */
+  explorer?: string;
+  /** The installed wallet's name ("MetaMask"), when the pay block has detected one. */
+  walletName?: string | null;
   /** False for a retired listing: a holder may still re-download, nobody may buy. */
   forSale: boolean;
   /** Human-readable archive size ("1.2 MB"), shown on the download button. */
@@ -48,7 +61,7 @@ type BuyWithWalletProps = {
 type Phase = "idle" | "connecting" | "checking" | "paying" | "done" | "error";
 
 export function BuyWithWallet(props: BuyWithWalletProps) {
-  const { owner, slug, version, priceMicro, chainId, chainName, forSale } = props;
+  const { owner, slug, version, priceMicro, chainId, chainName, symbol, forSale } = props;
   const free = priceMicro === "0";
 
   const [mounted, setMounted] = useState(false);
@@ -91,13 +104,13 @@ export function BuyWithWallet(props: BuyWithWalletProps) {
   // see. No address, listing or amount goes with any of them — the page URL already
   // says which listing, and `code` is the checkout's own error vocabulary.
   const connect = useCallback(async () => {
-    track("buy_clicked", { kind: free ? "free" : "new" });
+    track("buy_clicked", { kind: free ? "free" : "new", rail: `eip155:${chainId}` });
     setResult(null);
     setPhase("connecting");
     try {
       const p = await provider();
       if (!p) {
-        track("no_wallet");
+        track("no_wallet", { rail: `eip155:${chainId}` });
         setNoWallet(true);
         setPhase("idle");
         return;
@@ -135,7 +148,7 @@ export function BuyWithWallet(props: BuyWithWalletProps) {
   /** The paid path, and the $0 path, which differ only in whether anything settles. */
   const buy = useCallback(async () => {
     const kind = free ? "free" : wallet?.ownership?.owned ? "update" : "new";
-    track("pay_clicked", { kind });
+    track("pay_clicked", { kind, rail: `eip155:${chainId}` });
     setResult(null);
     setPhase("paying");
     try {
@@ -157,7 +170,8 @@ export function BuyWithWallet(props: BuyWithWalletProps) {
         // header's whole effect is to turn a new-buyer quote into an update or a grant.
         proveWallet: free || Boolean(wallet?.ownership?.owned),
       });
-      track(outcome.ok ? "payment_completed" : "payment_failed", outcome.ok ? { kind } : { kind, code: outcome.code });
+      const rail = `eip155:${chainId}`;
+      track(outcome.ok ? "payment_completed" : "payment_failed", outcome.ok ? { kind, rail } : { kind, rail, code: outcome.code });
       if (!alive.current) return;
       setResult(outcome);
       setPhase(outcome.ok ? "done" : "error");
@@ -205,7 +219,7 @@ export function BuyWithWallet(props: BuyWithWalletProps) {
   }
 
   if (result?.ok) {
-    return <SuccessPanel result={result} slug={slug} chainId={chainId} sizeLabel={props.sizeLabel} />;
+    return <SuccessPanel result={result} slug={slug} chainId={chainId} chainName={chainName} symbol={symbol} explorer={props.explorer} sizeLabel={props.sizeLabel} />;
   }
 
   if (noWallet) {
@@ -250,7 +264,10 @@ export function BuyWithWallet(props: BuyWithWalletProps) {
     ? `Pay ${props.updatePriceLabel} — update to v${latest}`
     : free
       ? "Get it — free"
-      : `Pay ${props.priceLabel}`;
+      : `Pay ${props.priceLabel} in ${symbol}`;
+  // "with MetaMask" only when the block saw it: naming a wallet that is not there would
+  // promise a sheet that never opens.
+  const withWallet = props.walletName ? ` with ${props.walletName}` : "";
 
   return (
     <div className="buy-state">
@@ -277,7 +294,7 @@ export function BuyWithWallet(props: BuyWithWalletProps) {
       {/* One committing control. Which one it is depends on what this wallet owns. */}
       {!wallet ? (
         <button type="button" data-variant="primary" onClick={connect} disabled={!forSale || busy}>
-          {busy ? "Opening your wallet…" : free ? "Get it free" : `Buy — ${props.priceLabel}`}
+          {busy ? "Opening your wallet…" : free ? `Get it free${withWallet}` : `Buy — ${props.priceLabel}${withWallet}`}
         </button>
       ) : settled ? (
         <button type="button" data-variant="primary" onClick={redownload} disabled={busy}>
@@ -310,7 +327,7 @@ export function BuyWithWallet(props: BuyWithWalletProps) {
 
       {result && !result.ok ? (
         <p role="alert" data-status="fail" className="written">
-          {withNetwork(result.message, chainName)}
+          {withRail(result.message, { network: chainName, token: symbol })}
         </p>
       ) : null}
     </div>
@@ -326,19 +343,28 @@ function SuccessPanel({
   result,
   slug,
   chainId,
+  chainName,
+  symbol,
+  explorer,
   sizeLabel,
 }: {
   result: Extract<CheckoutResult, { ok: true }>;
   slug: string;
   chainId: number;
+  chainName: string;
+  symbol: string;
+  explorer?: string;
   sizeLabel?: string;
 }) {
   const [txUrl, setTxUrl] = useState<string | null>(null);
 
+  // `CHAINS` first (arbiscan for 42161, basescan for Base), then the rail's own explorer
+  // for a chain the table does not name.
   useEffect(() => {
     if (!result.txHash) return;
-    import("@/lib/web/wallet-checkout").then(({ explorerTxUrl }) => setTxUrl(explorerTxUrl(chainId, result.txHash as string)));
-  }, [chainId, result.txHash]);
+    const hash = result.txHash;
+    import("@/lib/web/wallet-checkout").then(({ explorerTxUrl }) => setTxUrl(explorerTxUrl(chainId, hash) ?? (explorer ? `${explorer}/tx/${hash}` : null)));
+  }, [chainId, explorer, result.txHash]);
 
   return (
     <div className="buy-done" role="status">
@@ -354,7 +380,7 @@ function SuccessPanel({
       {result.txHash ? (
         <p className="written">
           <small className="muted">
-            Paid —{" "}
+            Paid in {symbol} on {chainName} —{" "}
             {txUrl ? (
               <a href={txUrl} rel="noopener noreferrer" target="_blank">
                 <span className="computed">{short(result.txHash)}</span>
