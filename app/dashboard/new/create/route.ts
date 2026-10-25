@@ -32,7 +32,10 @@ export const POST = handle(async (req: Request) => {
   if (!result.ok) return back("/dashboard/new", { error: result.message });
 
   const id = result.data?.listing_id;
+  // `check=1`: the listing page runs Check for releases on arrival (25 Oct 2026, founder:
+  // the first question on that page is whether the repo has a release, and the answer
+  // should be on its way before anyone finds the button). See check-for-releases.tsx.
   return id
-    ? back(`/dashboard/${id}`, { ok: "Listing created. Set a price, then publish." })
+    ? back(`/dashboard/${id}`, { ok: "Listing created. Checking the repository for its newest release.", extra: { check: "1" } })
     : back("/dashboard", { ok: "Listing created." });
 });

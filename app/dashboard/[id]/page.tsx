@@ -55,7 +55,9 @@
 
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
+import { Suspense } from "react";
 import { CharCount } from "@/app/_components/char-count";
+import { CheckForReleases } from "@/app/_components/check-for-releases";
 import { AgentPrompt } from "@/app/_components/agent-prompt";
 import { CopyButton } from "@/app/_components/copy-button";
 import { GitHubMark } from "@/app/_components/github-mark";
@@ -64,7 +66,7 @@ import { PayoutSummary } from "@/app/_components/payout-summary";
 import { SaveBar } from "@/app/_components/save-bar";
 import { PLATFORM_FEE_BPS } from "@/lib/core/access";
 import { RESALE_COMPATIBLE_SPDX } from "@/lib/licence";
-import { toMicro } from "@/lib/db/types";
+import { type ListingRow, toMicro } from "@/lib/db/types";
 import { appUrl } from "@/lib/env";
 import { MIN_PRICE_MICRO, OPEN_AFTER_DAYS_PRESETS, OPEN_RELEASE_MAX_DAYS, PRICE_PRESETS_MICRO, UPDATE_PRICE_PRESETS_MICRO } from "@/lib/schemas";
 import { openReleaseChecks } from "@/lib/listings/view";
@@ -143,37 +145,24 @@ const AGENT_PROMPTS = {
 const AGENT_LEDE = "Or paste this into your coding agent:";
 
 /**
- * The manual cut, FR-8.2 — a real `<form method="post">` to the route that calls
- * `POST /api/listings/:id/sync`, so it works with scripting off like every other
- * control on this page.
- *
- * It stood in two section heads until 2026-09-01 and now stands once, on the checklist's
- * own heading in the right column (founder). Two different jobs end in the same act —
- * pushing a tag we may not have seen, and committing a LICENSE we have not read yet — and
- * both are rows of that checklist, so the control that answers them belongs at its head
- * rather than copied into the two sections those rows link down to. It is also where a
- * creator returning to a page they have already read actually looks: the column that says
- * what is outstanding.
- *
- * A real button, and a small one (2026-09-01, founder). It keeps the secondary
- * rectangle every other control on this page wears — a bordered ground, not an
- * underlined word — because it commits something: it POSTs, and it can cut a release.
- * A link would have said otherwise. `.checks-head` shrinks it below the page's standard
- * control so that sitting two rows above Save changes and Publish it reads as the
- * smaller act it is; Publish is still the only grounded action on the page.
- *
- * **"Check for releases", not "Sync now"** (2026-09-01, founder). Two things were wrong
- * with the old label. It said *when* the act happens rather than what it does, and
- * "sync" promised a two-way reconciliation this route has never performed: it cuts the
- * repository's newest uncut tag, and that is all. The new label also survives its own
- * empty case, which is the one a creator meets most — a check that finds nothing is
- * still a check, whereas a sync that syncs nothing sounds like a failure.
+ * The repository link at the end of the state line, streamed. It is the one thing on this
+ * page that asks GitHub (`repoById`, through the App), and until 25 Oct 2026 it held the
+ * whole sheet back for the round trip (founder: a slow fetch with nothing on screen reads
+ * as broken). Everything else here is read from our own database, so the page renders at
+ * once and the link fills in behind it; GitHub not answering costs the link, not the page.
  */
-function CheckForReleases({ id }: { id: string }) {
+async function RepoLink({ listing }: { listing: ListingRow }) {
+  const repoUrl = await repoUrlFor(listing);
+  if (!repoUrl) return null;
   return (
-    <form method="post" action={`/dashboard/${id}/actions/sync`}>
-      <button type="submit">Check for releases</button>
-    </form>
+    <>
+      {" · "}
+      <a className="repo-link" href={repoUrl} target="_blank" rel="noopener">
+        <GitHubMark />
+        View on GitHub
+        <span className="sr-only"> (opens in a new tab)</span>
+      </a>
+    </>
   );
 }
 
@@ -355,10 +344,10 @@ export default async function ListingDashboardPage({
   searchParams,
 }: {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ ok?: string; error?: string; blocking?: string }>;
+  searchParams: Promise<{ ok?: string; error?: string; blocking?: string; check?: string }>;
 }) {
   const { id } = await params;
-  const { ok, error, blocking } = await searchParams;
+  const { ok, error, blocking, check } = await searchParams;
   const { creator } = await requireDashboard(`/dashboard/${id}`);
 
   const bundle = await loadListingById(id);
@@ -424,10 +413,6 @@ export default async function ListingDashboardPage({
   // plus a suffix, so the guess strips one; `pcmarts/open-release-demo-next` suggests
   // `pcmarts/open-release-demo`.
   const publicSlugGuess = listing.slug.replace(/-(next|private|mirror|early|pro|paid)$/i, "") || listing.slug;
-  // The repository this listing sells, as somewhere a creator can go (2026-09-01,
-  // founder). Null when GitHub cannot be asked, and then there is no link — the same
-  // rule the avatar follows: a placeholder for a fact is worse than the fact's absence.
-  const repoUrl = await repoUrlFor(listing);
 
   /**
    * The gates FR-42 enforces, printed whether or not they are failing. A checklist that
@@ -617,16 +602,13 @@ export default async function ListingDashboardPage({
           <span data-status={status === "live" ? "pass" : status === "retired" ? "warn" : "pending"}>{status}</span>
           {` · ${releases.length} release${releases.length === 1 ? "" : "s"}`}
           {latest ? ` · latest v${latest.version}` : ""}
-          {repoUrl ? (
-            <>
-              {" · "}
-              <a className="repo-link" href={repoUrl} target="_blank" rel="noopener">
-                <GitHubMark />
-                View on GitHub
-                <span className="sr-only"> (opens in a new tab)</span>
-              </a>
-            </>
-          ) : null}
+          {/* The repository this listing sells, as somewhere a creator can go (2026-09-01,
+              founder). Null when GitHub cannot be asked, and then there is no link — the
+              same rule the avatar follows: a placeholder for a fact is worse than the
+              fact's absence. Streamed, so the GitHub round trip never holds the sheet. */}
+          <Suspense fallback={null}>
+            <RepoLink listing={listing} />
+          </Suspense>
         </p>
       </header>
 
@@ -652,7 +634,7 @@ export default async function ListingDashboardPage({
                 whose rows never changed, and the heading moved under a creator on the one
                 day they publish. */}
             <h2>Checks</h2>
-            <CheckForReleases id={id} />
+            <CheckForReleases id={id} auto={check === "1"} />
           </div>
           <ul className="checks">
             {checks.map((check) => (

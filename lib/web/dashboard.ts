@@ -157,10 +157,13 @@ export function seeOther(url: URL | string): NextResponse {
  * session write on a GET. The message is the API's own message, so the page never
  * invents a friendlier version of what actually happened.
  */
-export function back(path: string, outcome: { ok?: string; error?: string; blocking?: string[] } = {}): NextResponse {
+export function back(path: string, outcome: { ok?: string; error?: string; blocking?: string[]; extra?: Record<string, string> } = {}): NextResponse {
   const url = new URL(path, appUrl());
   if (outcome.ok) url.searchParams.set("ok", outcome.ok);
   if (outcome.error) url.searchParams.set("error", outcome.error);
   if (outcome.blocking && outcome.blocking.length > 0) url.searchParams.set("blocking", outcome.blocking.join(","));
+  // An instruction for the page rather than a message on it (`check=1`: run the release
+  // check on arrival). The next `back()` does not carry it, so it never survives a reload.
+  for (const [key, value] of Object.entries(outcome.extra ?? {})) url.searchParams.set(key, value);
   return seeOther(url);
 }

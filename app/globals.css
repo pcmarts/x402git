@@ -4857,6 +4857,35 @@ section.terminal h2 {
   margin: 0;
 }
 
+/* While a check is in flight (check-for-releases.tsx): the line wraps under the head on
+   its own row and says what is being read, in the order it is read; the seconds are a
+   platform number, so they set in mono. The button keeps its shape and loses its ink. */
+.checks-head .checking {
+  flex-basis: 100%;
+  margin: 0;
+  font-family: var(--font-text);
+  font-size: var(--size-body-sm);
+  line-height: 1.5;
+  color: var(--ink-muted);
+  max-width: none;
+  text-wrap: pretty;
+}
+
+.checks-head .checking .elapsed {
+  display: inline-block;
+  min-width: 2.5ch;
+  margin-right: var(--space-2);
+  font-family: var(--font-mono);
+  font-size: var(--size-listing);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+}
+
+.checks-head button[data-pending] {
+  cursor: progress;
+  color: var(--ink-muted);
+}
+
 /* The small control -----------------------------------------------------------
    Three acts on this page are real controls that are not the page's main business: Check
    for releases, on the checklist's head, which POSTs and can cut a release; Preview

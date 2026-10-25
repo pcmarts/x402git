@@ -34,8 +34,17 @@ export const POST = handle(async (req: Request, ctx: { params: Promise<{ id: str
 
   if (!result.ok) return back(target, { error: result.message });
 
+  // The cut is synchronous, so by the time this redirect lands the scan has a verdict;
+  // "not sellable until the scan passes" after a scan that passed read as a stall
+  // (25 Oct 2026, founder). Say what was found.
   const version = result.data?.version;
-  return back(target, {
-    ok: version ? `Cut v${version}. It is not sellable until the scan passes.` : "Sync started.",
-  });
+  const scan = result.data?.scan;
+  const ok = !version
+    ? "Sync started."
+    : scan === "pass"
+      ? `Cut v${version}. The security scan passed; it sells once the listing is published.`
+      : scan === "fail"
+        ? `Cut v${version}, but the security scan failed. The report is below; a new tag is the way past it.`
+        : `Cut v${version}. The security scan has not finished; it is not sellable until it passes.`;
+  return back(target, { ok });
 });
