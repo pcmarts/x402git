@@ -1,0 +1,4 @@
+{"type":"npm","name":"esbuild","version":"0.21.5","id":"14f4a5e1c9f2","direct":true,"dev":false,"alerts":[{"key":"c1","type":"installScripts","severity":"middle","category":"supplyChainRisk","props":{"script":"postinstall"},"action":"warn"}]}
+{"type":"npm","name":"very-new-package","version":"0.0.1","id":"8b41d0aa7c62","direct":true,"dev":false,"alerts":[{"key":"c2","type":"pendingScan","severity":"low","category":"supplyChainRisk","props":{},"action":"monitor"}]}
+{"type":"pypi","name":"internal-only-tool","version":"2.3.0","id":"9c52e1bb8d73","direct":false,"dev":true,"alerts":[{"key":"c3","type":"notFound","severity":"low","category":"supplyChainRisk","props":{},"action":"monitor"}]}
+{"_type":"scores","score":{"supplyChain":0.8,"quality":0.8,"maintenance":0.8,"vulnerability":0.9,"license":1}}

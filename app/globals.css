@@ -1,0 +1,5728 @@
+/*
+  X402 Git — "The Long Listing"
+  Visual world and token contract. DESIGN.md is the prose; this file is normative.
+
+  One sheet of paper, one ink set, hairline rules, fixed columns. Everything the
+  platform computed is set in the monospace face; everything a human wrote is set
+  in the text face. Semantic HTML with no classes must already render as the
+  design system, because agents and `curl` read these pages unstyled.
+*/
+
+/* ---------------------------------------------------------------- tokens -- */
+
+:root {
+  color-scheme: light;
+
+  /* Ink set — paper, four greys, one accent, two status inks. Nothing else. */
+  --paper: #f7f7f5;
+  --paper-sunk: #efefec;
+  --rule: #dededa;
+  --rule-strong: #bdbdb6;
+  --rule-control: #8a8a83; /* control edges + link underlines — 3.24:1 on paper, WCAG 1.4.11 */
+  --ink: #1a1a1a;
+  --ink-muted: #6b6b6b;
+  --accent: #0b6e4f;
+  --accent-deep: #085239;
+  --status-fail: #a61b1b;
+  --status-warn: #8a5a00;
+
+  /* The twelfth ink, and the only one that is not ours: GitHub's own button ground.
+     "Connect my repo" starts an OAuth round trip to github.com, and a button that
+     looks like GitHub's button is telling the truth about where the click goes.
+     Paper on it is 13.7:1. It has no hover of its own — it presses to --ink — and it
+     is forbidden anywhere but that one control. See DESIGN.md, The Borrowed Ground Rule. */
+  --github: #24292f;
+
+  /* Type */
+  --font-mono: var(--font-azeret-mono), ui-monospace, "SFMono-Regular", "Menlo",
+    "Consolas", monospace;
+  --font-text: var(--font-public-sans), system-ui, -apple-system, "Segoe UI",
+    "Helvetica Neue", "Arial", sans-serif;
+
+  --size-display: clamp(1.75rem, 1.25rem + 2.2vw, 2.5rem);
+  --size-headline: 1.25rem;
+  --size-title: 1rem;
+  --size-body: 1.0625rem;
+  --size-body-sm: 0.9375rem;
+  --size-listing: 0.875rem;
+  --size-label: 0.75rem;
+
+  --leading-display: 1.12;
+  --leading-heading: 1.3;
+  --leading-body: 1.6;
+  --leading-listing: 1.571;
+  --leading-label: 1.35;
+
+  --tracking-display: -0.02em;
+  --tracking-normal: 0;
+  --tracking-label: 0.07em;
+
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-bold: 700;
+
+  /* Space — 4px base, fixed tab stops */
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.5rem;
+  --space-6: 2rem;
+  --space-7: 3rem;
+  --space-8: 4rem;
+  --space-9: 6rem;
+
+  /* Structure */
+  --rule-width: 1px;
+  --radius: 0;
+  --row-height: 1.875rem; /* 30px cell box: 22px line + 8px padding; 31px pitch with the rule */
+  --measure: 68ch;
+  --container: 76rem;
+  --gutter: clamp(1rem, 4vw, 2rem);
+  --tap: 2.75rem;
+
+  /* State — the entire motion budget */
+  --transition: 100ms ease-out;
+  --focus-ring: 0 0 0 2px var(--paper), 0 0 0 4px var(--ink);
+}
+
+/* ----------------------------------------------------------------- reset -- */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+  scrollbar-color: var(--rule-strong) var(--paper);
+}
+
+/* The home page's pitch band is the one element that runs wider than the sheet.
+   It used to measure the window in `vw`, which counts a classic scrollbar, and an
+   `overflow-x: clip` up here swallowed the ~7px that over-counted — a hidden bug,
+   not a fix (layout v2, 2026-08-31). The band now measures the page in `cqw`
+   instead, which is exact, so the clip is gone: any horizontal overflow anywhere
+   is a defect again, visible as one. The container is declared only on a body
+   that carries the band, because `container-type`'s layout containment would
+   capture `position: fixed` descendants — the product page's pinned price bar
+   must keep the viewport as its containing block. */
+body:has(> main > .pitch) {
+  container-type: inline-size;
+}
+
+/* ------------------------------------------------------------------ base -- */
+
+body {
+  background-color: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-text);
+  font-size: var(--size-body);
+  font-weight: var(--weight-regular);
+  line-height: var(--leading-body);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  accent-color: var(--accent);
+  caret-color: var(--accent);
+}
+
+::selection {
+  background-color: var(--accent);
+  color: var(--paper);
+}
+
+/* Type ---------------------------------------------------------------------
+   Headings are computed structure, so they take the monospace face. Prose,
+   which a person wrote, takes the text face. See "The Computed / Written Rule".
+*/
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  font-family: var(--font-mono);
+  font-weight: var(--weight-medium);
+  line-height: var(--leading-heading);
+  letter-spacing: var(--tracking-normal);
+  margin: var(--space-7) 0 var(--space-3);
+  text-wrap: balance;
+}
+
+h1 {
+  font-size: var(--size-display);
+  line-height: var(--leading-display);
+  letter-spacing: var(--tracking-display);
+  margin-top: 0;
+}
+
+h2 {
+  font-size: var(--size-headline);
+  border-bottom: var(--rule-width) solid var(--rule-strong);
+  padding-bottom: var(--space-2);
+}
+
+h3 {
+  font-size: var(--size-title);
+}
+
+h4,
+h5,
+h6 {
+  font-size: var(--size-listing);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-label);
+  color: var(--ink-muted);
+}
+
+p,
+li,
+dd {
+  max-width: var(--measure);
+}
+
+p {
+  margin: 0 0 var(--space-4);
+}
+
+ul,
+ol {
+  margin: 0 0 var(--space-4);
+  padding-left: var(--space-5);
+}
+
+li {
+  margin-bottom: var(--space-1);
+}
+
+li::marker {
+  color: var(--ink-muted);
+}
+
+small {
+  font-size: var(--size-body-sm);
+}
+
+/* `hidden` means hidden, and it has to be said here because a class beats it.
+   Found 14 Sep 2026 on `example-seller/example-listing`, whose README fits
+   its own preview: `fit()` in readme-more.tsx had correctly set `hidden` on the
+   control's wrapper and `[data-js="on"] .readme-more{display:block}` — one attribute
+   and one class — outranked the user agent's `[hidden]{display:none}`, so a "Show
+   more" button sat under a README with nothing left to show. The rule that hides a
+   thing must not be the lowest-specificity rule in the room; every element this
+   product hides with the attribute goes through here, so it is stated once.
+
+   The `!important` is the point rather than a shortcut: this is not competing with
+   another rule about how something looks, it is the one rule about whether it is
+   there at all. */
+
+[hidden] {
+  display: none !important;
+}
+
+strong,
+b {
+  font-weight: var(--weight-bold);
+}
+
+hr {
+  border: 0;
+  border-top: var(--rule-width) solid var(--rule);
+  margin: var(--space-6) 0;
+}
+
+blockquote {
+  margin: 0 0 var(--space-4);
+  padding-left: var(--space-4);
+  border-left: var(--rule-width) solid var(--rule-strong);
+  color: var(--ink-muted);
+}
+
+/* Code — real code, real measurement; never decoration */
+
+code,
+kbd,
+samp,
+pre {
+  font-family: var(--font-mono);
+  font-size: var(--size-listing);
+}
+
+code {
+  background-color: var(--paper-sunk);
+  padding: 0 var(--space-1);
+}
+
+pre {
+  background-color: var(--paper-sunk);
+  border: var(--rule-width) solid var(--rule);
+  border-radius: var(--radius);
+  padding: var(--space-4);
+  margin: 0 0 var(--space-4);
+  overflow-x: auto;
+  line-height: var(--leading-listing);
+}
+
+pre code {
+  background-color: transparent;
+  padding: 0;
+}
+
+/* Links --------------------------------------------------------------------
+   Always underlined. Colour alone never carries a link.
+*/
+
+a {
+  color: var(--ink);
+  text-decoration: underline;
+  text-decoration-color: var(--rule-control);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.18em;
+  transition: color var(--transition), text-decoration-color var(--transition);
+}
+
+a:hover {
+  color: var(--accent);
+  text-decoration-color: var(--accent);
+}
+
+a:active {
+  color: var(--accent-deep);
+}
+
+/* Tables — the signature component ----------------------------------------
+   Fixed tab stops, hairline rows, tabular numerals, an instant cursor line.
+*/
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--font-mono);
+  font-size: var(--size-listing);
+  line-height: var(--leading-listing);
+  font-variant-numeric: tabular-nums;
+  margin: 0 0 var(--space-6);
+}
+
+caption {
+  text-align: left;
+  font-family: var(--font-mono);
+  font-size: var(--size-label);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  color: var(--ink-muted);
+  padding-bottom: var(--space-2);
+}
+
+th {
+  font-size: var(--size-label);
+  font-weight: var(--weight-medium);
+  line-height: var(--leading-label);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  color: var(--ink-muted);
+  text-align: left;
+  padding: var(--space-2) var(--space-3);
+  border-bottom: var(--rule-width) solid var(--rule-strong);
+  white-space: nowrap;
+}
+
+td {
+  padding: var(--space-1) var(--space-3);
+  height: var(--row-height);
+  border-bottom: var(--rule-width) solid var(--rule);
+  vertical-align: top;
+}
+
+th:first-child,
+td:first-child {
+  padding-left: 0;
+}
+
+th:last-child,
+td:last-child {
+  padding-right: 0;
+}
+
+/* The cursor line: it snaps, it does not fade. */
+tbody tr:hover {
+  background-color: var(--paper-sunk);
+}
+
+/* Totals: one row, ruled off from the body like a ledger's foot. */
+tfoot td {
+  border-top: var(--rule-width) solid var(--rule-strong);
+  border-bottom: 0;
+  font-weight: var(--weight-medium);
+}
+
+/* Forms --------------------------------------------------------------------
+   Price fields, repo URLs, wallet addresses: data, so monospace by default.
+*/
+
+label {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: var(--size-label);
+  font-weight: var(--weight-medium);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  color: var(--ink-muted);
+  margin-bottom: var(--space-2);
+}
+
+fieldset {
+  border: var(--rule-width) solid var(--rule);
+  border-radius: var(--radius);
+  padding: var(--space-4);
+  margin: 0 0 var(--space-5);
+}
+
+legend {
+  font-family: var(--font-mono);
+  font-size: var(--size-label);
+  font-weight: var(--weight-medium);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  color: var(--ink-muted);
+  padding: 0 var(--space-2);
+}
+
+input,
+select,
+textarea {
+  font-family: var(--font-mono);
+  font-size: var(--size-listing);
+  line-height: var(--leading-listing);
+  color: var(--ink);
+  background-color: var(--paper);
+  border: var(--rule-width) solid var(--rule-control);
+  border-radius: var(--radius);
+  padding: var(--space-2) var(--space-3);
+  min-height: var(--tap);
+  width: 100%;
+  max-width: 24rem;
+  transition: border-color var(--transition);
+}
+
+textarea {
+  font-family: var(--font-text);
+  line-height: var(--leading-body);
+  max-width: var(--measure);
+  resize: vertical;
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: var(--ink-muted);
+  opacity: 1;
+}
+
+input:hover,
+select:hover,
+textarea:hover {
+  border-color: var(--ink-muted);
+}
+
+input:disabled,
+select:disabled,
+textarea:disabled {
+  background-color: var(--paper-sunk);
+  color: var(--ink-muted);
+  border-color: var(--rule);
+  cursor: not-allowed;
+}
+
+input[aria-invalid="true"],
+select[aria-invalid="true"],
+textarea[aria-invalid="true"] {
+  border-color: var(--status-fail);
+}
+
+input[type="radio"],
+input[type="checkbox"] {
+  width: auto;
+  min-height: 0;
+  margin-right: var(--space-2);
+}
+
+/* Buttons ------------------------------------------------------------------
+   Default is the secondary rectangle. data-variant="primary" is the one order
+   line per page; nothing else on a page may wear the accent as a ground.
+*/
+
+button,
+input[type="submit"],
+input[type="button"] {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  font-family: var(--font-mono);
+  font-size: var(--size-listing);
+  font-weight: var(--weight-medium);
+  line-height: var(--leading-listing);
+  color: var(--ink);
+  background-color: var(--paper);
+  border: var(--rule-width) solid var(--rule-control);
+  border-radius: var(--radius);
+  padding: var(--space-2) var(--space-4);
+  min-height: var(--tap);
+  cursor: pointer;
+  transition: background-color var(--transition), border-color var(--transition),
+    color var(--transition);
+}
+
+button:hover,
+input[type="submit"]:hover,
+input[type="button"]:hover {
+  background-color: var(--paper-sunk);
+  border-color: var(--ink-muted);
+}
+
+button:disabled,
+input[type="submit"]:disabled,
+input[type="button"]:disabled {
+  background-color: var(--paper-sunk);
+  color: var(--ink-muted);
+  border-color: var(--rule);
+  cursor: not-allowed;
+}
+
+button[data-variant="primary"] {
+  color: var(--paper);
+  background-color: var(--accent);
+  border-color: var(--accent);
+}
+
+button[data-variant="primary"]:hover {
+  background-color: var(--accent-deep);
+  border-color: var(--accent-deep);
+}
+
+button[data-variant="primary"]:disabled {
+  color: var(--ink-muted);
+  background-color: var(--paper-sunk);
+  border-color: var(--rule);
+}
+
+/* Working, not unavailable: a primary the wallet has the floor on keeps its ground,
+   pressed to the deep tone, and stays focusable (aria-disabled, not disabled) so focus
+   is not dropped to the page while a wallet sheet is up. */
+button[data-variant="primary"][aria-busy="true"] {
+  color: var(--paper);
+  background-color: var(--accent-deep);
+  border-color: var(--accent-deep);
+  cursor: progress;
+}
+
+/* The GitHub sign-in ground: the home page's Start selling and /signin's Continue with
+   GitHub. It presses to --ink rather than to a tint, so the twelfth colour stays a
+   single value. */
+
+button[data-variant="github"] {
+  color: var(--paper);
+  background-color: var(--github);
+  border-color: var(--github);
+}
+
+button[data-variant="github"]:hover {
+  color: var(--paper);
+  background-color: var(--ink);
+  border-color: var(--ink);
+}
+
+/* The Octocat mark, drawn at the cap height of the label beside it. */
+button[data-variant="github"] svg {
+  width: 1.25em;
+  height: 1.25em;
+  fill: currentColor;
+  flex: none;
+}
+
+button[data-variant="quiet"] {
+  border-color: transparent;
+  color: var(--ink-muted);
+  padding-left: 0;
+  padding-right: 0;
+  text-decoration: underline;
+  text-decoration-color: var(--rule-control);
+  text-underline-offset: 0.18em;
+}
+
+button[data-variant="quiet"]:hover {
+  background-color: transparent;
+  border-color: transparent;
+  color: var(--accent);
+  text-decoration-color: var(--accent);
+}
+
+/* Focus --------------------------------------------------------------------
+   One ring everywhere: paper gap, ink ring. Legible on paper and on the accent.
+*/
+
+:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+a:focus-visible {
+  text-decoration-color: var(--ink);
+}
+
+/* Provenance and status ----------------------------------------------------
+   .computed marks a value the platform derived; .written marks human prose.
+   Status inks are reserved for scan verdicts and payment failure. Never chrome.
+*/
+
+.computed,
+.num {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.num {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.written {
+  font-family: var(--font-text);
+  max-width: var(--measure);
+}
+
+/* A heading inside human prose is still human prose. Without this, a rendered
+   README's own `## Install` inherits the element rules above and comes out in the
+   computed face under a rule-strong underline — pixel-identical to the platform's
+   own CONTENTS and RELEASES heads. That is Quality Signals §9a.1's "seller replaces
+   the disclosure chrome" and DESIGN.md's Computed / Written Rule, in one defect. */
+
+.written :is(h1, h2, h3, h4, h5, h6) {
+  font-family: var(--font-text);
+  font-weight: var(--weight-bold);
+  letter-spacing: var(--tracking-normal);
+  text-transform: none;
+  color: var(--ink);
+  border-bottom: 0;
+  padding-bottom: 0;
+  margin: var(--space-5) 0 var(--space-2);
+}
+
+.written :is(h1, h2) {
+  font-size: var(--size-headline);
+  line-height: var(--leading-heading);
+}
+
+.written :is(h3, h4, h5, h6) {
+  font-size: var(--size-title);
+  line-height: var(--leading-heading);
+}
+
+.muted {
+  color: var(--ink-muted);
+}
+
+.measure {
+  max-width: var(--measure);
+}
+
+[data-status="pass"] {
+  color: var(--accent);
+}
+
+[data-status="fail"] {
+  color: var(--status-fail);
+}
+
+[data-status="warn"] {
+  color: var(--status-warn);
+}
+
+[data-status="pending"] {
+  color: var(--ink-muted);
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Responsive ---------------------------------------------------------------
+   Below 40rem the listing keeps size and path; mode and date columns drop.
+
+   Three density tiers, because the admin tables carry nine and ten columns and one
+   breakpoint could not seat them. A cell carries one of the three, and a table that
+   needs none is unaffected by all:
+
+     wide      only a full-width desk. One column earns this: a payout address is 42
+               monospace characters that must not be broken, and it needs most of the
+               container to itself.
+     dense     a desk but not a laptop.
+     optional  everything above a phone.
+*/
+
+@media (max-width: 82rem) {
+  [data-col="wide"] {
+    display: none;
+  }
+}
+
+@media (max-width: 60rem) {
+  [data-col="dense"] {
+    display: none;
+  }
+}
+
+@media (max-width: 40rem) {
+  [data-col="optional"] {
+    display: none;
+  }
+
+  th,
+  td {
+    padding-left: var(--space-2);
+    padding-right: var(--space-2);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-duration: 1ms !important;
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Page frame ---------------------------------------------------------------
+   One column on one sheet: 76rem, centred, a gutter either side. Two pages earn a
+   second column and no more: the product page's buy box, and the docs' contents
+   column (both below, both by the founder's direction). A listing's total still
+   goes at the bottom, not beside it.
+*/
+
+body > header,
+body > main,
+body > footer {
+  max-width: var(--container);
+  margin-inline: auto;
+  padding-inline: var(--gutter);
+}
+
+body > header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding-block: var(--space-4);
+  border-bottom: var(--rule-width) solid var(--rule);
+  font-family: var(--font-mono);
+  font-size: var(--size-listing);
+  /* Rides along while the page scrolls, tucks away when it pauses (chrome.tsx
+     `HeaderScript`, 2026-08-30, founder). Sticky, on its own paper so nothing shows
+     through, above the sticky buy box; the hide is one transform, ease-out, and the
+     reduced-motion rule at the top of this sheet collapses it to a cut. */
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  background-color: var(--paper);
+  transition: transform 220ms ease-out;
+}
+
+body > header[data-header="hidden"] {
+  transform: translateY(-100%);
+}
+
+/* An anchor jump has to clear the sticky header, or the row a `docs_url` points at
+   lands underneath it — the reader is sent to price_changed and sees rate_limited.
+   One header's height plus a breath, on every id the site can link to. */
+[id] {
+  scroll-margin-top: calc(var(--space-8) + var(--space-2));
+}
+
+body > header nav {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-5);
+}
+
+/* The corner menu (2026-08-31, founder: on a phone the header's links took most of
+   the first screen). Below 40rem — the system's existing narrow step — the inline
+   nav gives way to a `<details>` on the right: the word "Menu" behind the same
+   drawn +/− every other disclosure wears, at the full tap height. Open, the links
+   are a ruled stack hung from the sticky header — the header is the containing
+   block, so the list runs the sheet's full width under the header's own rule, on
+   its paper and at its z-index. Not an overlay in the depth sense: it is the
+   header's own plane extending, exactly as it does when it rides a scroll. The
+   storefront header carries no site nav and none of this touches it. */
+
+body > header > details.menu {
+  display: none;
+}
+
+@media (max-width: 39.9375rem) {
+  body > header:not([data-storefront]) {
+    flex-wrap: nowrap;
+    align-items: center;
+    /* The summary is the full 44px tap target, so the bar's own padding steps
+       down a stop; the header stays one line at roughly its desktop height. */
+    padding-block: var(--space-2);
+  }
+
+  body > header:not([data-storefront]) > nav {
+    display: none;
+  }
+
+  body > header > details.menu {
+    display: block;
+  }
+
+  body > header .menu > summary {
+    border-bottom: 0;
+    padding-block: 0;
+    min-height: var(--tap);
+  }
+
+  body > header .menu > nav {
+    position: absolute;
+    inset-inline: 0;
+    top: 100%;
+    margin: 0;
+    padding-inline: var(--gutter);
+    display: block;
+    background-color: var(--paper);
+  }
+
+  /* Each link is a row of the same ruled table every listing is: 44px on a
+     hairline, the last rule closing the sheet against the page beneath. */
+  body > header .menu > nav a {
+    display: flex;
+    align-items: center;
+    min-height: var(--tap);
+    border-bottom: var(--rule-width) solid var(--rule);
+  }
+}
+
+/* The storefront's chrome (chrome.tsx, amended 2026-08-30): a listing or an author page
+   is the creator's, not the site's. The header is the wordmark alone, muted, with no
+   rule under it — the title below is the first line of the page and the mark is a
+   corner note, not a masthead. The footer is one muted sentence over a hairline. Both
+   inherit the frame above; only the menu and the rule leave. */
+
+body > header[data-storefront] {
+  border-bottom: 0;
+  padding-block: var(--space-4) 0;
+  color: var(--ink-muted);
+}
+
+/* Riding over the page mid-scroll (chrome.tsx `HeaderScript`), the corner note needs
+   an edge or the README runs into the wordmark. The hairline appears only then, so
+   the top of a storefront is still the wordmark alone on open paper. */
+body > header[data-storefront][data-header="riding"] {
+  padding-bottom: var(--space-3);
+  border-bottom: var(--rule-width) solid var(--rule);
+}
+
+body > header[data-storefront] a {
+  color: inherit;
+}
+
+body > header[data-storefront] a:hover {
+  color: var(--accent);
+}
+
+/* The agent reading (page.tsx `AgentView`, 2026-08-30, founder): "make the font a lot
+   smaller — it was made for agents, not for humans." Every size token is re-set on the
+   page's main element, so the whole document steps down together and keeps its
+   hierarchy; nothing inside it names a pixel. Body prose is what a dump looks like when
+   a person glances at it; the h1 stays the one line big enough to read across a room. */
+
+main.agent-reading {
+  --size-display: 1.375rem;
+  --size-headline: 1rem;
+  --size-title: 0.875rem;
+  --size-body: 0.8125rem;
+  --size-body-sm: 0.75rem;
+  --size-listing: 0.75rem;
+  --size-label: 0.6875rem;
+  --leading-body: 1.5;
+  --measure: 80ch;
+  font-size: var(--size-body);
+}
+
+/* The reading switch (chrome.tsx, 2026-08-30): Human · Agent in the corner. Two links
+   set like the Contents tabs — the current one in ink with a 2px rule under it, the
+   other muted — and no box around them: on a storefront the corner is a note. */
+
+body > header[data-storefront] nav.reading {
+  gap: var(--space-4);
+}
+
+body > header[data-storefront] nav.reading a {
+  padding-block: var(--space-1);
+  border-bottom: 2px solid transparent;
+  text-decoration: none;
+  transition: color var(--transition), border-color var(--transition);
+}
+
+body > header[data-storefront] nav.reading a[aria-current="page"] {
+  color: var(--ink);
+  border-bottom-color: var(--ink);
+}
+
+body > footer[data-storefront] p {
+  margin: 0;
+}
+
+/* The dashboard's second row: its own sections under the site header, on the same
+   sheet, at the same measure. A lighter rule than the header's so the two read as one
+   masthead, not two. Sign out sits at the far end, off the section list. */
+
+body > nav.subnav {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-5);
+  max-width: var(--container);
+  margin-inline: auto;
+  padding-inline: var(--gutter);
+  padding-block: var(--space-3);
+  border-bottom: var(--rule-width) solid var(--rule);
+  color: var(--ink-muted);
+  font-family: var(--font-mono);
+  font-size: var(--size-listing);
+}
+
+body > nav.subnav form {
+  margin-inline-start: auto;
+}
+
+body > main {
+  padding-block: var(--space-7) var(--space-9);
+}
+
+body > footer {
+  /* One rule and one line of links: ~78px of strip, not the 110 the old 64px
+     bottom padding made of it (layout v2, 2026-08-31). The phone buy-bar media
+     rule below still deepens the bottom so the bar never covers the last line. */
+  padding-block: var(--space-5) var(--space-6);
+  border-top: var(--rule-width) solid var(--rule);
+  color: var(--ink-muted);
+  font-family: var(--font-mono);
+  font-size: var(--size-listing);
+}
+
+body > footer nav {
+  display: flex;
+  flex-wrap: wrap;
+  /* Baseline, as in the header: the footer now carries a Sign out button among the
+     links, and a 44px tap target stretched to the row's height would drag its label
+     off the line every other item sits on. */
+  align-items: baseline;
+  /* Right-aligned (2026-08-30, founder): the footer is the small print, and it sits
+     where the header's nav sits, under the right-hand end of the same column. */
+  justify-content: flex-end;
+  gap: var(--space-5);
+}
+
+/* Sections are separated by type and space, never by a bordered box. */
+
+section {
+  margin-bottom: var(--space-7);
+}
+
+section > :last-child {
+  margin-bottom: 0;
+}
+
+/* Computed facts ------------------------------------------------------------
+   The line under the title, and the stamp under every computed block. FR-52:
+   a computed number always carries when it was computed and by what.
+*/
+
+.facts {
+  font-family: var(--font-mono);
+  font-size: var(--size-listing);
+  line-height: var(--leading-listing);
+  font-variant-numeric: tabular-nums;
+  max-width: none;
+  margin-bottom: var(--space-4);
+}
+
+.stamp {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: var(--size-label);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  color: var(--ink-muted);
+  margin-bottom: var(--space-6);
+}
+
+/* A creator-supplied value, marked as one. Quality Signals §9a: computed and
+   self-reported never share a namespace, and the unverified side says so. */
+
+.badge {
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: var(--size-label);
+  font-weight: var(--weight-medium);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  color: var(--ink-muted);
+  border: var(--rule-width) solid var(--rule-strong);
+  border-radius: var(--radius);
+  padding: 0 var(--space-2);
+  vertical-align: middle;
+}
+
+/* FR-53: a claim the computed fields contradict, printed in the same place as
+   the claim. Fail Red is a verdict ink and this is a verdict. */
+
+.contradiction {
+  font-family: var(--font-mono);
+  font-size: var(--size-listing);
+  color: var(--status-fail);
+  margin: 0 0 var(--space-2);
+  max-width: none;
+}
+
+/* Key/value pairs — the expert layer's left column, not a table. */
+
+dl {
+  display: grid;
+  grid-template-columns: minmax(0, 14rem) minmax(0, 1fr);
+  gap: var(--space-2) var(--space-5);
+  margin: 0 0 var(--space-5);
+}
+
+dt {
+  font-family: var(--font-mono);
+  font-size: var(--size-label);
+  font-weight: var(--weight-medium);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  color: var(--ink-muted);
+  line-height: var(--leading-listing);
+}
+
+dd {
+  font-family: var(--font-mono);
+  font-size: var(--size-listing);
+  line-height: var(--leading-listing);
+  font-variant-numeric: tabular-nums;
+  margin: 0;
+  max-width: none;
+}
+
+@media (max-width: 40rem) {
+  dl {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0;
+  }
+
+  dd {
+    margin-bottom: var(--space-3);
+  }
+}
+
+/* The order line ------------------------------------------------------------
+   The Last Line Rule: the paid action sits at the end of the listing, as a
+   full-width band carrying version and price. One per page, and the only place
+   the accent is ever a ground.
+*/
+
+.order {
+  border-top: var(--rule-width) solid var(--rule-strong);
+  padding-top: var(--space-4);
+  margin-top: var(--space-8);
+}
+
+.order-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  font-family: var(--font-mono);
+  font-size: var(--size-headline);
+  line-height: var(--leading-heading);
+  font-variant-numeric: tabular-nums;
+  margin-bottom: var(--space-4);
+}
+
+/* Forms --------------------------------------------------------------------
+   Fields stack; a row of presets is a row. Nothing is boxed twice.
+*/
+
+.field {
+  margin-bottom: var(--space-5);
+}
+
+/* The Label style for something that is not a form control — the exact bytes of a
+   signing challenge, say. A `<label for>` pointing at a `<pre>` is not a label at
+   all: `pre` is not labelable, so the association is dropped and the caption is
+   announced as loose text. This carries the look without the false promise. */
+
+.field-label {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: var(--size-label);
+  font-weight: var(--weight-medium);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  color: var(--ink-muted);
+  margin-bottom: var(--space-2);
+}
+
+.field small {
+  display: block;
+  font-family: var(--font-text);
+  color: var(--ink-muted);
+  margin-top: var(--space-2);
+  max-width: var(--measure);
+}
+
+.presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-5);
+  margin-bottom: var(--space-4);
+}
+
+.presets label {
+  display: flex;
+  align-items: center;
+  font-size: var(--size-listing);
+  letter-spacing: var(--tracking-normal);
+  text-transform: none;
+  color: var(--ink);
+  margin-bottom: 0;
+  min-height: var(--tap);
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+}
+
+/* A payment, publish or wallet outcome, announced to assistive technology. */
+
+[role="status"],
+[role="alert"] {
+  font-family: var(--font-mono);
+  font-size: var(--size-listing);
+  margin-bottom: var(--space-4);
+}
+
+/* The wallet control --------------------------------------------------------
+   Pre-hydration this is one sentence; after mount it is the page's single
+   grounded action, the payment-method row above it once a wallet is connected, and
+   one short line under it. All full width of the box, because a 44px control in a
+   22rem column has no reason to be narrower. (This block was lost in the 2026-08-30
+   product-page rewrite and restored the same day; the button had fallen back to its
+   intrinsic width and the status line to the global mono status rule.)
+*/
+
+.buy-fallback {
+  margin: 0;
+  font-size: var(--size-body-sm);
+  max-width: none;
+}
+
+.buy-state,
+.buy-done {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--space-2);
+}
+
+.buy-state > button,
+.buy-done > a[data-button] {
+  width: 100%;
+}
+
+/* The line under the button is help a person reads, not a value the platform
+   computed, so it takes the text face at the small body size — the same voice as
+   the updates sentence above the button. The live region exists from the first
+   render (PRODUCT.md), so a change of state is announced rather than inserted. */
+.buy-state .buy-status {
+  margin: 0;
+  font-family: var(--font-text);
+  font-size: var(--size-body-sm);
+  color: var(--ink-muted);
+  max-width: none;
+  overflow-wrap: anywhere;
+}
+
+.buy-state .buy-status small {
+  font-size: inherit;
+}
+
+.buy-state > [role="alert"],
+.buy-done > p {
+  margin: 0;
+  max-width: none;
+}
+
+.buy-done .bought {
+  font-family: var(--font-mono);
+  font-size: var(--size-title);
+  line-height: var(--leading-heading);
+  margin: 0 0 var(--space-1);
+}
+
+/* An anchor wearing the primary ground: the download, which is a real navigation to
+   a signed URL and must keep the middle click and the context menu. */
+
+a[data-button][data-variant="primary"] {
+  color: var(--paper);
+  background-color: var(--accent);
+  border-color: var(--accent);
+}
+
+a[data-button][data-variant="primary"]:hover {
+  color: var(--paper);
+  background-color: var(--accent-deep);
+  border-color: var(--accent-deep);
+}
+
+/* The buy box's payment-method row: what the reader is paying from, and "Change" on
+   the right, the way every checkout shows a card. Sits above the button; the quiet
+   button is sized as a word so the row stays one line tall. */
+.pay-from {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: var(--space-3);
+  font-family: var(--font-mono);
+  font-size: var(--size-listing);
+  color: var(--ink-muted);
+  border-top: var(--rule-width) solid var(--rule);
+  border-bottom: var(--rule-width) solid var(--rule);
+  padding: var(--space-2) 0;
+  margin: 0;
+  max-width: none;
+}
+
+.pay-from .computed {
+  color: var(--ink);
+}
+
+.pay-from button[data-variant="quiet"] {
+  font: inherit;
+  min-height: 0;
+  padding: 0;
+  flex: none;
+}
+
+/* Long values that must not force a horizontal scrollbar: addresses, hashes,
+   endpoint URLs sitting inside a table cell. */
+
+.wrap {
+  overflow-wrap: anywhere;
+}
+
+/* An anchor that is an action ----------------------------------------------
+   "View" opens a listing in a new tab. It is a navigation, so it stays an <a> for
+   the middle click, the context menu and the status bar — it just wears the
+   secondary button's rectangle, because it sits in a row beside real buttons.
+*/
+
+a[data-button] {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  font-family: var(--font-mono);
+  font-size: var(--size-listing);
+  font-weight: var(--weight-medium);
+  line-height: var(--leading-listing);
+  color: var(--ink);
+  background-color: var(--paper);
+  border: var(--rule-width) solid var(--rule-control);
+  border-radius: var(--radius);
+  padding: var(--space-2) var(--space-4);
+  min-height: var(--tap);
+  text-decoration: none;
+  transition: background-color var(--transition), border-color var(--transition), color var(--transition);
+}
+
+a[data-button]:hover {
+  color: var(--ink);
+  background-color: var(--paper-sunk);
+  border-color: var(--ink-muted);
+}
+
+/* The hero -----------------------------------------------------------------
+   Centred, with room (founder, 2026-08-31): the promise, one line under it, the
+   button in the middle. The top padding is viewport-relative so the hero breathes
+   on a tall screen without pushing the steps row below the fold on a short one —
+   at 900px of viewport the row's rule lands around 480px from the top. The gaps
+   are set explicitly rather than left to collapsing margins: 24px binds the line
+   to the headline and the button to the line; the steps take a section's 48px.
+*/
+
+.hero {
+  text-align: center;
+  padding-block: clamp(var(--space-7), 12vh, 7rem) var(--space-6);
+}
+
+.hero h1,
+.hero p {
+  margin-inline: auto;
+}
+
+.hero p {
+  margin-bottom: 0;
+}
+
+/* Two lines, broken on purpose (founder, 2026-09-02): the promise, then how it
+   keeps paying. The <br> is the break, so no `measure` cap — a measure would wrap
+   each sentence somewhere of its own choosing and the pair would read as four
+   ragged lines. `text-wrap: balance` only tidies a line still too long for the
+   window; on anything wider each sentence sits on its own line.
+
+   The second line carries two sentences, and below ~500px it no longer fits on
+   one. Each is wrapped in a span so the wrap lands on the full stop between them
+   rather than mid-clause — at 390px the unspanned version stranded "you ship." on
+   a line of its own. `inline-block` makes each sentence one unbreakable run.
+*/
+
+.hero-sub {
+  text-wrap: balance;
+}
+
+.hero-sub span {
+  display: inline-block;
+}
+
+.hero-cta {
+  margin: var(--space-5) 0 0;
+}
+
+/* A section head worn small (founder, 2026-08-31): the Label face as the home
+   page's h2, over the section's rule. It is the heading itself, not an eyebrow
+   above one — The No Kicker Rule stands, because nothing sits above it. */
+h2.section-label {
+  font-size: var(--size-label);
+  line-height: var(--leading-listing);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  color: var(--ink-muted);
+}
+
+/* The label's own rule is the row's top rule; the list drawing a second one a
+   few pixels under it would be the same job twice. */
+h2.section-label + .steps {
+  margin-top: 0;
+  border-top: 0;
+}
+
+/* The four steps -----------------------------------------------------------
+   Connect repo → Set price → Add wallet → Done: what happens after the button
+   above. An ordered list first and a graphic second: with CSS off it is still
+   four numbered steps in order, and the arrows are generated content with an
+   empty alt so they are never announced.
+
+   A ruled stack until 64rem (layout v2, 2026-08-31 — at 48rem the columns were
+   ~157px and cramped), four equal columns above it. The name and note rows are
+   subgrid, so a name long enough to wrap holds every column's note on one line.
+*/
+
+.steps {
+  list-style: none;
+  margin: var(--space-7) 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  border-top: var(--rule-width) solid var(--rule);
+}
+
+.steps > li {
+  position: relative;
+  max-width: none;
+  margin: 0;
+  padding: var(--space-3) 0;
+  border-bottom: var(--rule-width) solid var(--rule);
+}
+
+.steps b {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: var(--size-title);
+  font-weight: var(--weight-medium);
+  line-height: var(--leading-heading);
+}
+
+.steps span {
+  display: block;
+  font-family: var(--font-text);
+  font-size: var(--size-body-sm);
+  line-height: var(--leading-body);
+  color: var(--ink-muted);
+}
+
+@media (min-width: 64rem) {
+  .steps {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-rows: auto auto;
+    border-bottom: var(--rule-width) solid var(--rule);
+  }
+
+  .steps > li {
+    padding: var(--space-4) var(--space-6) var(--space-4) 0;
+    border-bottom: 0;
+    display: grid;
+    grid-row: span 2;
+    grid-template-rows: subgrid;
+  }
+
+  /* The arrow sits on the step name's own line, so it points between the words
+     it sequences rather than hanging in the cell's padding. */
+  .steps > li:not(:last-child)::after {
+    content: "→" / "";
+    position: absolute;
+    right: var(--space-4);
+    top: var(--space-4);
+    height: calc(var(--size-title) * var(--leading-heading));
+    display: flex;
+    align-items: center;
+    font-family: var(--font-mono);
+    font-size: var(--size-listing);
+    line-height: var(--leading-heading);
+    color: var(--ink-muted);
+  }
+}
+
+/* The walkthrough ----------------------------------------------------------
+   The steps row, shown (founder, 2026-10-06): one 16:9 frame under the row it
+   illustrates. No border and no ground — the video's own edge is the shape, so
+   the count of bordered boxes on the sheet stays two. Capped at the width the
+   card row's two-thirds would take, so it reads as part of the sheet rather than
+   a hero of its own, and the label's rule spans the full sheet above it.
+*/
+
+.walkthrough {
+  margin-block: var(--space-7);
+}
+
+.video-frame {
+  max-width: 52rem;
+  margin: var(--space-4) auto 0;
+  aspect-ratio: 16 / 9;
+  background: var(--paper-sunk);
+}
+
+/* In a reading column it starts on the text's left edge, not centred under it. */
+.docs .video-frame {
+  margin-inline: 0;
+}
+
+.video-frame iframe {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+}
+
+/* The pitch band -----------------------------------------------------------
+   The home page's closing block, and the one place in the product where a region
+   is marked by its ground rather than by a heading. It is an advertisement placed
+   on the sheet: Sunk Sheet, one step down and never two, running to both edges of
+   the window with a hairline above and below.
+
+   A band, deliberately, and not a rectangle — it has a top and a bottom and no
+   sides, so the count of bordered boxes in this system is still two (the example
+   cards and the buy box) and nothing inside this one is boxed at all.
+
+   The bleed is arithmetic, not a hack: inside `body > main` a percentage resolves
+   against main's content box, and `50cqw` is half the body's own inline size —
+   the window minus any classic scrollbar, which `vw` over-counts — so
+   `50cqw - 50%` is exactly the distance from the window's edge to the sheet's,
+   spent as negative margin and taken straight back as padding. The text therefore
+   sits on the same left edge as everything above it while the ground runs past
+   it, and nothing overflows for a clip to hide. The container the `cqw` reads is
+   declared on `body` at the top of this sheet.
+*/
+
+.pitch {
+  /* No longer the page's last block (founder, 2026-08-31: the FAQ closes the
+     page), so the old negative bottom margin that tucked it up against the
+     footer's rule is gone; it is a band placed mid-sheet with a section's air
+     both sides. */
+  margin: var(--space-8) calc(50% - 50cqw);
+  padding: var(--space-8) calc(50cqw - 50%);
+  background-color: var(--paper-sunk);
+  border-top: var(--rule-width) solid var(--rule);
+  border-bottom: var(--rule-width) solid var(--rule);
+}
+
+/* Two columns above 64rem (layout v2, 2026-08-31): the offer on the left, the
+   three terms on the right, so the band's right half is no longer empty at
+   desktop widths. Grid areas, not floats, and the terms span both left rows so
+   they centre on the block they answer. Below 64rem the band stacks as before. */
+@media (min-width: 64rem) {
+  .pitch {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      "title terms"
+      "actions terms";
+    column-gap: var(--space-8);
+    align-items: center;
+  }
+
+  .pitch h2 {
+    grid-area: title;
+    align-self: end;
+  }
+
+  .pitch .terms {
+    grid-area: terms;
+    margin-bottom: 0;
+  }
+
+  .pitch .actions {
+    grid-area: actions;
+    align-self: start;
+  }
+}
+
+/* The ad's headline, not a section head: the band's own top rule already did the
+   separating, and a second rule two lines under it would be the same job twice. */
+.pitch h2 {
+  /* The 48px that goes above every heading in this system is already in the band's
+     own padding; taking it twice put the headline a third of the way down the ad. */
+  margin-top: 0;
+  margin-bottom: var(--space-3);
+  border-bottom: 0;
+  padding-bottom: 0;
+  max-width: var(--measure);
+}
+
+/* The money, small but not greyed: 10% and nothing else is the offer, not a
+   footnote about it, so it keeps full ink where other facts rows go Ash. */
+/* One term per line (2026-08-30, founder), no markers: the list is the facts, read
+   down like a receipt. */
+.pitch .terms {
+  list-style: none;
+  padding: 0;
+  color: var(--ink);
+  margin-bottom: var(--space-5);
+  overflow-wrap: anywhere;
+}
+
+.pitch .terms li {
+  margin: 0;
+  max-width: none;
+}
+
+.pitch .actions {
+  gap: var(--space-4);
+  margin-bottom: 0;
+}
+
+@media (max-width: 48rem) {
+  .pitch {
+    padding-block: var(--space-7);
+  }
+
+}
+
+/* Comparison ---------------------------------------------------------------
+   Four alternatives, six rows, on the home page. Row heads in the text face like a
+   label; the other products' cells go Ash and ours keep full ink, because the table
+   exists to say what only the last column does. Scrolls sideways on a phone rather
+   than wrapping five columns into confetti. */
+
+.compare-wrap {
+  overflow-x: auto;
+  /* Chromium propagates a table's `min-width` into the root's scrollable overflow
+     even from inside this scroll container; layout containment stops it at the
+     wrapper. Without this the page itself pans sideways on a phone (~93px at
+     390px) — a leak `html { overflow-x: clip }` used to hide (layout v2,
+     2026-08-31). */
+  contain: layout;
+  margin-bottom: var(--space-6);
+}
+
+.compare {
+  min-width: 32rem;
+  margin-bottom: 0;
+}
+
+.compare th[scope="row"] {
+  font-family: var(--font-text);
+  font-size: var(--size-body-sm);
+  line-height: var(--leading-body);
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--ink);
+  white-space: normal;
+  border-bottom: var(--rule-width) solid var(--rule);
+  padding: var(--space-2) var(--space-3) var(--space-2) 0;
+  vertical-align: top;
+}
+
+.compare td {
+  height: auto;
+  padding: var(--space-2) var(--space-3);
+  color: var(--ink-muted);
+  text-align: center;
+}
+
+.compare thead th:not(:first-child) {
+  text-align: center;
+}
+
+.compare td[data-yes] {
+  color: var(--ink);
+}
+
+/* Our column steps down onto Sunk Sheet the whole height of the table, head
+   included, so the eye finds it before it reads a row. The head keeps full ink where
+   the other three go Ash; the ticks are the accent, at a size that reads as a mark
+   rather than a glyph. */
+.compare thead th:last-child,
+.compare td:last-child {
+  background-color: var(--paper-sunk);
+  padding-left: var(--space-4);
+  padding-right: var(--space-4);
+}
+
+.compare thead th:last-child {
+  color: var(--ink);
+}
+
+.compare td:last-child[data-yes] {
+  color: var(--accent);
+  font-size: var(--size-body);
+  font-weight: var(--weight-medium);
+}
+
+/* Featured examples --------------------------------------------------------
+   The home page's three real listings, one row of three. The single place in this
+   system where content sits inside a rectangle: three siblings that must be
+   compared side by side, each carrying a name, a blurb, a price, a byline and one
+   control. Hairline rules, no ground, no shadow, no radius, and nothing boxed
+   inside them. Not a catalogue: no browse, no search, no sort, no "see all".
+*/
+
+.cards {
+  list-style: none;
+  margin: 0 0 var(--space-4);
+  padding: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-4);
+}
+
+/* Three-up waits for 64rem (layout v2, 2026-08-31): at 48rem the columns broke
+   slugs mid-word and the ragged two-line heads un-aligned the card tops, and
+   64rem — not 60 — is where the widest of today's slugs plus its install count
+   first fits a third of the row un-truncated. It is also the steps row's
+   breakpoint, so the landing page has one desktop moment, not two. Below it the
+   cards stack — or, on a phone, ride the swipe rail further down. */
+@media (min-width: 64rem) {
+  .cards {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+.cards > li {
+  max-width: none;
+  margin: 0;
+  padding: var(--space-4);
+  border: var(--rule-width) solid var(--rule);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.cards h3 {
+  margin: 0;
+  font-size: var(--size-title);
+}
+
+.cards p {
+  margin: 0;
+  max-width: none;
+}
+
+/* The blurb wears the same face as a step's sub-line ("Plus an optional price per
+   update"): text face, small body size, muted. Founder's direction, 2026-08-30. */
+.cards p.written {
+  font-family: var(--font-text);
+  font-size: var(--size-body-sm);
+  line-height: var(--leading-body);
+  color: var(--ink-muted);
+}
+
+/* The head row: slug on the left, install count small in the corner (founder,
+   2026-08-31). Baseline-aligned so the count sits on the slug's line. */
+.card-head {
+  display: flex;
+  /* The count may drop below the slug when the two no longer share a line
+     (layout v2, 2026-08-31): a name half-hidden behind an ellipsis is a worse
+     head than a count one line down. The slug's own ellipsis below is the last
+     resort, for a slug wider than the whole card. */
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0 var(--space-3);
+}
+
+.card-head h3 {
+  min-width: 0;
+  /* A slug is one name, not prose: it never breaks at its hyphens (layout v2,
+     2026-08-31). A slug longer than its card ellipsizes — the card links to the
+     page that carries it in full. */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.card-installs {
+  font-size: var(--size-label);
+  line-height: var(--leading-listing);
+  color: var(--ink-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* One fact per row, small (founder, 2026-08-31): the price in ink, the release
+   terms under it in Ash. */
+.cards .price-line {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  font-family: var(--font-mono);
+  font-size: var(--size-label);
+  line-height: var(--leading-listing);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The floor of the card: who sells it on the left, the one control on the right,
+   so three cards of unequal blurb length still line their buttons up. */
+.card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-top: auto;
+}
+
+/* The byline. The avatar carries the same hairline as the one on a product page,
+   because it is the same fact at a smaller size. */
+.card-by {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  /* The button's height (layout v2, 2026-08-31): the byline shares the card's
+     floor with the bordered View control, and two row-mates of equal height sit
+     on one line instead of one being centred against the other. It is also a
+     44px tap target for a link that was 24px tall. */
+  min-height: var(--tap);
+  /* The underline belongs to the handle, not to the avatar beside it. */
+  text-decoration: none;
+}
+
+.card-by img {
+  width: var(--space-5);
+  height: var(--space-5);
+  flex: none;
+  border: var(--rule-width) solid var(--rule);
+  border-radius: var(--radius);
+  background-color: var(--paper-sunk);
+  object-fit: cover;
+}
+
+.card-by span {
+  font-size: var(--size-listing);
+  line-height: var(--leading-listing);
+  color: var(--ink-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-decoration: underline;
+  text-decoration-color: var(--rule-control);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.18em;
+}
+
+.card-by:hover span {
+  color: var(--accent);
+  text-decoration-color: var(--accent);
+}
+
+/* The rail (founder, 2026-08-30). On a phone the cards stop stacking and run
+   sideways instead: each card takes 84% of the sheet so the next one is always
+   showing at the right edge, the row bleeds to the window's edges the way the
+   pitch band does, and scroll-snap squares each card up against the gutter. The
+   swipe is pure CSS; the arrows and the position line under it are the wrapper's
+   (app/_components/card-carousel.tsx). "Phone" is the device, not the window
+   (founder, 2026-08-30: mobile only, desktop as it was): the hover/pointer pair
+   names a touch screen, so a desktop window dragged narrow gets the stacked
+   grid it always had, never a swipe rail its mouse has no gesture for. */
+@media (max-width: 47.9375rem) and (hover: none) and (pointer: coarse) {
+  .card-rail .cards {
+    grid-template-columns: none;
+    grid-auto-flow: column;
+    grid-auto-columns: min(84%, 22rem);
+    overflow-x: auto;
+    margin-inline: calc(-1 * var(--gutter));
+    padding-inline: var(--gutter);
+    scroll-snap-type: x mandatory;
+    scroll-padding-inline: var(--gutter);
+    overscroll-behavior-x: contain;
+    /* The arrows, the peeking card and the count carry the affordance; a scrollbar
+       under a snap rail is a second, uglier statement of the same fact. */
+    scrollbar-width: none;
+  }
+
+  .card-rail .cards::-webkit-scrollbar {
+    display: none;
+  }
+
+  .card-rail .cards > li {
+    scroll-snap-align: start;
+  }
+}
+
+@media (max-width: 47.9375rem) and (hover: none) and (pointer: coarse) and (prefers-reduced-motion: no-preference) {
+  .card-rail .cards {
+    scroll-behavior: smooth;
+  }
+}
+
+/* The rail's controls: two square buttons in the standard control dress, and the
+   position printed between them in the computed face — a page number, because
+   that is what it is. Phone only; the desktop grid shows all three cards at once
+   and a pager over a grid would be a control with nothing to do. */
+.rail-nav {
+  display: none;
+}
+
+@media (max-width: 47.9375rem) and (hover: none) and (pointer: coarse) {
+  .rail-nav {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    margin-bottom: var(--space-4);
+  }
+}
+
+.rail-nav button {
+  width: var(--tap);
+  padding: 0;
+  flex: none;
+}
+
+.rail-count {
+  font-family: var(--font-mono);
+  font-size: var(--size-listing);
+  line-height: var(--leading-listing);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-muted);
+  min-width: 3.5ch;
+  text-align: center;
+}
+
+/* The product page ----------------------------------------------------------
+   GitHub's document with Gumroad's order block: the reference and its facts across
+   the top, the README as the body, the price in a hairline rectangle on the right
+   that follows the reader down.
+
+   Document order is head → box → body, which is also the phone's reading order, so
+   nobody scrolls a README to find out what something costs. The grid moves the box
+   into the second column at 60rem and up without moving it in the markup.
+*/
+
+main.listing {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0 var(--space-7);
+  align-items: start;
+}
+
+.listing-head {
+  grid-column: 1;
+  margin-bottom: var(--space-6);
+}
+
+/* `owner / slug`: the owner is context and recedes, the repository is the product
+   and carries the display size. One line, one link, no breadcrumb chevrons. */
+
+.listing-head h1 {
+  margin: 0 0 var(--space-3);
+  overflow-wrap: anywhere;
+}
+
+.listing-head .tagline {
+  font-size: var(--size-body);
+  margin-bottom: var(--space-2);
+}
+
+.listing-head .meta {
+  margin: var(--space-3) 0 0;
+  color: var(--ink-muted);
+}
+
+.listing-head .meta [data-status="pass"] {
+  color: var(--accent);
+}
+
+.listing-body {
+  grid-column: 1;
+  min-width: 0;
+}
+
+/* The first heading in the body starts level with the top of the box beside it. Every
+   other heading keeps the system's 48px of air above it. */
+
+.listing-body > section:first-child > h2 {
+  margin-top: 0;
+}
+
+/* "Already bought this?", between the contents and the README (2026-09-13, founder):
+   its own small frame, the same hairline rectangle as the sections around it but one
+   row tall. The question at the start and the small control at the end, centred on the
+   row, wrapping under the question on a column too narrow for both. */
+.listing-body > .already {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2) var(--space-3);
+  border: var(--rule-width) solid var(--rule);
+  padding: var(--space-3) var(--space-5);
+  margin-bottom: var(--space-5);
+}
+
+.listing-body > .already p {
+  margin: 0;
+  max-width: none;
+  font-size: var(--size-body-sm);
+}
+
+/* The buy box ---------------------------------------------------------------
+   The second and last bordered rectangle in this system (the first is the row of
+   three example cards on the home page). It is earned the same way: a thing that
+   has to read as one object separate from the document beside it. Hairline rule,
+   no ground, no shadow, no radius, and nothing inside it is boxed again.
+*/
+
+.buybox {
+  grid-column: 1;
+  grid-row: auto;
+  min-width: 0;
+  margin-bottom: var(--space-7);
+}
+
+.buybox .box,
+.payout-box .box {
+  border: var(--rule-width) solid var(--rule);
+  padding: var(--space-5);
+}
+
+/* The two costs, itemised. Labels in the text face on the left, amounts in mono on
+   the right, baseline-aligned — an invoice, not a paragraph. The download amount
+   keeps the display size the single price used to have. */
+.cost-lines {
+  /* Not the system's definition list: that one is a grid with a 14rem label
+     column, which would set these two rows side by side as four cells. */
+  display: block;
+  margin: 0 0 var(--space-2);
+  max-width: none;
+}
+
+.cost-lines .cost {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: var(--space-3);
+}
+
+.cost-lines dt {
+  /* An invoice line, not a spec label: the base dt's uppercase tracking comes off. */
+  font-family: var(--font-text);
+  font-size: var(--size-body-sm);
+  font-weight: var(--weight-regular);
+  letter-spacing: var(--tracking-normal);
+  text-transform: none;
+  line-height: var(--leading-body);
+  color: var(--ink-muted);
+}
+
+.cost-lines dd {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: var(--size-listing);
+  line-height: var(--leading-body);
+  font-variant-numeric: tabular-nums;
+}
+
+.cost-lines .download dd strong {
+  font-size: var(--size-display);
+  font-weight: var(--weight-medium);
+  line-height: var(--leading-display);
+  letter-spacing: var(--tracking-display);
+}
+
+/* A value the reader has to hand to something else: the two addresses on the listing
+   dashboard. (The x402 endpoint under the buy box wore this row until 2026-09-02; it is
+   a four-line prompt now and wears `.snippet` below.) The value sits on the sunken
+   paper the way every code value does, and Copy sits *inside* that field at its
+   trailing edge — the shape a reader has met on every site that hands over a token,
+   and one that stops a row of chrome from reading as a second button beside Save.
+   One implementation, because a copy row that behaves differently on two pages is two
+   components to learn.
+
+   The row is the positioning context; the field fills it. No `gap`, because there is
+   nothing beside the field any more. */
+.copyline {
+  position: relative;
+  display: flex;
+  align-items: stretch;
+  margin: 0 0 var(--space-4);
+  max-width: none;
+}
+
+.copyline code {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  /* Trailing padding clears the inset button, so a long value scrolls under the fade
+     and never sets underneath the word Copy. */
+  padding: var(--space-2) var(--space-3);
+  padding-right: 6rem;
+  font-size: var(--size-listing);
+  line-height: var(--leading-listing);
+}
+
+/* One line, fading out where it runs past the field — the same clip the README preview
+   wears, turned sideways. The mask sits on the text, not the element, so the sunken
+   ground keeps its edge. The copy button carries the whole URL, so an ellipsis would
+   only spend three characters saying what the fade already says. */
+.copyline code .url {
+  /* Fill the row so the fade sits at the field's edge: a URL short enough to fit
+     ends before the masked region and fades nothing. */
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(to right, currentColor calc(100% - 2.5rem), transparent);
+  mask-image: linear-gradient(to right, currentColor calc(100% - 2.5rem), transparent);
+}
+
+/* Inside the field, against its trailing edge. Transparent ground and no border: the
+   field is already a rectangle, and a rectangle inside a rectangle is the one shape
+   this system does not draw. The hairline on its leading edge is what separates it
+   from the value — the same 1px, the same grey, as every other rule here. */
+.copyline .copy,
+.snippet .copy {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  gap: var(--space-1);
+  min-height: 0;
+  padding: 0 var(--space-3);
+  font-size: var(--size-label);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  color: var(--ink-muted);
+  background-color: transparent;
+  border: 0;
+  border-left: var(--rule-width) solid var(--rule);
+}
+
+.copyline .copy:hover,
+.snippet .copy:hover {
+  color: var(--accent);
+  background-color: transparent;
+  border-color: var(--rule);
+}
+
+/* The mark drops to the label's size with it, so the pair stays one object. */
+.copyline .copy .icon,
+.snippet .copy .icon {
+  width: 0.875rem;
+  height: 0.875rem;
+}
+
+/* A notice wearing the copy row. Two things differ from an address, and both follow from
+   it being a sentence rather than a value: it wraps instead of clipping to one line, and
+   the button sits at the top right rather than filling the height, so on a three-line
+   message it stays where the eye enters the block. The trailing padding is the row's, so
+   a wrapped last line never runs under it. */
+
+.notice-line {
+  align-items: flex-start;
+}
+
+.notice-line code {
+  display: block;
+  padding-right: 6rem;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: var(--leading-body);
+}
+
+/* The message keeps its verdict ink; the row is only the ground it sits on. */
+.notice-line code [role] {
+  margin: 0;
+  font-family: inherit;
+  font-size: inherit;
+}
+
+.notice-line .copy {
+  top: 0;
+  bottom: auto;
+  padding-top: var(--space-2);
+  padding-bottom: var(--space-2);
+  border-left: 0;
+}
+
+/* The agents the prompt is written for, between the heading and the prompt
+   (2026-09-13). Eight marks in a row at the row height of the labels around them,
+   no chrome — a list of who can act, not a strip of badges. Each mark's name is a
+   tooltip drawn here, not by script: it appears on hover and on keyboard focus, sits
+   above the mark on the ink, and is in the server HTML. Ink on paper, hairline
+   corners, no shadow, no arrow — the same ground a `kbd` or a selection would use.
+   The 100ms fade is the system's one permitted state change. */
+.agent-logos {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin: 0 0 var(--space-3);
+  padding: 0;
+  max-width: none;
+}
+
+.agent-logos li {
+  display: flex;
+  margin: 0;
+  padding: 0;
+  max-width: none;
+}
+
+.agent-logo {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--row-height);
+  height: var(--row-height);
+  cursor: default;
+}
+
+.agent-logo img {
+  display: block;
+  width: 1.25rem;
+  height: 1.25rem;
+  object-fit: contain;
+}
+
+.agent-logo .tip {
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  margin-bottom: var(--space-1);
+  padding: var(--space-1) var(--space-2);
+  background: var(--ink);
+  color: var(--paper);
+  font-family: var(--font-mono);
+  font-size: var(--size-label);
+  line-height: var(--leading-label);
+  font-weight: var(--weight-medium);
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 100ms linear;
+  z-index: 1;
+}
+
+.agent-logo:hover .tip,
+.agent-logo:focus-visible .tip {
+  opacity: 1;
+}
+
+/* After mount each mark is a button that copies the prompt (agent-logos.tsx). It keeps
+   the image's box and draws no rectangle of its own — the tip is the affordance — and
+   on hover takes the sunk paper every other row here takes under the pointer. While
+   the tip reads "Copied" it stays up whether or not the pointer does. */
+button.agent-logo {
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  background-color: transparent;
+  cursor: pointer;
+}
+
+button.agent-logo:hover {
+  background-color: var(--paper-sunk);
+  border-color: transparent;
+}
+
+.agent-logo[data-copied] .tip {
+  opacity: 1;
+}
+
+/* The first mark sits at the column's edge; its tip would centre past it. Pin that
+   one to the mark's own leading edge instead. */
+.agent-logos li:first-child .agent-logo .tip {
+  left: 0;
+  transform: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-logo .tip {
+    transition: none;
+  }
+}
+
+/* The README preamble: several lines tall, so Copy belongs to the block's own corner
+   rather than to the section rule above it. The `pre` keeps its own padding; the
+   button is inset from the corner by the same hairline the field is drawn with, and
+   the top padding opens to clear it so a first line never sets under the word. */
+.snippet {
+  position: relative;
+  margin: 0 0 var(--space-4);
+}
+
+.snippet pre {
+  margin: 0;
+  padding-top: var(--space-6);
+}
+
+.snippet .copy {
+  top: var(--rule-width);
+  right: var(--rule-width);
+  bottom: auto;
+  padding: var(--space-2) var(--space-3);
+  border-left: 0;
+  border-bottom: var(--rule-width) solid var(--rule);
+}
+
+.buybox .updates {
+  font-size: var(--size-body-sm);
+  color: var(--ink-muted);
+  margin-bottom: var(--space-4);
+  max-width: none;
+}
+
+/* A heading inside the box is a label for a short list, not a section head. It is
+   set exactly like the `dt`s of the details list under the box — label size, tracked
+   caps, ash — so the box has two ranks (the price, then labels) rather than a third
+   heading size the rest of the page never uses. */
+
+.buybox h2,
+.payout-box h2 {
+  font-size: var(--size-label);
+  line-height: var(--leading-label);
+  font-weight: var(--weight-medium);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  color: var(--ink-muted);
+  border-bottom: 0;
+  padding-bottom: 0;
+  margin: var(--space-5) 0 var(--space-2);
+}
+
+.buybox .what {
+  list-style: none;
+  margin: 0 0 var(--space-4);
+  padding: 0;
+  font-size: var(--size-body-sm);
+  max-width: none;
+}
+
+.buybox .what li {
+  max-width: none;
+  margin: 0;
+  padding: var(--space-2) 0;
+  border-bottom: var(--rule-width) solid var(--rule);
+}
+
+.buybox .what li:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+
+/* Trust, in the buy column ---------------------------------------------------
+   14 Sep 2026, on the founder's direction. It replaced the one scan sentence that
+   used to sit here — a verdict, a date and a link — with the whole check list: seven
+   rows of mark and name, and one link to the report that says who ran each of them.
+   (The vendor was in these rows for an afternoon and moved into the report the same
+   day: "on the right side we can just keep the simplified view".)
+
+   The same grammar as the two blocks either side of it (What you get above,
+   Languages below): a hairline, the label-size heading, then rows at the listing's
+   own 30px pitch. It is not a box — the buy box is one of the two rectangles in
+   this system and nothing nests inside it (DESIGN.md) — and it is not a second
+   ledger either: the phrases, the inventory and the findings stay in the Trust
+   report in the body, which its last line links to.
+*/
+
+.buybox .trust-brief {
+  margin: var(--space-3) 0 0;
+  padding-top: var(--space-3);
+  border-top: var(--rule-width) solid var(--rule);
+}
+
+.buybox .trust-brief h2 {
+  margin-top: 0;
+}
+
+.trust-checks {
+  display: block;
+  margin: 0;
+  max-width: none;
+}
+
+/* Name on the left, the vendor at the tab stop on the right, the short phrase
+   between them when one fits. One line per row, always: a wrapped row costs the
+   column its mark column and the list stops reading as a list. */
+
+.trust-checks > div {
+  display: grid;
+  grid-template-columns: minmax(0, auto) minmax(0, 1fr);
+  align-items: baseline;
+  gap: 0 var(--space-2);
+  padding: var(--space-1) 0;
+  border-bottom: var(--rule-width) solid var(--rule);
+  font-family: var(--font-mono);
+  font-size: var(--size-listing);
+  line-height: var(--leading-listing);
+  color: var(--ink-muted);
+}
+
+.trust-checks > div:last-child {
+  border-bottom: 0;
+}
+
+.trust-checks dt {
+  color: var(--ink);
+  white-space: nowrap;
+}
+
+/* A check with no report row behind it: the name drops to the ash and the mark is
+   already the pending grey. Nothing fades past Ash — The AA Floor Rule — so "not
+   run" is said by weight of colour at the floor, and in words in `.sr-only`. */
+
+.trust-checks > div[data-ran="no"] dt {
+  color: var(--ink-muted);
+}
+
+.trust-checks dd {
+  display: flex;
+  align-items: baseline;
+  justify-content: flex-end;
+  gap: 0 var(--space-3);
+  margin: 0;
+  min-width: 0;
+}
+
+.trust-checks .short {
+  font-size: var(--size-label);
+  line-height: var(--leading-listing);
+  white-space: nowrap;
+}
+
+/* One character wide and never wider, the same as the report's column below. */
+
+.trust-checks .mark {
+  display: inline-block;
+  width: 1.25ch;
+  margin-right: var(--space-2);
+  text-align: center;
+}
+
+.trust-checks > div[data-status="pass"] .mark {
+  color: var(--accent);
+}
+
+.trust-checks > div[data-status="warn"] .mark {
+  color: var(--status-warn);
+}
+
+.trust-checks > div[data-status="fail"] .mark {
+  color: var(--status-fail);
+}
+
+.trust-checks > div[data-status="pending"] .mark {
+  color: var(--ink-muted);
+}
+
+/* The stamp and the way in, under the rows: both dates, then one link. */
+
+/* The stamp is a two-line log: the date at the left margin, what happened on it
+   beside (founder, 14 Sep 2026 — "start with the date so it looks more unified,
+   like a log"). The date column is 10ch, which is exactly an ISO day, so the two
+   events line up under each other the way the rows above them do. */
+
+.buybox .trust-brief-stamp {
+  display: block;
+  margin: var(--space-3) 0 0;
+  font-size: var(--size-label);
+  color: var(--ink-muted);
+}
+
+.buybox .trust-brief-stamp > div {
+  display: flex;
+  gap: 0 var(--space-2);
+}
+
+/* A date is a date, not a column header: the `dt` here keeps the size of the label
+   face and drops its tracking and its caps, which belong to a word. */
+
+.buybox .trust-brief-stamp dt {
+  min-width: 10ch;
+  letter-spacing: normal;
+  text-transform: none;
+  font-weight: var(--weight-regular);
+  font-variant-numeric: tabular-nums;
+}
+
+.buybox .trust-brief-stamp dd {
+  margin: 0;
+  font-size: var(--size-label);
+  line-height: var(--leading-listing);
+}
+
+.buybox .trust-brief-more {
+  margin: var(--space-2) 0 0;
+  max-width: none;
+  font-size: var(--size-body-sm);
+}
+
+/* The details list under the box: size, files, languages, licence, last release,
+   creator. Two narrow columns, not the page's 14rem key column. */
+
+.buybox .details {
+  grid-template-columns: minmax(0, 7rem) minmax(0, 1fr);
+  gap: var(--space-1) var(--space-4);
+  margin: var(--space-5) 0 0;
+  padding-top: var(--space-4);
+}
+
+/* The creator ---------------------------------------------------------------
+   Who is selling this, directly under the headline. Rewritten 2026-08-30 on the
+   founder's direction to take Gumroad's product page as the shape: on a page where a
+   stranger decides to send $9 to another stranger, the identity is part of the
+   headline, not a footnote beside the order block.
+
+   There is exactly one of these blocks per page. The sidebar version was removed
+   rather than kept alongside it — an avatar in two places is one fact in two places,
+   which "Don't print the same fact twice in one viewport" forbids.
+
+   Not a bordered card. The buy box is one of exactly two rectangles in this system
+   and a second one under a headline would be the component library this world was
+   built to refuse; the avatar's own hairline is the only rule in the block.
+*/
+
+.creator-strip {
+  margin: 0 0 var(--space-4);
+}
+
+.creator-strip p {
+  max-width: none;
+  margin: 0 0 var(--space-2);
+}
+
+.creator-strip > :last-child {
+  margin-bottom: 0;
+}
+
+.creator-id {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.creator-id img {
+  width: var(--space-6);
+  height: var(--space-6);
+  flex: none;
+  border: var(--rule-width) solid var(--rule);
+  border-radius: var(--radius);
+  background-color: var(--paper-sunk);
+  object-fit: cover;
+}
+
+.creator-id a {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 var(--space-2);
+  min-width: 0;
+}
+
+.creator-id .name {
+  font-size: var(--size-body);
+  font-weight: var(--weight-medium);
+}
+
+.creator-id .login {
+  font-size: var(--size-listing);
+  color: var(--ink-muted);
+}
+
+.creator-strip .bio {
+  font-size: var(--size-body-sm);
+  max-width: var(--measure);
+}
+
+/* The counts. Ash, mono, tabular — they are measurements, two of them somebody
+   else's. The star mark sits on the text baseline beside its number and is never
+   the only carrier of the meaning: the word is in the markup for a screen reader. */
+
+.creator-strip .creator-facts,
+.creator-strip .creator-links {
+  color: var(--ink-muted);
+  overflow-wrap: anywhere;
+}
+
+.creator-strip .stat {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+/* The author page -----------------------------------------------------------
+   One creator's shelf: the handle, the same creator block the product page carries,
+   and the same cards the home page carries. No filter, no sort, no "see all" — the
+   moment this acquires one it has become a catalogue.
+*/
+
+.author-head {
+  padding-bottom: var(--space-4);
+  border-bottom: var(--rule-width) solid var(--rule);
+  margin-bottom: var(--space-6);
+}
+
+.author-head h1 {
+  margin: 0 0 var(--space-4);
+  overflow-wrap: anywhere;
+}
+
+.author-head .meta {
+  margin: 0;
+  color: var(--ink-muted);
+}
+
+.author .cards {
+  margin-bottom: 0;
+}
+
+/* Icons ---------------------------------------------------------------------
+   One 16px grid, one 1.25px stroke, currentColor, square caps. Never the only
+   carrier of a meaning: every icon on the site sits beside the word it illustrates
+   and is aria-hidden. See app/_components/icons.tsx.
+*/
+
+.icon {
+  flex: none;
+  display: inline-block;
+  vertical-align: -0.15em;
+}
+
+/* How many wallets own this, in the box (FR-40, amended 2026-08-30). Exact from the
+   first purchase, never a buyer address, and never a zero — before the first sale
+   the line is an invitation instead. */
+
+.buybox .owners {
+  color: var(--ink-muted);
+  margin: var(--space-3) 0 0;
+  padding-top: var(--space-3);
+  border-top: var(--rule-width) solid var(--rule);
+  max-width: none;
+}
+
+/* The language mix under the releases: a label, the bar, the legend. */
+
+.buybox .mix {
+  margin: var(--space-3) 0 0;
+  padding-top: var(--space-3);
+  border-top: var(--rule-width) solid var(--rule);
+}
+
+.buybox .mix h2 {
+  margin-top: 0;
+}
+
+.buybox .mix .languages {
+  margin: 0;
+}
+
+/* The pinned price bar ------------------------------------------------------
+   Gumroad's, on a phone. It exists only while the buy box is off screen, which is
+   what keeps The One Order Line Rule true per viewport rather than only per page —
+   the accent ground is never on screen twice. Behaviour, so it needs script and is
+   absent without it; nothing in it is content that is not already in the box.
+*/
+
+.buybar {
+  display: none;
+  position: fixed;
+  inset: auto 0 0 0;
+  z-index: 10;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-3) var(--gutter);
+  padding-bottom: calc(var(--space-3) + env(safe-area-inset-bottom, 0px));
+  background-color: var(--paper);
+  border-top: var(--rule-width) solid var(--rule-strong);
+}
+
+.buybar .price {
+  margin: 0;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  line-height: var(--leading-listing);
+}
+
+.buybar .price strong {
+  display: block;
+  font-size: var(--size-headline);
+  font-weight: var(--weight-medium);
+}
+
+.buybar .price .updates {
+  display: block;
+  font-size: var(--size-label);
+  color: var(--ink-muted);
+}
+
+.buybar a[data-button="primary"] {
+  flex: none;
+  min-height: var(--tap);
+  display: inline-flex;
+  align-items: center;
+  padding: var(--space-2) var(--space-5);
+  background-color: var(--accent);
+  border: var(--rule-width) solid var(--accent);
+  color: var(--paper);
+  font-family: var(--font-mono);
+  font-size: var(--size-listing);
+  text-decoration: none;
+}
+
+.buybar a[data-button="primary"]:hover {
+  background-color: var(--accent-deep);
+  border-color: var(--accent-deep);
+  color: var(--paper);
+}
+
+/* Shown only below the two-column breakpoint, only with script, and only once the
+   box has left the screen. Above 60rem the box is sticky and never leaves. */
+
+@media (max-width: 59.999rem) {
+  [data-js="on"] .buybar[data-visible] {
+    display: flex;
+  }
+
+  /* The bar must never cover the last line of the document. */
+  [data-js="on"] body > footer {
+    padding-bottom: calc(var(--space-9) + env(safe-area-inset-bottom, 0px));
+  }
+}
+
+/* About ---------------------------------------------------------------------
+   What the repository says about itself: its own description, its official website,
+   its topics, and when it was last touched. Added 2026-08-30 on the founder's
+   direction. Prose in the text face, measured facts in mono — the same boundary the
+   rest of the page keeps, because none of this is a computed signal.
+*/
+
+.about .site {
+  margin-bottom: var(--space-3);
+  overflow-wrap: anywhere;
+}
+
+.about .about-facts {
+  color: var(--ink-muted);
+  margin-bottom: var(--space-3);
+  overflow-wrap: anywhere;
+}
+
+.about .provenance {
+  margin-bottom: 0;
+}
+
+/* Topics — GitHub's own word for them. A hairline rectangle at the label size, no
+   ground and no colour: a topic is a name the creator typed, not a category this
+   product recognises, and a filled chip would imply a taxonomy that does not exist. */
+
+.topics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  list-style: none;
+  margin: 0 0 var(--space-4);
+  padding: 0;
+}
+
+.topics li {
+  max-width: none;
+  margin: 0;
+  padding: 0 var(--space-2);
+  font-family: var(--font-mono);
+  font-size: var(--size-label);
+  line-height: calc(var(--space-5) - var(--rule-width) * 2);
+  color: var(--ink-muted);
+  border: var(--rule-width) solid var(--rule);
+  border-radius: var(--radius);
+}
+
+/* The README, and the release line -----------------------------------------
+   The README was the whole page until 2026-08-30, with the price two thousand words
+   below it. It is not hidden now, it is *previewed*: the first screenful renders,
+   clipped, dissolving into the paper, over one control that opens the rest. The
+   opening paragraphs of a README are the best writing on this page — the creator
+   wrote them for a reader — so putting them behind a click cost more than it saved.
+
+   The bytes never moved. The whole document is in the server HTML, unclipped, which
+   is what `npm run check:ssr` proves and what an agent's `curl` receives. Only the
+   clip and the control need script; with script off the README is simply long.
+
+   The fade is a `mask-image`, not a painted gradient: only the alpha channel of that
+   gradient is used, the colour is `currentColor` and is never drawn, and no new value
+   enters the ink set. See DESIGN.md, The Flat Sheet Rule, which this is an amendment
+   to rather than a hole in.
+*/
+
+.readme .readme-body {
+  max-width: var(--measure);
+}
+
+.readme .readme-body :is(pre, table) {
+  max-width: 100%;
+}
+
+.readme .readme-body img {
+  max-width: 100%;
+  height: auto;
+}
+
+.readme .readme-body > :first-child {
+  margin-top: 0;
+}
+
+/* No script, no clip and no control: the fallback is the document itself. */
+
+.readme-more {
+  display: none;
+  margin: var(--space-4) 0 0;
+}
+
+[data-js="on"] .readme-more {
+  display: block;
+}
+
+[data-js="on"] .readme-body[data-readme-clip] {
+  max-height: min(26rem, 55vh);
+  overflow: hidden;
+  /* Two lines of fade, not four: a longer dissolve left a band of ghosted text above
+     the control that read as a rendering fault rather than a fold. */
+  -webkit-mask-image: linear-gradient(to bottom, currentColor calc(100% - var(--space-6)), transparent 100%);
+  mask-image: linear-gradient(to bottom, currentColor calc(100% - var(--space-6)), transparent 100%);
+}
+
+/* The release log, folded. The summary carries the newest version and its date, so a
+   reader who never opens it still knows when this last shipped. */
+
+/* Disclosures ---------------------------------------------------------------
+   `What's inside`, `Full file list`, `Dependencies`, `earlier releases`. A summary
+   is a row with a rule under it and a marker drawn as generated content, so the
+   affordance is the same shape in every browser and never a wingding.
+*/
+
+details > summary {
+  font-family: var(--font-mono);
+  font-size: var(--size-listing);
+  line-height: var(--leading-listing);
+  padding: var(--space-3) 0;
+  border-bottom: var(--rule-width) solid var(--rule);
+  cursor: pointer;
+  list-style: none;
+  min-height: var(--tap);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0 var(--space-2);
+  transition: color var(--transition);
+}
+
+/* The label never breaks; the answer beside it wraps to its own line on a phone.
+   Without this the anonymous text item shrinks and "What's inside" sets as two words
+   stacked in a 44px row. */
+
+details > summary .label {
+  flex: none;
+}
+
+details > summary::-webkit-details-marker {
+  display: none;
+}
+
+details > summary::before {
+  content: "+" / "";
+  color: var(--ink-muted);
+  font-family: var(--font-mono);
+  width: 1ch;
+  flex: none;
+}
+
+details[open] > summary::before {
+  content: "\2212" / ""; /* a real minus, not a hyphen */
+}
+
+details > summary:hover {
+  color: var(--accent);
+}
+
+details > summary .computed {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--ink-muted);
+  font-size: var(--size-label);
+  overflow-wrap: anywhere;
+}
+
+details > :not(summary) {
+  margin-top: var(--space-4);
+}
+
+/* Language mix --------------------------------------------------------------
+   GitHub's bar, in this system's inks. There is one accent and it belongs to the
+   paid action, so the segments are the ink ramp — largest share first — and the
+   legend names every one of them with its percentage. Colour is never the only
+   carrier: the bar is aria-hidden and the legend is the accessible reading.
+*/
+
+.languages {
+  margin-bottom: var(--space-5);
+}
+
+.languages .bar {
+  display: flex;
+  height: var(--space-2);
+  border: var(--rule-width) solid var(--rule);
+  overflow: hidden;
+}
+
+.languages .bar span,
+.languages .swatch {
+  display: block;
+}
+
+[data-rank="0"] {
+  background-color: var(--ink);
+}
+
+[data-rank="1"] {
+  background-color: var(--ink-muted);
+}
+
+[data-rank="2"] {
+  background-color: var(--rule-strong);
+}
+
+[data-rank="3"] {
+  background-color: var(--rule);
+}
+
+.languages .legend {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-4);
+  margin: var(--space-2) 0 0;
+  padding: 0;
+  font-size: var(--size-label);
+  color: var(--ink-muted);
+}
+
+.languages .legend li {
+  max-width: none;
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.languages .swatch {
+  width: var(--space-2);
+  height: var(--space-2);
+  border: var(--rule-width) solid var(--rule);
+  flex: none;
+}
+
+/* Two columns ---------------------------------------------------------------
+   At 60rem the box moves to a 22rem right column and sticks, so the price and the
+   action stay in view down a long page. `align-self: start` is what makes
+   `position: sticky` work inside a grid item. The top offset clears nothing on
+   purpose: the site header is sticky too (2026-08-30) but hides itself once
+   scrolling pauses, so the box is only ever under it for the moment of a scroll.
+
+   Amended 2026-08-30 on the founder's direction that "the buy box should be way
+   further up". The box now starts at the *top* of that column — row 1, level with
+   the title — rather than under a header that ran the full width. The header
+   therefore occupies column 1 only, so its closing rule is the width of the reading
+   column rather than of the sheet. Document order is unchanged: head, box, body,
+   which is also the phone's stacking order, so no reader and no `curl` sees a price
+   before the version, the licence and the scan verdict.
+*/
+
+@media (min-width: 60rem) {
+  main.listing {
+    grid-template-columns: minmax(0, 1fr) 22rem;
+  }
+
+  .listing-head {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  .listing-body {
+    grid-column: 1;
+    grid-row: 2;
+  }
+
+  .buybox {
+    /* Level with the top of the body's first frame, not with the title (2026-08-30,
+       founder): the two rectangles start on one line. */
+    grid-column: 2;
+    grid-row: 2;
+    position: sticky;
+    top: var(--space-5);
+    align-self: start;
+    margin-bottom: 0;
+  }
+}
+
+/* One column ----------------------------------------------------------------
+   Below 44rem the whole page is a phone, and the founder's rule is that the price
+   is reachable without a scroll. Nothing is removed to get there — the version, the
+   licence, the scan verdict and the artifact class are still above the price, per
+   Never bill blind — so the space comes out of padding, one step at a time, and out
+   of a key/value list that had no reason to stack in the first place.
+*/
+
+@media (max-width: 44rem) {
+  body > main {
+    padding-block: var(--space-5) var(--space-8);
+  }
+
+  .listing-head {
+    padding-bottom: var(--space-3);
+    margin-bottom: var(--space-5);
+  }
+
+  .listing-head h1 {
+    margin-bottom: var(--space-2);
+  }
+
+  .buybox .box,
+  .payout-box .box {
+    padding: var(--space-4);
+  }
+
+  .buybox .updates {
+    margin-bottom: var(--space-3);
+  }
+
+  /* A 7rem key column fits a 390px screen with room for "JavaScript 100%", so this
+     list keeps its two columns where the page's other <dl>s stack. Five stacked
+     pairs is 230px of sidebar between the buy button and the README. */
+
+  .buybox .details {
+    grid-template-columns: minmax(0, 6.5rem) minmax(0, 1fr);
+    gap: var(--space-1) var(--space-3);
+  }
+
+  .buybox .details dd {
+    margin-bottom: 0;
+  }
+}
+
+/* A sticky box is a trap on a short viewport — it can be taller than the space it
+   is stuck in, and then its own bottom is unreachable. Below that height it scrolls
+   with the page like everything else. */
+
+@media (min-width: 60rem) and (max-height: 44rem) {
+  .buybox {
+    position: static;
+  }
+}
+
+/* What's inside — three views under tabs ---------------------------------
+   Rebuilt 2026-08-30, twice. First the folders became a list of sentences beside the
+   file table; then the founder asked for the file table's own economy everywhere:
+   "as concise as the full file list is, that's how the folders should look as well".
+   So the section is one heading, one line of counts, a tab row, and a table per view
+   — folders, files, dependencies — every one at the listing's 30px pitch.
+
+   No rule under the heading and none above the section: the tab row's rule is the
+   one line, and the checked tab is a 2px ink bar sitting on it. The tabs are radio
+   inputs; the panel switch is `:has()`, and a browser without it shows every panel
+   in order, which is also what `curl` gets.
+*/
+
+/* The two body sections sit in hairline rectangles (2026-08-30, founder: GitHub's
+   README frame, "along with what's inside"). Rule, no ground, no radius, no shadow
+   — the same rectangle the buy box is, and DESIGN.md's rule-of-two is amended to
+   say so. */
+
+.listing-body > .inside,
+.listing-body > .readme,
+.listing-body > .releases,
+.listing-body > .trust-report {
+  border: var(--rule-width) solid var(--rule);
+  padding: var(--space-5);
+  margin-bottom: var(--space-5);
+}
+
+.listing-body > :is(.readme, .releases, .trust-report) > h2 {
+  margin-top: 0;
+}
+
+/* The trust report ------------------------------------------------------------
+   "PRD Trust Report.md" §5, 13 Sep 2026. What the scan checked, what it found, and
+   what the artifact can do — the block that puts something behind the badge.
+
+   It is a ledger, so it is set like one: the mono face, a hairline under every row,
+   a fixed key column, and the values in the ash. **The only colour in it is the tick
+   column.** Seven rows of green words would be a wall of reassurance, which is the
+   thing this section exists to replace; one mark per row carries the verdict and the
+   words carry what it means. The mark is `aria-hidden` — a screen reader gets the
+   check's name and its phrase, which is the whole sentence, and never a glyph.
+
+   No icons, no bars, no score. The three status inks are already the page's, and
+   nothing here introduces a fourth.
+*/
+
+.trust-report > h3 {
+  margin: var(--space-5) 0 var(--space-3);
+}
+
+/* The section's own verdict, under the heading: who scanned this and how each of
+   them came out (14 Sep 2026, founder). One sentence in the text face, because it
+   is a claim made in English rather than a measurement — the same treatment §4.3's
+   empty-inventory sentence already gets — and it is the one line in the section a
+   reader is meant to read rather than scan. */
+
+.trust-verdict {
+  margin: 0 0 var(--space-2);
+  max-width: var(--measure);
+}
+
+.check-rows,
+.capability-rows {
+  display: block;
+  margin: 0;
+  max-width: none;
+}
+
+.check-rows > div,
+.capability-rows > div {
+  display: grid;
+  grid-template-columns: minmax(0, 12rem) minmax(0, 1fr);
+  gap: 0 var(--space-4);
+  padding: var(--space-2) 0;
+  border-bottom: var(--rule-width) solid var(--rule);
+  color: var(--ink-muted);
+  font-family: var(--font-mono);
+  font-size: var(--size-listing);
+  line-height: var(--leading-listing);
+}
+
+/* A third column on the check rows: which source produced the row (14 Sep 2026,
+   founder — "next to each one it should be who, what was detected, or which source
+   detected this"). It is 8rem at the right margin, so the vendors read down as a
+   column of their own beside the phrases rather than trailing off the end of them. */
+
+.check-rows > div {
+  grid-template-columns: minmax(0, 12rem) minmax(0, 1fr) minmax(0, 8rem);
+}
+
+.check-rows .by {
+  text-align: right;
+  font-size: var(--size-label);
+  white-space: nowrap;
+}
+
+.check-rows > div:last-child,
+.capability-rows > div:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+
+.check-rows dt,
+.capability-rows dt {
+  color: var(--ink);
+}
+
+.check-rows dd,
+.capability-rows dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* One item per line in "What this can do" (14 Sep 2026, founder: "so it's cleaner on
+   the eye"). Nine hostnames joined by dots is a paragraph a reader has to read all of
+   to find one domain; nine lines is a list they can scan. No bullet and no indent —
+   the `dt` beside it is the only marker the row needs, and a disc would be the first
+   list marker in this system. */
+
+.capability-values {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-width: none;
+}
+
+/* A hanging indent of one character, so a path long enough to wrap is still one
+   item: without it the second line of `.github/workflows/audit.yml (push, …)` starts
+   at the same x as the next path and the list stops being countable. */
+
+.capability-values > li {
+  max-width: none;
+  margin: 0;
+  padding-left: 1ch;
+  text-indent: -1ch;
+}
+
+/* One character wide and never wider: the label column has to start at the same x on
+   every row or the marks stop reading as a column. */
+.check-rows .mark {
+  display: inline-block;
+  width: 1.25ch;
+  margin-right: var(--space-2);
+  text-align: center;
+}
+
+.check-rows > div[data-status="pass"] .mark {
+  color: var(--accent);
+}
+
+.check-rows > div[data-status="warn"] .mark {
+  color: var(--status-warn);
+}
+
+.check-rows > div[data-status="fail"] .mark {
+  color: var(--status-fail);
+}
+
+.check-rows > div[data-status="pending"] .mark {
+  color: var(--ink-muted);
+}
+
+/* The report, clipped the way the README is (14 Sep 2026, founder: "can the trust
+   report have a Read more just like the README does"). Same attribute, same control,
+   same inline script — readme-more.tsx — so there is one clip in this product and
+   not two that drift.
+
+   **This is the one place a second preview height exists**, and it is deliberate
+   (14 Sep 2026, founder: the report "shows quite a lot"). It was the README's own
+   `min(26rem, 55vh)` for an afternoon, which put all seven check rows above the fold
+   and made the fold pointless — the whole ledger showed and the control revealed a
+   footnote. 11rem is measured, not picked: the rows on the longest report we hold
+   (`pcmarts/acl-recovery-tracker`) close at 39, 78, 117 and **178px**, so 176px ends
+   two pixels short of the fourth row's own rule rather than through the middle of a
+   line, and the 32px fade dissolves the fourth row's text into the paper above it.
+   Three rows crisp, the fourth fading, everything else folded — and the verdict and
+   the stamp are outside the clip, so the section's answer is never what is folded.
+
+   Below 40rem the rows stack and every row is taller, so the same clip shows two of
+   them. That is the right answer there rather than a third height: on a phone the
+   aside is above the body, so a reader has already passed all seven marks in the
+   Trust block by the time they reach this section, and what they came down here for
+   is the detail under them.
+
+   The verdict and the stamp are outside the clipped block, so the section's answer is
+   never the thing you have to open the section to read. */
+
+[data-js="on"] .trust-body[data-readme-clip] {
+  max-height: min(11rem, 40vh);
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(to bottom, currentColor calc(100% - var(--space-6)), transparent 100%);
+  mask-image: linear-gradient(to bottom, currentColor calc(100% - var(--space-6)), transparent 100%);
+}
+
+/* The control sits where the README's does — under the block, left, at a section's
+   distance from it rather than a paragraph's, because the fade ends on a rule. */
+
+.trust-report .readme-more {
+  margin-top: var(--space-4);
+}
+
+/* Findings, folded. The severity word leads the line and is the one place a finding
+   wears ink; the sentence after it is the creator's package and the advisory's own
+   description, in the text face because it is prose somebody else wrote. */
+
+.trust-report .findings {
+  margin-top: var(--space-5);
+}
+
+.trust-report .findings > ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-width: none;
+}
+
+.trust-report .findings > ul > li {
+  display: grid;
+  grid-template-columns: minmax(0, 9rem) minmax(0, 1fr);
+  gap: 0 var(--space-4);
+  max-width: none;
+  margin: 0;
+  padding: var(--space-3) 0;
+  border-bottom: var(--rule-width) solid var(--rule);
+}
+
+.trust-report .findings > ul > li:last-child {
+  border-bottom: 0;
+}
+
+.trust-report .findings .sev {
+  font-family: var(--font-mono);
+  font-size: var(--size-label);
+  letter-spacing: var(--tracking-label);
+  line-height: var(--leading-listing);
+  padding-top: 0.15em;
+}
+
+.trust-report .findings .written {
+  max-width: none;
+  font-size: var(--size-body-sm);
+}
+
+/* A phone has no room for a 12rem key column beside a phrase that runs to a line and
+   a half. The rows stack, the mark stays with its label, and the hairline still
+   separates one check from the next. */
+
+@media (max-width: 40rem) {
+  .check-rows > div,
+  .capability-rows > div,
+  .trust-report .findings > ul > li {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--space-1) 0;
+  }
+
+  /* Stacked, the source is the row's last line and reads as one — left with the
+     phrase above it, not hung off a right margin that no longer exists. */
+  .check-rows .by {
+    text-align: left;
+  }
+}
+
+/* Releases, under the README --------------------------------------------------
+   The count rides the heading in the ash; each release is a version, a date and its
+   note on a ruled line; the newest three show and the rest open above a Show more
+   set as the same control the README uses. The text face throughout, to match the
+   README (2026-08-30, founder).
+*/
+
+.releases h2 .count {
+  color: var(--ink-muted);
+  font-weight: var(--weight-regular);
+}
+
+.release-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-width: none;
+}
+
+/* The row owns the rule, the padding and the type; the grid sits on whatever element
+   actually holds the line — the `li` on a plain row, the `summary` on a foldable one — so
+   a release with notes long enough to fold draws exactly like one without. */
+
+.release-list .release {
+  margin: 0;
+  padding: var(--space-3) 0;
+  border-bottom: var(--rule-width) solid var(--rule);
+  max-width: none;
+  font-size: var(--size-body-sm);
+  line-height: var(--leading-body);
+}
+
+.release-list .release:not(.is-foldable),
+.release-list .release > details > summary {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 0 var(--space-3);
+}
+
+/* The whole line is the target, and the marker rides at its end rather than taking a row
+   of its own. `::before` is the shared `+` / `−`; `order` moves it past the two spans
+   without moving it in the document, so the accessible name is still "v1.2.0 30 Aug". */
+
+.release-list .release > details > summary {
+  cursor: pointer;
+  transition: color var(--transition);
+}
+
+.release-list .release > details > summary::before {
+  order: 3;
+  justify-self: end;
+  width: auto;
+}
+
+.release-list .release > details > summary:hover {
+  color: var(--accent);
+}
+
+.release-list .release > details > summary:hover .date {
+  color: inherit;
+}
+
+.release-list .version {
+  font-weight: var(--weight-medium);
+}
+
+.release-list .date {
+  color: var(--ink-muted);
+}
+
+.release-list .release:not(.is-foldable) > .note {
+  grid-column: 1 / -1;
+}
+
+.release-list .release > details > .note {
+  margin-top: var(--space-2);
+}
+
+/* Rendered release notes ------------------------------------------------------
+   A changelog is a GitHub release body, so it arrives with headings, lists, code and
+   links in it. It is rendered rather than printed since 2026-09-01, which means this
+   block has to give a creator's markup somewhere to live without letting it out-shout
+   the log it sits in: a release note's own headings are the size of the body text they
+   label, set in the medium weight, and every block inside the note is spaced by the note
+   rather than by the page. */
+
+.release-list .note > :first-child {
+  margin-top: 0;
+}
+
+.release-list .note > :last-child {
+  margin-bottom: 0;
+}
+
+.release-list .note :is(h3, h4, h5, h6) {
+  margin: var(--space-3) 0 var(--space-1);
+  padding: 0;
+  border: 0;
+  font-family: var(--font-text);
+  font-size: inherit;
+  font-weight: var(--weight-medium);
+  line-height: var(--leading-body);
+  letter-spacing: var(--tracking-normal);
+  text-transform: none;
+  color: var(--ink);
+}
+
+.release-list .note :is(p, ul, ol) {
+  margin: 0 0 var(--space-2);
+  max-width: none;
+}
+
+.release-list .note :is(ul, ol) {
+  padding-left: var(--space-5);
+}
+
+.release-list .note li {
+  margin: 0 0 var(--space-1);
+  max-width: none;
+}
+
+.release-list .note pre {
+  margin: var(--space-2) 0;
+  font-size: var(--size-body-sm);
+}
+
+/* The control is last in the markup so the rest open above it. It is a summary
+   dressed as the secondary button, with both labels in the HTML. */
+
+.releases .more > summary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: var(--space-4);
+  padding: var(--space-2) var(--space-4);
+  min-height: var(--tap);
+  border: var(--rule-width) solid var(--rule-control);
+  border-bottom-width: var(--rule-width);
+  font-weight: var(--weight-medium);
+  color: var(--ink);
+}
+
+.releases .more > summary::before {
+  content: none;
+}
+
+.releases .more > summary:hover {
+  color: var(--ink);
+  background-color: var(--paper-sunk);
+  border-color: var(--ink-muted);
+}
+
+.releases .more > summary:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.releases .more > .release-list {
+  margin-top: 0;
+}
+
+.releases .more .when-open,
+.releases .more[open] .when-closed {
+  display: none;
+}
+
+.releases .more[open] .when-open {
+  display: inline;
+}
+
+/* GitHub's book beside the README's word, never instead of it. */
+.listing-body > .readme > h2 .icon {
+  margin-right: var(--space-2);
+  vertical-align: -0.1em;
+}
+
+/* The size column is the same width on every tab, so switching Folders ↔ Files moves
+   nothing but the rows. */
+.inside table > :is(thead, tbody) > tr > .num:first-child {
+  width: 6rem;
+}
+
+.tab-row {
+  display: flex;
+  gap: var(--space-5);
+  border-bottom: var(--rule-width) solid var(--rule-strong);
+}
+
+.tab-row label {
+  position: relative;
+  display: block;
+  margin-bottom: calc(-1 * var(--rule-width));
+  padding: var(--space-2) 0;
+  border-bottom: 2px solid transparent;
+  font-family: var(--font-mono);
+  font-size: var(--size-listing);
+  line-height: var(--leading-listing);
+  /* The base label is a tracked-caps field key; a tab is a word. */
+  letter-spacing: var(--tracking-normal);
+  text-transform: none;
+  color: var(--ink-muted);
+  cursor: pointer;
+  transition: color var(--transition), border-color var(--transition);
+}
+
+.tab-row label:hover {
+  color: var(--ink);
+}
+
+/* The radio is the control; the label is its face. It stays in the tab order and
+   keeps its arrow keys, and the ring it earns is drawn on the label. */
+.tab-row input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  margin: 0;
+  cursor: pointer;
+}
+
+.tab-row label:has(input:checked) {
+  color: var(--ink);
+  border-bottom-color: var(--ink);
+}
+
+.tab-row label:has(input:focus-visible) {
+  box-shadow: var(--focus-ring);
+}
+
+.tabs .panel table {
+  margin-bottom: var(--space-3);
+}
+
+.tabs .panel > p {
+  margin-bottom: var(--space-3);
+}
+
+@supports selector(:has(*)) {
+  .tabs .panel {
+    display: none;
+  }
+
+  .tabs:has(input[value="folders"]:checked) .panel[data-tab="folders"],
+  .tabs:has(input[value="files"]:checked) .panel[data-tab="files"],
+  .tabs:has(input[value="dependencies"]:checked) .panel[data-tab="dependencies"] {
+    display: block;
+  }
+}
+
+/* The mark goes in the name cell, which is the one column that is not a number, and
+   the contents cell is the analyser's nouns beside their mark. Inline, not flex: a
+   flexed `td` leaves the table's layout and takes the row's other cells with it. */
+
+.inside td.path .icon,
+.inside td.note .icon {
+  vertical-align: -0.2em;
+  margin-right: var(--space-2);
+}
+
+.inside td.note {
+  color: var(--ink-muted);
+}
+
+/* The README's own markup ---------------------------------------------------
+   Added 2026-08-30 with FR-49's images, tables and task lists. A README written for
+   GitHub has to read here the way it reads there — which, until today, it did not:
+   a table came out as rows of raw pipes and an image came out as its own markup.
+
+   Everything here is scoped to `.readme-body`, because this is the one region on the
+   site rendering somebody else's markup and it must not be able to restyle ours.
+*/
+
+.readme-body img {
+  max-width: 100%;
+  height: auto;
+  border: var(--rule-width) solid var(--rule);
+  background-color: var(--paper-sunk);
+}
+
+/* A badge — the shields.io row nearly every README opens with — is a 20px image in a
+   line of prose, and a hairline around each one turns that row into a fence. */
+
+.readme-body p > a > img,
+.readme-body p > img {
+  vertical-align: middle;
+}
+
+.readme-body table {
+  width: auto;
+  max-width: 100%;
+  margin: var(--space-4) 0;
+  font-family: var(--font-mono);
+  font-size: var(--size-listing);
+  font-variant-numeric: tabular-nums;
+}
+
+.readme-body :is(th, td)[data-align="right"] {
+  text-align: right;
+}
+
+.readme-body :is(th, td)[data-align="center"] {
+  text-align: center;
+}
+
+/* Task lists. The box is drawn — a hairline square, filled in ink when the item is
+   done — rather than being a `<input type=checkbox>`, which the sanitiser drops
+   whole, or a Unicode glyph, which is somebody else's drawing at somebody else's
+   weight. The state is also a word in the markup, visually hidden, so a screen
+   reader and `curl` both get it.
+*/
+
+.readme-body li[data-task] {
+  list-style: none;
+  margin-left: calc(var(--space-5) * -1);
+  padding-left: var(--space-5);
+  position: relative;
+}
+
+.readme-body li[data-task]::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0.45em;
+  width: var(--space-3);
+  height: var(--space-3);
+  border: var(--rule-width) solid var(--rule-control);
+  border-radius: var(--radius);
+}
+
+.readme-body li[data-task="done"]::before {
+  background-color: var(--ink);
+  border-color: var(--ink);
+}
+
+.readme-body [data-task-state] {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+
+/* How it works ------------------------------------------------------------
+   Four shapes for /how-it-works, all of them the Long Listing read as prose: a
+   ruled row with the computed name in the left column and the human explanation
+   beside it. Nothing is boxed; rules and the column do the containing.
+*/
+
+/* The product as one sequence. Actor in the margin, event in the title face,
+   the explanation beside it. Above 48rem it is three columns on one rule; below,
+   the actor and the event share the first line and the note runs under them. */
+
+.flow {
+  list-style: none;
+  padding: 0;
+  margin: var(--space-5) 0 var(--space-6);
+}
+
+.flow > li {
+  max-width: none;
+  margin: 0;
+  padding: var(--space-4) 0;
+  border-bottom: var(--rule-width) solid var(--rule);
+  display: grid;
+  grid-template-columns: 6rem minmax(0, 1fr);
+  column-gap: var(--space-4);
+  row-gap: var(--space-1);
+  align-items: baseline;
+}
+
+.flow .who {
+  font-family: var(--font-mono);
+  font-size: var(--size-label);
+  font-weight: var(--weight-medium);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  color: var(--ink-muted);
+  line-height: var(--leading-body);
+}
+
+.flow b {
+  font-family: var(--font-mono);
+  font-size: var(--size-title);
+  font-weight: var(--weight-medium);
+  line-height: var(--leading-heading);
+}
+
+.flow p {
+  grid-column: 2;
+  margin: 0;
+  font-size: var(--size-body-sm);
+  color: var(--ink);
+}
+
+@media (min-width: 48rem) {
+  .flow > li {
+    grid-template-columns: 7rem 14rem minmax(0, 1fr);
+    column-gap: var(--space-5);
+  }
+
+  .flow p {
+    grid-column: 3;
+    max-width: 52ch;
+  }
+}
+
+/* The x402 exchange: four turns, request and answer, in the computed face. It is
+   the one place on the page that looks like the wire, and it is still English. */
+
+.exchange {
+  grid-template-columns: 6rem minmax(0, 1fr);
+  gap: 0;
+  margin: var(--space-5) 0;
+  border-top: var(--rule-width) solid var(--rule-strong);
+  max-width: var(--measure);
+}
+
+.exchange > div {
+  display: grid;
+  grid-template-columns: subgrid;
+  grid-column: 1 / -1;
+  align-items: baseline;
+  min-height: var(--row-height);
+  padding: var(--space-2) 0;
+  border-bottom: var(--rule-width) solid var(--rule);
+}
+
+.exchange dt {
+  line-height: var(--leading-body);
+}
+
+.exchange dd {
+  overflow-wrap: anywhere;
+}
+
+/* The answer is the server's line; it steps down one onto the sunk sheet so the two
+   voices read as two voices without a second colour. */
+.exchange > div[data-turn="answer"] {
+  background-color: var(--paper-sunk);
+  padding-inline: var(--space-3);
+  margin-inline: calc(-1 * var(--space-3));
+}
+
+/* The two protocol figures — the wire sequence and the split of a payment. The SVGs
+   are generated from validated archify specs (scripts/diagrams-to-tsx.mjs) and arrive
+   classed rather than coloured; these rules dress them in the ink set so a drawing
+   reads as the same printed sheet as the tables around it. Everything in them is
+   computed truth, so all of it is set in the mono face. */
+
+.protocol {
+  margin: var(--space-5) 0 var(--space-6);
+}
+
+/* The one thing on this page allowed to scroll sideways besides the comparison:
+   below tablet width the drawing keeps its legible size and the sheet pans. */
+.protocol-scroll {
+  overflow-x: auto;
+}
+
+.protocol svg {
+  display: block;
+  width: 100%;
+  min-width: 56rem;
+  height: auto;
+  font-family: var(--font-mono);
+}
+
+.protocol figcaption {
+  margin-top: var(--space-3);
+  max-width: var(--measure);
+  font-size: var(--size-body-sm);
+  line-height: var(--leading-body);
+  color: var(--ink-muted);
+}
+
+/* Structure: no grid behind a printed figure; lanes and stage columns are hairline
+   and dashed, the way a form rules off a region it does not fill. */
+.protocol .c-grid {
+  display: none;
+}
+
+.protocol .c-mask {
+  fill: var(--paper);
+  stroke: none;
+}
+
+.protocol .c-lane {
+  fill: none;
+  stroke: var(--rule);
+  stroke-dasharray: 4 4;
+}
+
+/* Every box is the same box: sunk sheet in a hairline-strong rectangle. The archify
+   component taxonomy (backend, cloud, database…) is real semantics for its viewer,
+   but on this sheet provenance is carried by the faces, not by seven hues. */
+.protocol .c-frontend,
+.protocol .c-backend,
+.protocol .c-database,
+.protocol .c-cloud,
+.protocol .c-security,
+.protocol .c-messagebus,
+.protocol .c-external {
+  fill: var(--paper-sunk);
+  stroke: var(--rule-strong);
+}
+
+.protocol .t-primary {
+  fill: var(--ink);
+}
+
+/* Ash is the floor: archify's "dim" tier would drop below AA, so it lands on Ash too. */
+.protocol .t-muted,
+.protocol .t-dim,
+.protocol .t-security,
+.protocol .t-database,
+.protocol .t-messagebus,
+.protocol .t-external,
+.protocol .t-frontend,
+.protocol .t-cloud {
+  fill: var(--ink-muted);
+}
+
+/* The paid path is the one thing in accent — arrow, head, and its wire line — the
+   same green that grounds the order line, because it is the same money. */
+.protocol .t-backend {
+  fill: var(--accent);
+}
+
+.protocol .a-emphasis {
+  stroke: var(--accent);
+  fill: none;
+}
+
+.protocol .m-emphasis {
+  fill: var(--accent);
+}
+
+.protocol .a-default {
+  stroke: var(--rule-control);
+  fill: none;
+}
+
+.protocol .m-default {
+  fill: var(--rule-control);
+}
+
+/* "Security" here is the screening step, not a verdict, so it wears ink — dashed,
+   like the check it is — and never the red that belongs to a failed scan. */
+.protocol .a-security {
+  stroke: var(--ink);
+  stroke-dasharray: 5 5;
+  fill: none;
+}
+
+.protocol .m-security {
+  fill: var(--ink);
+}
+
+.protocol .a-dashed {
+  stroke: var(--ink-muted);
+  stroke-dasharray: 4 4;
+  fill: none;
+}
+
+.protocol .m-dashed {
+  fill: var(--ink-muted);
+}
+
+/* The little component sigils, one stroke, ash. */
+.protocol .semantic-sigil {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.35;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: 0.76;
+  pointer-events: none;
+}
+
+.protocol .semantic-sigil .sigil-fill {
+  fill: currentColor;
+  stroke: none;
+}
+
+.protocol .s-frontend,
+.protocol .s-backend,
+.protocol .s-database,
+.protocol .s-cloud,
+.protocol .s-security,
+.protocol .s-messagebus,
+.protocol .s-external {
+  color: var(--ink-muted);
+}
+
+/* Sell · Buy · Fees. The step's name in the title face beside its explanation:
+   a definition list wearing the Long Listing's rules, so the page scans down one
+   column of names before it is read. */
+
+.how {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0;
+  margin: var(--space-4) 0 var(--space-6);
+}
+
+/* The section's h2 already drew the rule-strong line above the first row; a second
+   one three lines under it would be the same job twice. */
+.how > div {
+  padding: var(--space-4) 0;
+  border-bottom: var(--rule-width) solid var(--rule);
+}
+
+.how dt {
+  font-size: var(--size-title);
+  font-weight: var(--weight-medium);
+  letter-spacing: var(--tracking-normal);
+  text-transform: none;
+  color: var(--ink);
+  line-height: var(--leading-heading);
+  margin-bottom: var(--space-2);
+}
+
+.how dd.written {
+  font-family: var(--font-text);
+  font-size: var(--size-body);
+  line-height: var(--leading-body);
+  font-variant-numeric: normal;
+  max-width: var(--measure);
+}
+
+@media (min-width: 48rem) {
+  .how > div {
+    display: grid;
+    grid-template-columns: 14rem minmax(0, 1fr);
+    column-gap: var(--space-5);
+    align-items: baseline;
+  }
+
+  .how dt {
+    margin-bottom: 0;
+  }
+}
+
+/* Questions. The product page's disclosure, with the question in the text face
+   because a person wrote it and a person is reading it; the marker and the rule
+   are unchanged so it is recognisably the same control. */
+
+.faq h3 {
+  margin-top: var(--space-6);
+  margin-bottom: 0;
+}
+
+.faq-group {
+  border-top: var(--rule-width) solid var(--rule-strong);
+  margin-bottom: var(--space-2);
+}
+
+.faq h2 + .faq-group {
+  border-top: 0;
+}
+
+/* The closing action: a section's worth of air above it, so it reads as the page's
+   ending rather than the FAQ's last line. */
+main > .actions:last-child {
+  margin-top: var(--space-7);
+}
+
+.faq h3 + details > summary {
+  border-top: 0;
+}
+
+.faq details > summary {
+  font-family: var(--font-text);
+  font-size: var(--size-body);
+  line-height: var(--leading-body);
+  padding-block: var(--space-3);
+}
+
+.faq details > :not(summary) {
+  margin: var(--space-3) 0 var(--space-4) calc(1ch + var(--space-2));
+  max-width: var(--measure);
+}
+
+.faq details[open] {
+  padding-bottom: var(--space-1);
+  border-bottom: var(--rule-width) solid var(--rule);
+}
+
+.faq details[open] > summary {
+  border-bottom: 0;
+}
+
+.faq-group > details:last-child:not([open]) > summary {
+  border-bottom: 0;
+}
+
+/* /signin — the door ---------------------------------------------------------
+   Three things and no more (page.tsx), set the way every service sets its door:
+   one narrow column, centred between the chrome, the button the column's width.
+   It is type on the sheet, not a panel — the system has two bordered rectangles
+   and a sign-in card would be a third. */
+
+main.auth {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  /* The chrome is about 12rem of a tall viewport; centring in the remainder puts
+     the column a little above true centre, where a door's weight belongs. On a
+     short screen this collapses to the page's normal flow under the header. */
+  min-height: calc(100svh - 12rem);
+}
+
+main.auth h1 {
+  margin-bottom: var(--space-2);
+}
+
+main.auth [role="alert"] {
+  max-width: 26rem;
+  margin: 0 0 var(--space-2);
+}
+
+main.auth form {
+  width: 100%;
+  max-width: 22rem;
+  margin-top: var(--space-5);
+}
+
+main.auth form button {
+  width: 100%;
+}
+
+/* The other way in: the agent prompt row (app/_components/agent-prompt.tsx) at the
+   button's width, one step below it, the lede centred like everything else on the door
+   and the prompt itself left-aligned — a centred single line that overflows would clip
+   its first word, and the first word is the ask. */
+main.auth .agent-prompt {
+  width: 100%;
+  max-width: 22rem;
+  margin: var(--space-5) 0 0;
+}
+
+main.auth .agent-prompt .lede {
+  text-align: center;
+}
+
+main.auth .agent-prompt .copyline {
+  text-align: left;
+}
+
+/* The agents under the row, centred like the door. The tips open upward over the row,
+   so the gap above is the mark's own; the buyer's aside below keeps its hairline. */
+main.auth .agent-logos {
+  justify-content: center;
+  margin: var(--space-3) 0 0;
+}
+
+/* /purchases — the same door until a wallet proves itself --------------------
+   Before an address is proved, the page has one task and wears /signin's shape:
+   the narrow column, the task, one control the column's width. The moment the
+   component renders a proved address (`p.facts`) or the ledger itself, the page
+   returns to document flow — a list of purchases is a listing, not a door. A
+   browser without :has() keeps the plain document, which is the same content in
+   the page's old arrangement.
+
+   Two departures from /signin, both because this door has states /signin does not.
+   The column is pinned from the top rather than centred: the status line, the
+   no-wallet block and the failure all arrive under the button, and a centred
+   column would move the button up exactly when it is wanted again. And every
+   block shares one width, so the button, the line under it, the failure and the
+   small print's hairline all start and end together. */
+
+main.purchases:not(:has(p.facts, table)) {
+  --door: 26rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  text-align: center;
+  /* Where centring used to put the heading on a laptop, fixed; on a short screen it
+     collapses toward the page's normal gap under the header. */
+  padding-top: clamp(var(--space-6), 14svh, 9rem);
+  min-height: calc(100svh - 12rem);
+}
+
+main.purchases:not(:has(p.facts, table)) h1 {
+  margin-bottom: var(--space-2);
+}
+
+main.purchases:not(:has(p.facts, table)) > .written,
+main.purchases:not(:has(p.facts, table)) > .actions,
+main.purchases:not(:has(p.facts, table)) > .purchases-status {
+  width: 100%;
+  max-width: var(--door);
+  text-wrap: pretty;
+}
+
+main.purchases:not(:has(p.facts, table)) > .actions {
+  justify-content: center;
+  margin: var(--space-5) 0 0;
+}
+
+main.purchases:not(:has(p.facts, table)) > .actions button {
+  width: 100%;
+}
+
+main.purchases:not(:has(p.facts, table)) > [role="alert"] {
+  margin: var(--space-3) 0 0;
+}
+
+/* The line under the button: help a person reads while their wallet asks, so the
+   text face at the small size, not the mono of a platform value. The region is in
+   the markup from the first render so each change is announced, and is empty (and
+   takes no room) until the button is pressed. */
+.purchases-status {
+  margin: 0;
+  font-family: var(--font-text);
+  font-size: var(--size-body-sm);
+  line-height: var(--leading-body);
+  color: var(--ink-muted);
+}
+
+.purchases-status:not(:empty) {
+  margin-top: var(--space-3);
+}
+
+.purchases-status p {
+  max-width: none;
+  margin: 0 0 var(--space-2);
+}
+
+.purchases-status p:last-child {
+  margin-bottom: 0;
+}
+
+/* No wallet: the sentence that says what happened reads at body size in ink; the
+   ways out follow in the status line's voice. */
+.purchases-status .lead {
+  font-size: var(--size-body);
+  color: var(--ink);
+}
+
+/* Focus lands here only because the button it replaced had it; a ring around a
+   sentence would read as a control. */
+.purchases-status .lead:focus,
+.purchases-status .lead:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+
+/* A wallet's name broken across two lines reads as two things. */
+.purchases-status a {
+  white-space: nowrap;
+}
+
+.purchases-status small {
+  font-size: inherit;
+}
+
+/* The agent's way in, exactly as /signin sets it: the prompt row at the button's
+   width one step below the door's last line, its lede centred and the prompt itself
+   left-set (a centred line that overflows clips its first word, and the first word is
+   the ask), then the agents it is written for. The wrapper is `display: contents`, so
+   these are the column's own children for layout. */
+main.purchases:not(:has(p.facts, table)) .agent-prompt {
+  width: 100%;
+  max-width: var(--door);
+  margin: var(--space-6) 0 0;
+}
+
+main.purchases:not(:has(p.facts, table)) .agent-prompt .lede {
+  text-align: center;
+}
+
+main.purchases:not(:has(p.facts, table)) .agent-prompt .copyline {
+  text-align: left;
+}
+
+main.purchases:not(:has(p.facts, table)) .agent-logos {
+  justify-content: center;
+  margin: var(--space-3) 0 0;
+}
+
+/* Once the ledger is up the reader is past both doors. */
+main.purchases:has(p.facts, table) .agent-handoff {
+  display: none !important;
+}
+
+/* /docs — the reference pages -----------------------------------------------
+   Read surfaces, and the one part of the site that must work with script off
+   entirely (The Bare HTML Rule). Everything here is anchors and ink.
+*/
+
+/* The contents column (2026-08-30, founder: the docs page is dense — "give it a side
+   menu like a regular docs page"). One nav shared by /docs and /docs/errors, set like
+   the site's tables because it is one: each docs page a head row with a strong rule,
+   its sections as hairline rows with the route or code count at the tab stop, the
+   cursor line snapping on hover. Above 64rem it is a column stuck beside the reading —
+   the second two-column page in the product, and like the first it never reorders the
+   document. Below 64rem the same element flattens into the ruled line of anchors the
+   page always had. No underlines: every line here is a link, so the rows and the
+   current-page mark do the work prose needs an underline for.
+
+   /how-it-works wears the same column (later the same day, founder: "use the same
+   side menu that the docs page has") — one head row, its own sections, the row or
+   question count at the tab stop — so `main.docs` below is the grid for all three
+   pages, not a /docs implementation detail. */
+
+.docs-nav {
+  font-family: var(--font-mono);
+  font-size: var(--size-listing);
+  line-height: var(--leading-listing);
+}
+
+.docs-nav a {
+  text-decoration: none;
+}
+
+.docs-nav p {
+  margin: 0;
+  font-weight: var(--weight-medium);
+}
+
+.docs-nav ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.docs-nav .count {
+  color: var(--ink-muted);
+  font-weight: var(--weight-regular);
+  font-variant-numeric: tabular-nums;
+}
+
+@media (min-width: 64rem) {
+  main.docs {
+    display: grid;
+    grid-template-columns: 12rem minmax(0, 1fr);
+    column-gap: var(--space-8);
+    align-items: start;
+  }
+
+  main.docs > article {
+    min-width: 0;
+  }
+
+  /* Stuck below the sticky header by the same clearance every anchor target keeps
+     (`[id]`), scrolling within itself on a short viewport rather than pinning the
+     page's tail. */
+  .docs-nav {
+    position: sticky;
+    top: calc(var(--space-8) + var(--space-2));
+    max-height: calc(100dvh - var(--space-8) - var(--space-2) - var(--space-5));
+    overflow-y: auto;
+  }
+
+  .docs-nav p a,
+  .docs-nav li a {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: var(--space-3);
+    padding-block: var(--space-1);
+  }
+
+  /* The head row: the page, ruled like a table head. The current page is ink; the
+     other is a destination, one step down. */
+  .docs-nav p a {
+    color: var(--ink-muted);
+    border-bottom: var(--rule-width) solid var(--rule-strong);
+  }
+
+  .docs-nav p a[aria-current="page"] {
+    color: var(--ink);
+  }
+
+  .docs-nav p + ul {
+    margin-bottom: var(--space-5);
+  }
+
+  .docs-nav li a {
+    color: var(--ink-muted);
+    border-bottom: var(--rule-width) solid var(--rule);
+  }
+
+  /* The cursor line, held to The Snap Rule: the ground changes instantly, only the
+     ink fades. */
+  .docs-nav li a:hover {
+    color: var(--ink);
+    background-color: var(--paper-sunk);
+  }
+}
+
+@media (max-width: 63.995rem) {
+  .docs-nav {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2) var(--space-5);
+    padding-block: var(--space-3);
+    border-block: var(--rule-width) solid var(--rule);
+    margin-bottom: var(--space-7);
+  }
+
+  .docs-nav p,
+  .docs-nav ul,
+  .docs-nav li {
+    display: contents;
+  }
+
+  /* On a phone the strip carries this page's sections and the other page's title —
+     the other page's sections are one tap away, behind their own contents. */
+  .docs-nav ul:not([data-here]) {
+    display: none;
+  }
+
+  /* A one-page menu (/how-it-works) has no other page to offer: its head row would
+     be the h1 said a third time in the viewport, so the strip is the anchors alone. */
+  .docs-nav[data-single] > p {
+    display: none;
+  }
+
+  .docs-nav .count {
+    display: none;
+  }
+}
+
+/* The registry description under a route's summary: human-written usage, so the
+   text face, one step down and in Ash — the summary is the line you scan, the note
+   is the line you read. Measure capped short of the page's, because the cell shares
+   the row with three columns of data. */
+.route-note {
+  margin: var(--space-1) 0 var(--space-2);
+  font-size: var(--size-body-sm);
+  line-height: 1.55;
+  color: var(--ink-muted);
+  font-variant-numeric: normal;
+  max-width: 52ch;
+  /* A note quoting `PAYMENT-SIGNATURE` or an npx invocation must never set the
+     table's minimum width: on a phone that pushed the whole column off the sheet,
+     and nothing here horizontally scrolls except `pre`. */
+  overflow-wrap: anywhere;
+}
+
+/* The catalogue's prose cells get the same guarantee on a phone, where a
+   `retry_after_seconds` in a recovery sentence is wider than the column. */
+@media (max-width: 40rem) {
+  td.written {
+    overflow-wrap: anywhere;
+  }
+}
+
+/* The row an anchor was followed to: the cursor line, held. A reader sent to
+   #price_changed by a `docs_url` sees the row they were sent to, in the same sunk
+   ground a hover uses — no new ink, and it snaps like the cursor line does. */
+tr:target {
+  background-color: var(--paper-sunk);
+}
+
+/* The listing's own dashboard ------------------------------------------------
+   /dashboard/:id, rebuilt 2026-08-31. An Operate surface: the creator is in a task,
+   so the page is ordered by the job (get it live → price it → describe it → cut a
+   release → hand out the snippet) and every block is the same three shapes this
+   system already has — a ruled row, a hairline control, a table. Nothing is boxed
+   that a rule can hold.
+*/
+
+/* The head: `handle/slug`, and one mono line of what the record currently says.
+   Status, price, updates, releases and source were six `dl` rows; as a line they are
+   read in one pass, which is what a creator opening this page is doing. */
+
+.record-head {
+  margin-bottom: var(--space-6);
+}
+
+/* The name, and the one control that points away from this page. Baseline-aligned so
+   the small button sits on the title's own line; `space-between` puts it at the sheet's
+   right edge, which is where the eye lands leaving the heading. It wraps under on a
+   narrow sheet rather than squeezing a slug that is already allowed to break anywhere. */
+
+.record-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-bottom: var(--space-3);
+}
+
+.record-head h1 {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.record-title .preview-link {
+  margin: 0;
+  flex: none;
+}
+
+.record-head .facts {
+  margin: 0;
+  color: var(--ink-muted);
+}
+
+/* The repository, at the end of the state line. The Octocat is a citation drawn at the
+   cap height of the word beside it, never the control's ground — `--github` grounds one
+   button in the product and this is not it. `inline-flex` keeps mark and word one
+   object when the line wraps on a narrow sheet. */
+.record-head .repo-link {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  white-space: nowrap;
+}
+
+.record-head .repo-link svg {
+  width: 1em;
+  height: 1em;
+  fill: currentColor;
+  flex: none;
+}
+
+/* The standing checklist. FR-42's gates printed whether or not they are failing —
+   on a draft it is the work left, on a live listing it is the record of what a buyer
+   is trusting, and it is the same three lines either way so nobody has to learn a
+   second layout on the day they publish. The verdict inks are the table's inks. */
+
+.checks {
+  list-style: none;
+  margin: 0 0 var(--space-5);
+  padding: 0;
+  border-top: var(--rule-width) solid var(--rule);
+}
+
+.checks > li {
+  position: relative;
+  max-width: none;
+  margin: 0;
+  padding: var(--space-3) 0;
+  border-bottom: var(--rule-width) solid var(--rule);
+  display: grid;
+  grid-template-columns: 9rem minmax(0, 1fr);
+  column-gap: var(--space-5);
+  row-gap: var(--space-1);
+  align-items: baseline;
+}
+
+.checks .what {
+  font-family: var(--font-mono);
+  font-size: var(--size-label);
+  font-weight: var(--weight-medium);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  color: var(--ink-muted);
+  line-height: var(--leading-listing);
+}
+
+/* The row is the target, the label is the name. `::after` stretches the anchor over the
+   whole `li` so the click lands anywhere on the row, while the accessible name stays the
+   one word that says which row it is — not the verdict, not the fix, both of which read
+   as nonsense out of context in a list of links. Inset by the row's own padding so two
+   adjacent rows never share a pixel. */
+
+.checks .what a {
+  /* Ash, like every other label in the column. The global link rule would set it in ink
+     and make a linked row read darker than an unlinked one — a difference in emphasis
+     where the only real difference is whether the page has somewhere to send you. */
+  color: inherit;
+  text-decoration-color: var(--rule);
+}
+
+.checks .what a::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+}
+
+.checks > li:has(a:hover) {
+  background-color: var(--paper-sunk);
+}
+
+.checks > li:has(a:hover) .what a {
+  color: var(--accent);
+  text-decoration-color: var(--accent);
+}
+
+/* The sunk ground has to reach past the text to read as a row rather than a highlight,
+   and the list has no horizontal padding of its own to lend it. */
+
+.checks > li:has(a:hover) {
+  box-shadow: calc(-1 * var(--space-2)) 0 0 0 var(--paper-sunk), var(--space-2) 0 0 0 var(--paper-sunk);
+}
+
+.checks .verdict {
+  font-family: var(--font-mono);
+  font-size: var(--size-listing);
+  line-height: var(--leading-listing);
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+/* The fix sits under the verdict it belongs to, in the text face: the verdict is
+   computed, the instruction is written, and the Computed / Written Rule does not
+   stop at the section boundary. */
+
+.checks .fix {
+  grid-column: 2;
+  margin: 0;
+  font-size: var(--size-body-sm);
+  line-height: 1.5;
+  color: var(--ink-muted);
+  max-width: 60ch;
+  text-wrap: pretty;
+}
+
+/* Label over value, always. The checks moved into a 22rem column on 2026-08-31, where a
+   9rem label track left "v1.2.0 · 30 Aug 2026 · scan pass" three words to a line. Stacked
+   they read as a ledger of short entries, which is what they are. */
+
+.checks > li {
+  grid-template-columns: minmax(0, 1fr);
+  row-gap: 0;
+}
+
+.checks .fix {
+  grid-column: 1;
+  margin-top: var(--space-1);
+}
+
+/* The sentence that qualifies a control — "applies to future purchases only" — set
+   beside the button instead of as a paragraph three lines below it, where it was
+   read after the click it was meant to inform. It wraps under on a narrow sheet. */
+
+.actions .written {
+  flex: 1 1 22rem;
+  min-width: 0;
+  max-width: 52ch;
+  font-size: var(--size-body-sm);
+  line-height: 1.5;
+  text-wrap: pretty;
+}
+
+/* The two addresses. One is what a person opens, one is what an agent pays; both are
+   values you hand to something else, so both wear the copy row and both say which is
+   which underneath rather than leaving a creator to tell two URLs apart by eye. */
+
+.addresses {
+  display: grid;
+  /* `minmax(0, 1fr)` and the `min-width` below, both load-bearing: the row's value is
+     one unbroken `nowrap` string, and a grid item's automatic minimum is its content.
+     Without these a resource endpoint sets the track's width and the sunken row runs
+     off the right gutter on a phone instead of fading under its own mask. */
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-5);
+  /* Capped short of the sheet: a 76rem-wide sunken bar holding a 40-character URL is
+     mostly empty field, and the mask is what handles the ones that do not fit. */
+  max-width: 44rem;
+  margin-bottom: var(--space-4);
+}
+
+.addr {
+  min-width: 0;
+}
+
+.addr .note {
+  margin: var(--space-2) 0 0;
+  max-width: var(--measure);
+  font-size: var(--size-body-sm);
+  line-height: 1.5;
+  color: var(--ink-muted);
+  text-wrap: pretty;
+}
+
+/* The money field. A price field is the one input on this site whose unit matters, so
+   the unit is drawn into the control as a sunk affix instead of being spelled out in
+   the label and forgotten. The border is the control's; the input inside has none, and
+   the focus ring lands on the pair. */
+
+.field.money .affix {
+  display: flex;
+  align-items: stretch;
+  width: 100%;
+  max-width: 24rem;
+  border: var(--rule-width) solid var(--rule-control);
+  border-radius: var(--radius);
+  background-color: var(--paper);
+  transition: border-color var(--transition);
+}
+
+.field.money .affix > span {
+  display: flex;
+  align-items: center;
+  padding-inline: var(--space-3);
+  border-right: var(--rule-width) solid var(--rule);
+  background-color: var(--paper-sunk);
+  font-family: var(--font-mono);
+  font-size: var(--size-listing);
+  color: var(--ink);
+}
+
+.field.money .affix input {
+  flex: 1;
+  min-width: 0;
+  max-width: none;
+  border: 0;
+  background-color: transparent;
+}
+
+.field.money .affix:hover {
+  border-color: var(--ink-muted);
+}
+
+.field.money .affix:focus-within {
+  box-shadow: var(--focus-ring);
+}
+
+.field.money .affix input:focus-visible {
+  box-shadow: none;
+}
+
+.field.money .affix:has(input:disabled) {
+  border-color: var(--rule);
+  background-color: var(--paper-sunk);
+}
+
+/* The floor, under the field it constrains. Computed — it is a platform number — so it
+   sets in the mono face at label size, in Ash: a constraint on an open box, read at a
+   glance, not a suggestion competing with the presets above it. */
+.field.money .floor {
+  margin: var(--space-2) 0 0;
+  max-width: none;
+  font-family: var(--font-mono);
+  font-size: var(--size-label);
+  line-height: var(--leading-label);
+  letter-spacing: var(--tracking-label);
+  color: var(--ink-muted);
+}
+
+/* The custom field is on screen only while its own radio is checked (2026-08-31, on the
+   founder's direction). A preset list carrying a permanently open text box beside it is
+   asking two questions where the creator has answered one.
+
+   Guarded by `@supports`, and that guard is the point: in a browser without `:has()` the
+   field simply stays visible, which is what it did before. An unguarded `display: none`
+   would hide the only way to set a price that is not a preset. Hidden rather than
+   disabled, because `choose()` in the pricing route reads this field only when the
+   radio beside it says `custom`, and a disabled field would post nothing at all. */
+
+@supports selector(:has(*)) {
+  .field.money {
+    display: none;
+  }
+
+  fieldset:has(.presets input[value="custom"]:checked) .field.money {
+    display: block;
+  }
+
+  /* With the field gone the preset row is the fieldset's last line, and the gap it was
+     holding open for the field below it becomes a hole above the fieldset's own edge. */
+  fieldset:has(.presets input[value="custom"]:not(:checked)) .presets {
+    margin-bottom: 0;
+  }
+}
+
+/* Reference a creator reads once — how a README renders — kept on the page it applies
+   to but folded, so it stops competing with the two tasks either side of it. */
+
+.reference {
+  margin-top: var(--space-6);
+}
+
+/* The shared summary rule pins `.label` at `flex: none` so that the answer beside it
+   wraps instead of squeezing the question. This disclosure has no answer beside it, and
+   at 390px an unbreakable label ran off the right edge of the sheet. */
+
+.reference > summary .label {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* The last block on the page, and the only irreversible one. It gets the heavy rule
+   and a heading one size down: retiring is not a section of the workflow, it is the
+   end of it. No status ink — those are verdicts, and a link is not a verdict. */
+
+section.terminal {
+  margin-top: var(--space-9);
+  padding-top: var(--space-5);
+  border-top: var(--rule-width) solid var(--rule-strong);
+}
+
+section.terminal h2 {
+  margin-top: 0;
+  padding-bottom: 0;
+  border-bottom: 0;
+  font-size: var(--size-title);
+  color: var(--ink-muted);
+}
+
+/* The seller's side of the sale ----------------------------------------------
+   /dashboard/:id, 2026-08-31, on the founder's direction that the fee belongs in a
+   breakdown of its own rather than beside every preset. The box is the buy box seen
+   from the other end of the same transaction, so it reuses that rectangle's rule,
+   padding, width and label headings above rather than inventing a third box shape.
+
+   One thing it deliberately does not borrow: the sticky. The buy box follows a reader
+   who is deciding; this one sits beside a form that edits the very numbers it prints,
+   and pinning a set of saved values alongside the radios changing them would show two
+   answers to one question for as long as the scroll lasted.
+*/
+
+.payout-box {
+  min-width: 0;
+  margin-bottom: var(--space-7);
+}
+
+/* The first heading in the box has no section above it to be spaced from. */
+
+.payout-box h2:first-child {
+  margin-top: 0;
+}
+
+/* An itemised line ends on what the creator keeps: the fee is a line, never the
+   subject. PRODUCT.md's voice rule, read as an invoice rather than as a sentence. */
+
+.payout-box .cost-lines {
+  margin-bottom: 0;
+}
+
+.payout-box .cost.fee dd {
+  color: var(--ink-muted);
+}
+
+.payout-box .cost.keep {
+  margin-top: var(--space-2);
+  padding-top: var(--space-2);
+  border-top: var(--rule-width) solid var(--rule);
+}
+
+.payout-box .cost.keep dt {
+  color: var(--ink);
+}
+
+/* Two ranks, not two shouts: the release sale is the number a creator is deciding on,
+   so it carries the size; a later release keeps the weight and drops the size. */
+
+.payout-box .cost.keep.lead dd strong {
+  font-size: var(--size-headline);
+  font-weight: var(--weight-medium);
+  line-height: var(--leading-heading);
+}
+
+.payout-box .note {
+  margin: var(--space-2) 0 0;
+  max-width: none;
+}
+
+.payout-box .free {
+  margin: 0;
+  max-width: none;
+  font-size: var(--size-body-sm);
+  line-height: 1.5;
+}
+
+/* The bound payout address, whole. Not truncated and not behind a copy control: this
+   is the one address on the site a creator never pastes anywhere, and the only useful
+   thing to do with it is read it against the wallet they hold. */
+
+.payout-box .payout-address {
+  margin: 0;
+  max-width: none;
+}
+
+.payout-box .payout-address code {
+  display: block;
+  padding: var(--space-2) var(--space-3);
+  line-height: var(--leading-listing);
+  overflow-wrap: anywhere;
+}
+
+/* The right column ------------------------------------------------------------
+   Where this listing stands, the two acts available on it, and what a sale pays.
+   Everything in it is a verdict or a control; nothing in it is edited. Unboxed down to
+   the payout box, because DESIGN.md rations bordered rectangles and a column of three
+   stacked boxes would spend the whole allowance on one page.
+*/
+
+.record-side {
+  min-width: 0;
+}
+
+.record-side .checks-block {
+  margin-bottom: var(--space-5);
+}
+
+.record-side .checks-block h2 {
+  margin-top: 0;
+}
+
+/* The checklist's heading and the one control that changes what it says. Baseline-
+   aligned rather than centred, so the small button sits on the heading's own line the
+   way the verdicts below sit on their labels'. It carries no rule of its own: `.checks`
+   draws the hairline directly beneath, and a second one here would box the head. */
+
+.checks-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-bottom: var(--space-3);
+}
+
+.checks-head h2 {
+  margin: 0;
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+
+.checks-head form {
+  margin: 0;
+}
+
+/* The small control -----------------------------------------------------------
+   Three acts on this page are real controls that are not the page's main business: Check
+   for releases, on the checklist's head, which POSTs and can cut a release; Preview
+   listing, top right of the sheet, which opens the listing page in a new tab; and Retire
+   this listing, at the foot, which opens the page that ends it. All three keep the
+   secondary button's ground and hairline — each commits or navigates, and a bare
+   underlined word would say otherwise — but all three are drawn below the page's standard
+   control size, so that none competes with Save changes and Publish, which are the two
+   acts this page exists for. Retire is small for a second reason: it is the gravest thing
+   here and the rarest, and a full-size rectangle at the foot of a sheet reads as an
+   invitation. One rule, so the three cannot drift into three sizes of the same idea.
+   The listing page borrows it once (2026-09-13): View your purchases, in its own small
+   frame under the contents, is a way back for a returning buyer and must not compete
+   with the Buy button. */
+
+.checks-head button,
+.preview-link a[data-button],
+.retire-action a[data-button],
+.listing-body > .already a[data-button] {
+  min-height: 0;
+  padding: var(--space-1) var(--space-2);
+  font-size: var(--size-label);
+  line-height: var(--leading-label);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  color: var(--ink-muted);
+}
+
+.checks-head button:hover,
+.preview-link a[data-button]:hover,
+.retire-action a[data-button]:hover,
+.listing-body > .already a[data-button]:hover {
+  color: var(--ink);
+}
+
+
+/* The two controls, and the anchor the pinned bar watches. A rule above them so they
+   read as the foot of the checks rather than as the head of the box below. */
+
+.record-actions {
+  /* No rule of its own: the last check's own border closes the ledger directly above,
+     and a second hairline 24px under the first is a seam, not a separation. */
+  padding-top: var(--space-4);
+  margin-bottom: var(--space-6);
+}
+
+.record-actions .actions {
+  margin-bottom: var(--space-3);
+}
+
+.record-actions .actions button {
+  flex: 1 1 auto;
+}
+
+.record-actions .note {
+  margin: 0;
+  max-width: none;
+  font-size: var(--size-body-sm);
+  line-height: 1.5;
+  text-wrap: pretty;
+}
+
+/* What the box is showing is the form's arithmetic, not the record's. Said in the ink
+   the system keeps for "this is not settled", at the top of the box, where it is read
+   before the numbers it qualifies rather than after them. */
+
+.payout-box .unsaved {
+  margin: 0 0 var(--space-4);
+  font-size: var(--size-label);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+}
+
+/* The pinned bar --------------------------------------------------------------
+   The buy bar's mechanism, on the seller's side: the real controls are in the column,
+   and this appears exactly when they leave the screen. Every width, not phones only —
+   the right column does not stick here, so the controls scroll away on a desktop too.
+*/
+
+.savebar {
+  display: none;
+  position: fixed;
+  inset: auto 0 0 0;
+  z-index: 10;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-3) var(--gutter);
+  padding-bottom: calc(var(--space-3) + env(safe-area-inset-bottom, 0px));
+  background-color: var(--paper);
+  border-top: var(--rule-width) solid var(--rule-strong);
+}
+
+.savebar .what {
+  margin: 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--size-listing);
+  color: var(--ink-muted);
+}
+
+.savebar .controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+  flex: none;
+}
+
+[data-js="on"] .savebar[data-visible] {
+  display: flex;
+}
+
+/* The bar must never cover the last line of the document. */
+[data-js="on"] body > footer {
+  padding-bottom: calc(var(--space-9) + env(safe-area-inset-bottom, 0px));
+}
+
+/* On a phone the reference is the h1 four screens up, and the two controls need the
+   width more than the reminder does. */
+@media (max-width: 40rem) {
+  .savebar .what {
+    display: none;
+  }
+
+  .savebar .controls {
+    flex: 1;
+  }
+
+  .savebar .controls button {
+    flex: 1;
+  }
+}
+
+/* The sheet, in two columns ---------------------------------------------------
+   Below 60rem the page is one column and document order is the reading order: the head,
+   then where the listing stands and what to do about it, then the work. Above it, that
+   middle block becomes a right column beside the work — the buy box's column, two
+   spacing steps wider because it carries a checklist above the box as well as the box.
+*/
+
+@media (min-width: 60rem) {
+  main.record {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 24rem;
+    column-gap: var(--space-7);
+    align-items: start;
+  }
+
+  /* Placed by name, every one of them. Auto-placement would put the body under the
+     column beside it the moment a notice changed how many rows came first. */
+  .record-head {
+    grid-column: 1 / -1;
+    grid-row: 1;
+  }
+
+  .record-notices {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+
+  .record-body {
+    grid-column: 1;
+    grid-row: 3;
+    min-width: 0;
+  }
+
+  .record-side {
+    grid-column: 2;
+    grid-row: 3;
+    align-self: start;
+  }
+
+  /* Both columns start on the same line, whether the first block of the left column is
+     a section or the form that wraps the first two. */
+  .record-body > section:first-child > h2,
+  .record-body > form:first-child > section:first-child > h2 {
+    margin-top: 0;
+  }
+}
+
+/* The two self-reported fields ------------------------------------------------
+   A label row that carries three things: what the field is, who reads it, and what is
+   left of its budget. The budget is the reason the row exists — a limit a creator only
+   meets by hitting it reads as a bug, and it belongs beside the label rather than under
+   the box where it would be found after the sentence was already written.
+*/
+
+/* The label above a field. It held three things once — the label, an audience flag and
+   the character count — and holds one now: the count moved inside the box on 2026-09-01
+   and the flags went the same day. The flex row stays because it costs nothing and is
+   what a second item would need, and the measure ceiling keeps it from running wider
+   than the box it labels. */
+
+.field-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-2) var(--space-3);
+  max-width: var(--measure);
+  margin-bottom: var(--space-2);
+}
+
+.field-head label {
+  margin-bottom: 0;
+}
+
+/* Inside the box, bottom right — where every editor that counts characters puts it, and
+   where it is read as a property of the field rather than as another item in the header
+   row. The wrapper is the positioning context and takes the textarea's own width, so the
+   number lands on the box's edge rather than the column's. */
+
+.counted {
+  position: relative;
+  max-width: var(--measure);
+}
+
+.counted textarea {
+  display: block;
+  width: 100%;
+  max-width: none;
+  /* Room for the count beneath the last line, so a full value never sets under it. */
+  padding-bottom: var(--space-6);
+}
+
+.counted .count {
+  position: absolute;
+  right: var(--space-3);
+  bottom: var(--space-2);
+  /* The box is the target: a click on the number has to land in the field behind it,
+     and the count is output, never a control. */
+  pointer-events: none;
+  /* The field's own ground, so a value scrolled behind the number stays legible rather
+     than setting through it. */
+  background-color: var(--paper);
+  padding-left: var(--space-2);
+  font-family: var(--font-mono);
+  font-size: var(--size-label);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-muted);
+  transition: color var(--transition);
+}
+
+/* A number that has become a verdict carries a verdict's ink and weight.
+   Both colours are restated here rather than left to the global `[data-status]` rule: an
+   attribute selector loses to the two classes above it, so `color: var(--ink-muted)` was
+   quietly winning and every state rendered the same grey. */
+
+.counted .count[data-status] {
+  font-weight: var(--weight-medium);
+}
+
+.counted .count[data-status="warn"] {
+  color: var(--status-warn);
+}
+
+.counted .count[data-status="fail"] {
+  color: var(--status-fail);
+}
+
+/* The text, not just the number counting it. Amber on the approach would be a field that
+   changes colour while somebody is mid-sentence, so the box itself only reacts to the
+   breach — and then it reacts completely: the border from the system's `aria-invalid`
+   rule, and the value in the same ink as the count above it. */
+
+textarea[data-limit="over"],
+input[data-limit="over"] {
+  color: var(--status-fail);
+}
+
+/* The caret belongs to the value. Left at the accent it would be the one green thing in
+   a red field, which reads as a rendering fault rather than as a state. */
+
+textarea[data-limit="over"] {
+  caret-color: var(--status-fail);
+}
+
+/* The accepted licences: a label, the ten, and the caveat, as one ruled block. Three
+   loose paragraphs said the same thing and read as three unrelated afterthoughts. */
+
+.licence-set {
+  max-width: var(--measure);
+  margin: var(--space-5) 0 0;
+  padding-top: var(--space-3);
+  border-top: var(--rule-width) solid var(--rule-strong);
+}
+
+.licence-set .field-label {
+  margin-bottom: var(--space-3);
+}
+
+.spdx-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-4);
+  list-style: none;
+  margin: 0 0 var(--space-3);
+  padding: 0;
+  font-family: var(--font-mono);
+  font-size: var(--size-listing);
+  line-height: var(--leading-listing);
+}
+
+.spdx-list li {
+  max-width: none;
+  margin: 0;
+}
+
+.licence-set .note {
+  margin: 0;
+  font-size: var(--size-body-sm);
+  line-height: 1.5;
+  color: var(--ink-muted);
+  text-wrap: pretty;
+}
+
+/* Preview, top right of the sheet. It wears the small rectangle rather than reading as a
+   bare word — it is a real destination, not a hint — but stays an `<a>` underneath,
+   because it navigates rather than writes and the middle click has to work. The wrapper
+   places it and nothing else: the type is the small control's own (above), and setting a
+   face here would fight it. */
+
+.preview-link {
+  margin: 0 0 var(--space-3);
+  max-width: none;
+}
+
+/* Hand it to an agent ---------------------------------------------------------
+   The two repository jobs this page can ask for but cannot do — add a licence, push a
+   tag — written as a prompt and handed over the same way every other value on this page
+   is handed over: one line on the sunken ground, fading where it runs past the row, with
+   the button carrying the whole string. Many creators will not know the git for this and
+   all of them have an agent that does.
+*/
+
+.agent-prompt {
+  max-width: var(--measure);
+  margin-bottom: var(--space-4);
+}
+
+.agent-prompt .lede {
+  margin: 0 0 var(--space-2);
+  max-width: none;
+  font-size: var(--size-body-sm);
+  line-height: 1.5;
+  color: var(--ink-muted);
+}
+
+.agent-prompt .copyline {
+  margin-bottom: 0;
+}
+
+
+/* The repository picker -------------------------------------------------------
+   /dashboard/new lists every granted repository, and most of them are usually not
+   listable: a public repo can be cloned for nothing (FR-10), and one already sold is
+   already sold. Both stay on the page, because a creator who cannot find a repo needs
+   to tell "not granted" from "granted but not for sale" — but neither is a row you can
+   act on, so neither should read at the weight of one you can.
+
+   The whole row drops to Ash rather than losing opacity: DESIGN.md's field rule is that
+   nothing in this system is a lightened ink, and a faded row would put the repository
+   name below the contrast floor besides. Ash on paper clears 4.5:1, so the row stays
+   readable as a fact while reading as inert as a target. The cursor line still lands on
+   it, because the row is still a row.
+*/
+
+tbody tr[data-inert] td,
+tbody tr[data-inert] td.wrap {
+  color: var(--ink-muted);
+}
+
+/* The sortable head -----------------------------------------------------------
+   Order is a URL (`?sort=name` / `?sort=updated`), so the two headers are ordinary
+   links and the sorted page survives a reload with scripting off. What was missing was
+   that they looked sortable: the active column rendered as plain text, so neither header
+   announced that the other could be clicked. Both are links now, and the active one
+   carries a caret in its own direction — the affordance is the mark, not a hover.
+*/
+
+th a[data-sort] {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: inherit;
+  text-decoration: none;
+}
+
+th a[data-sort]:hover {
+  color: var(--ink);
+}
+
+/* The caret is drawn, never announced: `aria-sort` on the `<th>` already tells a screen
+   reader which column is ordered and which way. The inactive header keeps a caret slot
+   at Hairline so the two heads do not shift by a glyph when the sort changes. */
+th a[data-sort]::after {
+  content: "↓";
+  font-size: 0.85em;
+}
+
+th a[data-sort="asc"]::after {
+  content: "↑";
+}
+
+th a[data-sort="off"]::after {
+  color: var(--rule-strong);
+}
+
+/* The row's own control -------------------------------------------------------
+   One button per sellable row, and up to a screenful of them at once. At the standard
+   44px it reads as a page full of primary acts; drawn at the small control's size it
+   reads as what it is — the row's verb, at the row's weight. Same rectangle, same
+   hairline, because it does commit.
+*/
+
+.repo-action button {
+  min-height: 0;
+  padding: var(--space-1) var(--space-2);
+  font-size: var(--size-label);
+  line-height: var(--leading-label);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  color: var(--ink-muted);
+}
+
+.repo-action button:hover {
+  color: var(--ink);
+}
+
+
+/* The admin feed --------------------------------------------------------------
+   `/admin` is one operator watching every creator's listings appear. It is an Operate
+   surface and it adds no new visual vocabulary: the tally is the earnings page's `<dl>`,
+   the feed is the signature table, and a flag is a verdict rendered the way every other
+   verdict in the system is rendered — coloured text, no container.
+
+   What is new is the filter strip, and it is the sub-nav's shape moved inside `<main>`:
+   a ruled row of links in the Label face, the current one in Ink, each carrying its own
+   count at the tab stop the way the docs contents column does. The count is the point.
+   A filter named "review" tells an operator what to click; a filter named "review 2"
+   tells them whether to bother, which is the question they actually arrived with.
+*/
+
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-2) var(--space-5);
+  margin: 0 0 var(--space-5);
+  padding-bottom: var(--space-3);
+  border-bottom: var(--rule-width) solid var(--rule-strong);
+  font-family: var(--font-mono);
+  font-size: var(--size-label);
+  font-weight: var(--weight-medium);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+}
+
+.filters a {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  color: var(--ink-muted);
+  text-decoration: none;
+  /* A 44px row of these would be a toolbar; they are a line of labels. The tap target
+     comes from the vertical padding plus the strip's own gap, which clears 44px of
+     spacing between wrapped rows without drawing a control that is not there. */
+  padding-block: var(--space-2);
+}
+
+.filters a:hover {
+  color: var(--ink);
+}
+
+/* The current filter is Ink against the others' Ash, and says so to assistive
+   technology through `aria-current` rather than through the colour alone. */
+.filters a[aria-current="page"] {
+  color: var(--ink);
+}
+
+.filters a[aria-current="page"]::before {
+  content: "▸ ";
+  color: var(--accent);
+}
+
+/* The count rides at the end of its label in tabular figures, so a strip of five
+   filters does not jitter as the numbers change under it. */
+.filters a span {
+  color: var(--ink-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.filters a[aria-current="page"] span {
+  color: var(--ink);
+}
+
+/* A flag is a verdict, so it is verdict ink on paper and nothing else — no pill, no
+   border, no ground. Several can land on one listing; they stack inside the cell rather
+   than running past the column's tab stop. */
+
+.flags {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: var(--size-label);
+  font-weight: var(--weight-medium);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  line-height: var(--leading-label);
+}
+
+/* No flags is the good case and it should read as quiet, not as missing data. */
+.flags:empty::after {
+  content: "—";
+  color: var(--rule-strong);
+}
+
+/* One line per listing. `--row-height` is a 30px cell box and the feed's whole value is
+   that an operator can run their eye down it; a timestamp or a version that wraps turns
+   every row into two and the rhythm the table is built on stops existing. Only the
+   listing slug is allowed to wrap, because it is the one cell whose content the platform
+   does not control the length of — and it carries `.wrap` to say so. */
+
+.feed td:not(.wrap) {
+  white-space: nowrap;
+}
+
+/* The slug is the one cell whose length the platform does not control, so it is the one
+   allowed to wrap — but `.wrap` is `overflow-wrap: anywhere`, and a table full of
+   `nowrap` neighbours will hand this column whatever width is left over and let it break
+   a slug one character per line. The floor stops that: below it the row is wide enough
+   for a word, and the columns that can be spared leave instead (`data-col` above). */
+.feed td.wrap {
+  min-width: 7rem;
+}
+
+/* An event name is a slug, and some of them are not self-explanatory —
+   `release_scan_socket_quota` says nothing to anyone reading the failing table at speed.
+   Where lib/admin/activity.ts has a sentence for one, it goes under the name on its own
+   line, muted and small, and the row is allowed the second line that costs. Only these
+   rows take it; the rhythm above still holds for the ones whose name is the whole story. */
+.feed td small {
+  display: block;
+  white-space: normal;
+}
+
+/* The admin search row -------------------------------------------------------
+   One label, one field, one verb, on a line. It sits directly under the filter strip
+   and is the same kind of control — a way of narrowing what the table below shows — so
+   it wears the label face and the strip's spacing rather than the dashboard's stacked
+   `.field`, which is a form you fill in rather than a control you operate.
+*/
+
+.searchbox {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+  margin: 0 0 var(--space-5);
+}
+
+.searchbox label {
+  margin: 0;
+  white-space: nowrap;
+}
+
+.searchbox input[type="search"] {
+  width: min(22rem, 100%);
+  /* The platform's own clear affordance is a shape this system never drew, and it
+     appears in one browser and not the others. The `Clear` link is the system's. */
+  appearance: none;
+}
+
+.searchbox input[type="search"]::-webkit-search-cancel-button {
+  display: none;
+}
+
+/* The verb sits at the small control's size, as the row's action rather than the
+   page's — the same reasoning as `.repo-action` above. */
+.searchbox button {
+  min-height: 0;
+  padding: var(--space-2) var(--space-3);
+}
+
+.searchbox a {
+  font-family: var(--font-mono);
+  font-size: var(--size-label);
+  font-weight: var(--weight-medium);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  color: var(--ink-muted);
+  text-decoration: none;
+}
+
+.searchbox a:hover {
+  color: var(--ink);
+}
+
+/* The users page (2026-09-14) --------------------------------------------------
+   One control row instead of two filter strips: search, then three dropdowns, each a
+   labelled field whose options carry their counts. The row is ruled off from the table
+   the way the strips were, and wraps rather than scrolls on a phone.
+*/
+
+.usersbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--space-4) var(--space-5);
+  margin: 0 0 var(--space-5);
+  padding-bottom: var(--space-4);
+  border-bottom: var(--rule-width) solid var(--rule-strong);
+}
+
+.usersbar-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.usersbar-field label {
+  margin: 0;
+}
+
+.usersbar-search {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.usersbar input[type="search"] {
+  width: min(14rem, 100%);
+  appearance: none;
+}
+
+.usersbar input[type="search"]::-webkit-search-cancel-button {
+  display: none;
+}
+
+.usersbar select {
+  width: auto;
+  min-width: 9.5rem;
+}
+
+.usersbar-reset {
+  padding-block: var(--space-3);
+  font-family: var(--font-mono);
+  font-size: var(--size-label);
+  font-weight: var(--weight-medium);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  color: var(--ink-muted);
+  text-decoration: none;
+}
+
+.usersbar-reset:hover {
+  color: var(--ink);
+}
+
+/* An address is shortened in the cell, and whole in its title and its copy. The short
+   form is the Basescan link, because opening it on the explorer is what a person does
+   with an address; Copy sits at label size, as chrome on the value rather than as an
+   action competing with the row's own. */
+.addr {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-3);
+}
+
+.addr .copy {
+  align-self: center;
+  gap: var(--space-1);
+  min-height: 0;
+  padding: 0;
+  font-size: var(--size-label);
+  font-weight: var(--weight-medium);
+  line-height: var(--leading-label);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  color: var(--ink-muted);
+  background-color: transparent;
+  border: 0;
+}
+
+.addr .copy:hover {
+  color: var(--ink);
+  background-color: transparent;
+}
+
+.row-action {
+  margin: var(--space-1) 0 0;
+}
+
+.row-action button {
+  min-height: 0;
+  padding: 0 var(--space-1);
+  font-size: var(--size-label);
+  line-height: var(--leading-label);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  color: var(--ink-muted);
+  white-space: nowrap;
+}
+
+.row-action button:hover {
+  color: var(--ink);
+}
+
+
+/* The admin rethink (2026-09-13) ---------------------------------------------
+   Four structural changes, no new visual vocabulary.
+
+   1. The admin sub-nav says where you are. Links sit in Ash until current, and the
+      current one takes Ink and an accent underline — the one accent the row spends,
+      and `aria-current` carries the same fact to assistive technology. A wider gap
+      opens before Ops: the second group is where things get done rather than read.
+      On a phone the row scrolls sideways instead of wrapping to three lines, because a
+      nav that takes a third of the first screen is a nav in the way.
+*/
+
+body > nav.subnav[data-admin] a {
+  color: var(--ink-muted);
+  text-decoration: none;
+  padding-block: var(--space-2);
+  white-space: nowrap;
+}
+
+body > nav.subnav[data-admin] a:hover {
+  color: var(--ink);
+}
+
+body > nav.subnav[data-admin] a[aria-current="page"] {
+  color: var(--ink);
+  text-decoration: underline;
+  text-decoration-color: var(--accent);
+  text-decoration-thickness: 2px;
+  text-underline-offset: 0.5em;
+}
+
+body > nav.subnav[data-admin] a[data-group-start] {
+  margin-inline-start: var(--space-4);
+}
+
+/* The network switch: one hairline rectangle split in two, the chosen side on sunk
+   paper in Ink. It takes the row's trailing auto margin, so Sign out sits after it. */
+body > nav.subnav form.netswitch {
+  display: inline-flex;
+  align-self: center;
+  border: var(--rule-width) solid var(--rule-control);
+}
+
+body > nav.subnav form.netswitch + form {
+  margin-inline-start: 0;
+}
+
+.netswitch button {
+  min-height: 0;
+  padding: var(--space-1) var(--space-3);
+  font-size: var(--size-label);
+  line-height: var(--leading-label);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  color: var(--ink-muted);
+  background-color: var(--paper);
+  border: 0;
+}
+
+.netswitch button + button {
+  border-inline-start: var(--rule-width) solid var(--rule-control);
+}
+
+.netswitch button:hover {
+  color: var(--ink);
+  background-color: var(--paper);
+}
+
+.netswitch button[aria-pressed="true"] {
+  color: var(--ink);
+  background-color: var(--paper-sunk);
+}
+
+@media (max-width: 40rem) {
+  body > nav.subnav[data-admin] {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    gap: var(--space-4);
+    scrollbar-width: none;
+  }
+
+  body > nav.subnav[data-admin]::-webkit-scrollbar {
+    display: none;
+  }
+
+  body > nav.subnav[data-admin] > * {
+    flex: none;
+  }
+
+  body > nav.subnav[data-admin] a[data-group-start] {
+    margin-inline-start: var(--space-2);
+  }
+}
+
+/* 2. The overview's attention list. A ruled list, one problem per row, the verdict
+      ink on the sentence and the page that fixes it at the row's right edge in the
+      Label face — the same weight as a filter link, because it is a way to go, not a
+      button. No container: the rules are the structure. */
+
+.attention {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.attention li {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: var(--space-1) var(--space-5);
+  max-width: none;
+  margin: 0;
+  padding-block: var(--space-3);
+  border-bottom: var(--rule-width) solid var(--rule);
+  font-family: var(--font-mono);
+  font-size: var(--size-listing);
+  line-height: var(--leading-listing);
+}
+
+.attention a {
+  font-size: var(--size-label);
+  font-weight: var(--weight-medium);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+/* Flow beside balances on a desk, stacked below one. Two `dl`s that answer different
+   questions ("what happened", "what is true now") read better side by side than as one
+   eleven-line list, and each keeps its own heading. */
+
+.split {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 30rem), 1fr));
+  gap: 0 var(--space-7);
+}
+
+.split dl {
+  grid-template-columns: minmax(0, 8rem) minmax(0, 1fr);
+}
+
+/* A value that must be complete to be useful — an address — may wrap in a `dl`, where
+   it is read rather than scanned down a column. */
+
+dd.address {
+  overflow-wrap: anywhere;
+}
+
+/* A section folded shut: the takedown on a listing's admin page. Closed by default so
+   the page reads as a report first, and opening it is a deliberate act. */
+
+details.danger {
+  margin-bottom: var(--space-7);
+  border-top: var(--rule-width) solid var(--rule-strong);
+}
+
+details.danger > summary {
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+  cursor: pointer;
+  list-style: none;
+  font-family: var(--font-mono);
+  font-size: var(--size-headline);
+  font-weight: var(--weight-medium);
+}
+
+details.danger > summary::-webkit-details-marker {
+  display: none;
+}
+
+details.danger > summary:focus-visible {
+  box-shadow: var(--focus-ring);
+}
+
+/* 3. Admin tables on a phone become ruled rows rather than squeezed columns. Four
+      columns at 390px broke a slug one character per line and pushed the money table
+      78px past the screen. Each row now flows: the lead cell (`data-lead`) takes the
+      first line at full width, the rest follow it as a line of facts. Column headers
+      stay for assistive technology and leave the screen; every value that remains is
+      self-describing (a status word, a date, an amount). The density tiers still hold —
+      the selectors below restate them because a `display` on the cell would otherwise
+      bring hidden columns back. */
+
+@media (max-width: 40rem) {
+  table.feed thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  table.feed,
+  table.feed tbody {
+    display: block;
+  }
+
+  table.feed caption {
+    display: block;
+    text-align: left;
+  }
+
+  table.feed tr {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: var(--space-1) var(--space-3);
+    padding-block: var(--space-3);
+    border-bottom: var(--rule-width) solid var(--rule);
+  }
+
+  table.feed td,
+  table.feed td:not(.wrap),
+  table.feed td.wrap {
+    display: block;
+    height: auto;
+    min-width: 0;
+    padding: 0;
+    border: 0;
+    white-space: normal;
+    text-align: left;
+  }
+
+  table.feed td[data-lead] {
+    order: -1;
+    flex: 1 0 100%;
+  }
+
+  table.feed td:not(.x)[data-col="optional"],
+  table.feed td:not(.x)[data-col="dense"],
+  table.feed td:not(.x)[data-col="wide"] {
+    display: none;
+  }
+}

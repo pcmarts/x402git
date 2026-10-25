@@ -1,0 +1,39 @@
+x402git
+Copyright (C) 2026 x402git contributors
+
+Licensing
+---------
+
+The x402git application in this repository is licensed under the GNU Affero
+General Public License, version 3 only (AGPL-3.0-only). The full text is in
+LICENSE. If you run a modified copy as a network service, the AGPL requires
+you to offer its source to the users of that service.
+
+The agent skills in lib/skills/ (the *.md files) are licensed under the MIT
+License. See lib/skills/LICENSE.
+
+The exclusions below take precedence over both licences.
+
+Excluded from the licence
+-------------------------
+
+1. Third-party logos. The files in public/logos/ (claude.svg, copilot.svg,
+   cursor.svg, gemini.svg, grok.svg, manus.svg, openai.svg, openclaw.png) are
+   trademarks of their respective owners. They are used nominatively, only to
+   name the tools x402git works with, and do not imply endorsement. They are
+   not licensed under the AGPL or MIT, and no rights in them are granted.
+
+2. Operator legal text. public/terms.md, public/buyer-terms.md and
+   public/abuse.md are the legal terms and policies of the operator of
+   x402git.com. All rights reserved. They are not licensed for reuse; if you
+   run your own deployment, write your own terms.
+
+3. The x402git brand. public/icon-512.png and the names and marks "x402git"
+   and "X402 Git" are not licensed under the AGPL or MIT. See TRADEMARKS.md.
+
+Fonts
+-----
+
+Public Sans and Azeret Mono are licensed under the SIL Open Font License,
+version 1.1. They are fetched at build time through next/font/google and are
+not included in this repository.

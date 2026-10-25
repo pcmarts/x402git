@@ -1,0 +1,162 @@
+{
+  "schema_version": 1,
+  "diagram_type": "dataflow",
+  "meta": {
+    "title": "Where a $9.00 payment goes",
+    "output": "diagrams/payment-split.html",
+    "viewBox": [
+      1080,
+      440
+    ],
+    "quality_profile": "showcase"
+  },
+  "stages": [
+    {
+      "label": "Payment"
+    },
+    {
+      "label": "Settles"
+    },
+    {
+      "label": "Split"
+    },
+    {
+      "label": "Payout"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "buyer_wallet",
+      "type": "external",
+      "label": "Buyer's wallet",
+      "sublabel": "$9.00 USDC",
+      "stage": 0,
+      "row": 0,
+      "tag": "Base"
+    },
+    {
+      "id": "platform_addr",
+      "type": "backend",
+      "label": "Platform address",
+      "sublabel": "settlement lands here",
+      "stage": 1,
+      "row": 0,
+      "tag": "on chain"
+    },
+    {
+      "id": "holdback",
+      "type": "database",
+      "label": "Your 90%",
+      "sublabel": "$8.10 \u00b7 held 7 days",
+      "stage": 2,
+      "row": 0,
+      "tag": "holdback"
+    },
+    {
+      "id": "fee",
+      "type": "database",
+      "label": "Platform fee",
+      "sublabel": "$0.90 \u00b7 flat 10%",
+      "stage": 2,
+      "row": 1,
+      "tag": "revenue"
+    },
+    {
+      "id": "creator_wallet",
+      "type": "external",
+      "label": "Your bound wallet",
+      "sublabel": "$8.10 arrives",
+      "stage": 3,
+      "row": 0,
+      "tag": "only destination"
+    },
+    {
+      "id": "refunds",
+      "type": "security",
+      "label": "Takedown refunds",
+      "sublabel": "paid from the holdback",
+      "stage": 3,
+      "row": 1,
+      "tag": "if ever"
+    }
+  ],
+  "flows": [
+    {
+      "id": "settle",
+      "from": "buyer_wallet",
+      "to": "platform_addr",
+      "label": "one signed transfer",
+      "classification": "USDC on Base",
+      "variant": "emphasis"
+    },
+    {
+      "id": "net",
+      "from": "platform_addr",
+      "to": "holdback",
+      "label": "$8.10 \u00b7 your 90%",
+      "classification": "net",
+      "variant": "emphasis",
+      "route": "straight",
+      "fromSide": "right",
+      "toSide": "left",
+      "labelDy": -26
+    },
+    {
+      "id": "fee_cut",
+      "from": "platform_addr",
+      "to": "fee",
+      "label": "$0.90 \u00b7 the only fee",
+      "classification": "10% of gross",
+      "variant": "default"
+    },
+    {
+      "id": "sweep",
+      "from": "holdback",
+      "to": "creator_wallet",
+      "label": "sweeps after 7 days",
+      "classification": "automatic",
+      "variant": "emphasis",
+      "route": "straight",
+      "fromSide": "right",
+      "toSide": "left",
+      "labelDy": -26
+    },
+    {
+      "id": "refund_path",
+      "from": "holdback",
+      "to": "refunds",
+      "label": "a takedown refund",
+      "classification": "the only revocation",
+      "variant": "dashed"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "One flat fee",
+      "items": [
+        "10% of each payment \u2014 the first sale and every update after it",
+        "No listing fee, no monthly fee, no payout fee",
+        "At $9.00 you keep $8.10"
+      ]
+    },
+    {
+      "dot": "cyan",
+      "title": "Seven days, then your wallet",
+      "items": [
+        "Your share sweeps automatically \u2014 there is nothing to withdraw",
+        "The holdback is the only time the platform holds money you earned",
+        "It exists so a takedown refund has somewhere to come from"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "No other destination",
+      "items": [
+        "Payouts go only to the address you bound and proved with a signature",
+        "No field anywhere in the product sends earnings elsewhere",
+        "Changing the address takes a signature from the current one and 48 hours"
+      ]
+    }
+  ]
+}

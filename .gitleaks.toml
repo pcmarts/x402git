@@ -1,0 +1,29 @@
+# gitleaks: the default rules, plus an allowlist for known-public test values.
+# Read by gitleaks-action in CI and by a local `gitleaks git` / `gitleaks dir`.
+# Every value allowed here is published and worthless. Never add a real credential,
+# and never allowlist a whole test directory: a real key pasted into a test must still fail.
+
+title = "x402git"
+
+[extend]
+useDefault = true
+
+# The singular [allowlist] table, not [[allowlists]]: gitleaks-action pins gitleaks 8.24,
+# which predates the plural form.
+[allowlist]
+description = "Public test fixtures"
+regexTarget = "match"
+regexes = [
+  # Hardhat / Anvil default account #1: a published, unfunded test key.
+  '''0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d''',
+  # Hardhat / Anvil default account #9.
+  '''0x8b3a350cf5c34c9194ca85829a2df0ec3153be0318b5e2d3348e872092edffba''',
+  # A scanner rule id (lib/scan), not a key.
+  '''x402git/secrets''',
+  # Base Sepolia USDC: a public token contract address, used as a Permit2 test fixture.
+  '''0x036CbD53842c5426634e7929541eC2318f3dCF7e''',
+]
+paths = [
+  # The secret scanner's own fixtures: fake Slack, AWS and generic keys it must detect.
+  '''^lib/scan/secrets\.test\.ts$''',
+]

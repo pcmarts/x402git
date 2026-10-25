@@ -1,0 +1,67 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "Buying a repository over x402",
+    "output": "diagrams/x402-exchange.html",
+    "viewBox": [1080, 620],
+    "column_fit": "spread",
+    "quality_profile": "showcase"
+  },
+  "participants": [
+    { "id": "buyer", "type": "external", "label": "Buyer", "sublabel": "person or agent" },
+    { "id": "platform", "type": "backend", "label": "X402 Git", "sublabel": "quote · verify · grant" },
+    { "id": "facilitator", "type": "cloud", "label": "Facilitator", "sublabel": "submits, pays gas" },
+    { "id": "base", "type": "database", "label": "Base", "sublabel": "USDC ledger" }
+  ],
+  "segments": [
+    { "from": 150, "to": 246, "label": "Quote" },
+    { "from": 264, "to": 312, "label": "Pay" },
+    { "from": 330, "to": 492, "label": "Settle" },
+    { "from": 498, "to": 534, "label": "Deliver" }
+  ],
+  "messages": [
+    { "from": "buyer", "to": "platform", "y": 180, "label": "GET the repository", "variant": "emphasis" },
+    { "from": "platform", "to": "buyer", "y": 222, "label": "402 · price + quote_id", "variant": "return", "note": "The price is quoted per caller: full, update, or already owned" },
+    { "from": "buyer", "to": "platform", "y": 288, "label": "same GET · signed USDC authorization", "variant": "emphasis", "note": "The wallet signs the exact amount; keys never leave it" },
+    { "from": "platform", "to": "facilitator", "y": 354, "label": "verify + settle", "variant": "security", "note": "Payer screened and quote re-checked first" },
+    { "from": "facilitator", "to": "base", "y": 396, "label": "transfer · gas sponsored", "variant": "default" },
+    { "from": "base", "to": "facilitator", "y": 438, "label": "tx hash", "variant": "return" },
+    { "from": "facilitator", "to": "platform", "y": 480, "label": "settled", "variant": "return" },
+    { "from": "platform", "to": "buyer", "y": 518, "label": "200 · download URL, 5 minutes", "variant": "emphasis", "note": "Access exists only after the tx hash does" }
+  ],
+  "activations": [
+    { "participant": "platform", "from": 170, "to": 528, "type": "backend" },
+    { "participant": "facilitator", "from": 348, "to": 486, "type": "cloud" },
+    { "participant": "base", "from": 390, "to": 444, "type": "database" }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "The 402 is the checkout",
+      "items": [
+        "No account, no card, no checkout page — the payment is the identity",
+        "The price is quoted on every request, so an agent buys the same way a person does",
+        "A $0 listing skips payment entirely and grants on the first GET"
+      ]
+    },
+    {
+      "dot": "cyan",
+      "title": "Settle before grant",
+      "items": [
+        "The payer is screened before any money moves",
+        "quote_id pins the terms: a mid-flight price change is a fresh 402, never a surprise",
+        "A purchase row exists only after a transaction hash does"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "The receipt is on chain",
+      "items": [
+        "The Base transaction is the receipt",
+        "A resent authorization is answered from the ledger, not charged again",
+        "Re-download any owned version later by signing with the same wallet"
+      ]
+    }
+  ]
+}

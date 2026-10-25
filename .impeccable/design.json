@@ -1,0 +1,429 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-08-29T21:09:31.985271Z",
+  "title": "Design System: X402 Git",
+  "extensions": {
+    "colorMeta": {
+      "paper": {
+        "role": "neutral",
+        "displayName": "Sheet",
+        "canonical": "oklch(97.6% 0.003 106.4)",
+        "tonalRamp": [
+          "#0B0B0A",
+          "#262625",
+          "#454543",
+          "#666664",
+          "#898987",
+          "#AEAEAC",
+          "#D4D4D2",
+          "#EEEEEC"
+        ]
+      },
+      "paper-sunk": {
+        "role": "neutral",
+        "displayName": "Sunk Sheet",
+        "canonical": "oklch(95.1% 0.004 106.5)",
+        "tonalRamp": [
+          "#0B0B09",
+          "#272724",
+          "#454543",
+          "#666664",
+          "#898987",
+          "#AEAEAB",
+          "#D4D4D1",
+          "#EFEFEC"
+        ]
+      },
+      "rule": {
+        "role": "neutral",
+        "displayName": "Hairline",
+        "canonical": "oklch(89.9% 0.005 106.5)",
+        "tonalRamp": [
+          "#0B0B09",
+          "#272724",
+          "#454542",
+          "#666663",
+          "#898986",
+          "#AEAEAA",
+          "#D4D4D0",
+          "#EFEFEB"
+        ]
+      },
+      "rule-strong": {
+        "role": "neutral",
+        "displayName": "Hairline Strong",
+        "canonical": "oklch(79.6% 0.010 106.6)",
+        "tonalRamp": [
+          "#0C0B07",
+          "#272721",
+          "#454540",
+          "#666660",
+          "#8A8A83",
+          "#AEAEA7",
+          "#D5D5CE",
+          "#EFEFE8"
+        ]
+      },
+      "rule-control": {
+        "role": "neutral",
+        "displayName": "Control Edge",
+        "canonical": "oklch(63.1% 0.010 106.7)",
+        "tonalRamp": [
+          "#0C0B07",
+          "#272721",
+          "#45453F",
+          "#676760",
+          "#8A8A83",
+          "#AEAEA7",
+          "#D5D5CD",
+          "#EFEFE7"
+        ]
+      },
+      "ink": {
+        "role": "neutral",
+        "displayName": "Ink",
+        "canonical": "oklch(21.8% 0.000 89.9)",
+        "tonalRamp": [
+          "#0B0B0B",
+          "#262626",
+          "#454545",
+          "#666666",
+          "#898989",
+          "#AEAEAE",
+          "#D4D4D4",
+          "#EEEEEE"
+        ]
+      },
+      "ink-muted": {
+        "role": "neutral",
+        "displayName": "Ash",
+        "canonical": "oklch(52.8% 0.000 89.9)",
+        "tonalRamp": [
+          "#0B0B0B",
+          "#262626",
+          "#454545",
+          "#666666",
+          "#898989",
+          "#AEAEAE",
+          "#D4D4D4",
+          "#EEEEEE"
+        ]
+      },
+      "accent": {
+        "role": "primary",
+        "displayName": "Ledger Green",
+        "canonical": "oklch(47.8% 0.098 164.9)",
+        "tonalRamp": [
+          "#001502",
+          "#00341A",
+          "#005537",
+          "#1C7758",
+          "#479C7A",
+          "#6EC29E",
+          "#95E9C4",
+          "#AFFFDE"
+        ]
+      },
+      "accent-deep": {
+        "role": "primary",
+        "displayName": "Ledger Green Deep",
+        "canonical": "oklch(39.0% 0.080 163.7)",
+        "tonalRamp": [
+          "#001403",
+          "#00321B",
+          "#085239",
+          "#347459",
+          "#58997C",
+          "#7DBEA0",
+          "#A3E5C6",
+          "#BDFFE0"
+        ]
+      },
+      "status-fail": {
+        "role": "tertiary",
+        "displayName": "Fail Red",
+        "canonical": "oklch(46.9% 0.174 27.2)",
+        "tonalRamp": [
+          "#390000",
+          "#620000",
+          "#8B0000",
+          "#B42C28",
+          "#DF554B",
+          "#FF7C6F",
+          "#FFA394",
+          "#FFBEAE"
+        ]
+      },
+      "status-warn": {
+        "role": "tertiary",
+        "displayName": "Caution Ochre",
+        "canonical": "oklch(50.8% 0.108 73.3)",
+        "tonalRamp": [
+          "#230000",
+          "#441800",
+          "#663900",
+          "#8B5B01",
+          "#B07E36",
+          "#D7A35C",
+          "#FFC982",
+          "#FFE49C"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "display": {
+        "displayName": "Display",
+        "purpose": "One per page. The listing's owner/slug@version line; the dashboard's handle. text-wrap: balance."
+      },
+      "headline": {
+        "displayName": "Headline",
+        "purpose": "Section heads (CONTENTS, README, RELEASES, DEPENDENCIES), each carrying its own 1px rule-strong underline."
+      },
+      "title": {
+        "displayName": "Title",
+        "purpose": "Sub-heads inside a section; the label on a pricing preset."
+      },
+      "body": {
+        "displayName": "Body",
+        "purpose": "Human-written prose only — rendered README, changelog bodies, page copy. Capped at 68ch."
+      },
+      "body-small": {
+        "displayName": "Body Small",
+        "purpose": "Captions, footnotes, and the earnings sentence under a price field."
+      },
+      "listing": {
+        "displayName": "Listing",
+        "purpose": "The workhorse. Every table cell, form control, button label, address, hash and price. Tabular numerals."
+      },
+      "label": {
+        "displayName": "Label",
+        "purpose": "Table column headers, form labels, legends. The only uppercase in the system. Never a kicker above a heading."
+      }
+    },
+    "shadows": [],
+    "motion": [
+      {
+        "name": "transition",
+        "value": "100ms ease-out",
+        "purpose": "The entire motion budget. Applies to background-color, border-color and color on interactive elements only. No entrance animation, no reveals, no spinners, no skeletons."
+      },
+      {
+        "name": "snap",
+        "value": "0ms",
+        "purpose": "The hovered table row changes ground with no transition. A cursor line in a listing does not fade in."
+      }
+    ],
+    "structure": [
+      {
+        "name": "rule-width",
+        "value": "1px",
+        "purpose": "Every border in the system. Weight never varies; only the grey does."
+      },
+      {
+        "name": "radius",
+        "value": "0",
+        "purpose": "Every corner. The token exists so no component reintroduces a radius."
+      },
+      {
+        "name": "row-height",
+        "value": "1.75rem",
+        "purpose": "A data row: a 22px line in 4px of padding."
+      },
+      {
+        "name": "measure",
+        "value": "68ch",
+        "purpose": "Prose cap, independent of container width."
+      },
+      {
+        "name": "container",
+        "value": "76rem",
+        "purpose": "The sheet. Centred, with --gutter either side."
+      },
+      {
+        "name": "gutter",
+        "value": "clamp(1rem, 4vw, 2rem)",
+        "purpose": "Horizontal page padding."
+      },
+      {
+        "name": "tap",
+        "value": "2.75rem",
+        "purpose": "Minimum height of any interactive control."
+      },
+      {
+        "name": "focus-ring",
+        "value": "0 0 0 2px var(--paper), 0 0 0 4px var(--ink)",
+        "purpose": "The only box-shadow in the system, and it is a ring, not depth. Same ring on every focusable element, legible on paper and on the accent ground."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "compact",
+        "value": "40rem"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Order Line (Primary Button)",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "The single paid action. One per page, at the end of the listing, carrying version and price. The only element that wears the accent as a ground.",
+      "html": "<button class=\"ds-btn-primary\" data-variant=\"primary\">Get 4.1.2 &mdash; $9.00</button>",
+      "css": ".ds-btn-primary { display: inline-flex; align-items: center; justify-content: center; gap: var(--space-2); font-family: var(--font-mono); font-size: var(--size-listing); font-weight: var(--weight-medium); line-height: var(--leading-listing); color: var(--paper); background-color: var(--accent); border: var(--rule-width) solid var(--accent); border-radius: var(--radius); padding: var(--space-2) var(--space-4); min-height: var(--tap); cursor: pointer; transition: background-color var(--transition), border-color var(--transition), color var(--transition); } .ds-btn-primary:hover { background-color: var(--accent-deep); border-color: var(--accent-deep); } .ds-btn-primary:focus-visible { outline: none; box-shadow: var(--focus-ring); } .ds-btn-primary:disabled { color: var(--ink-muted); background-color: var(--paper-sunk); border-color: var(--rule); cursor: not-allowed; }"
+    },
+    {
+      "name": "Secondary Button",
+      "kind": "button",
+      "refersTo": "button-secondary",
+      "description": "The default appearance of a bare <button>. Every non-paying action: publish, withdraw, link repository.",
+      "html": "<button class=\"ds-btn\">Publish release</button>",
+      "css": ".ds-btn { display: inline-flex; align-items: center; justify-content: center; gap: var(--space-2); font-family: var(--font-mono); font-size: var(--size-listing); font-weight: var(--weight-medium); line-height: var(--leading-listing); color: var(--ink); background-color: var(--paper); border: var(--rule-width) solid var(--rule-control); border-radius: var(--radius); padding: var(--space-2) var(--space-4); min-height: var(--tap); cursor: pointer; transition: background-color var(--transition), border-color var(--transition), color var(--transition); } .ds-btn:hover { background-color: var(--paper-sunk); border-color: var(--ink-muted); } .ds-btn:focus-visible { outline: none; box-shadow: var(--focus-ring); } .ds-btn:disabled { background-color: var(--paper-sunk); color: var(--ink-muted); border-color: var(--rule); cursor: not-allowed; }"
+    },
+    {
+      "name": "Quiet Button",
+      "kind": "button",
+      "refersTo": "button-quiet",
+      "description": "A form-submitting action that has to sit inline in a sentence or a table cell without becoming a button.",
+      "html": "<button class=\"ds-btn-quiet\" data-variant=\"quiet\">Revoke key</button>",
+      "css": ".ds-btn-quiet { font-family: var(--font-mono); font-size: var(--size-listing); font-weight: var(--weight-medium); color: var(--ink-muted); background-color: transparent; border: var(--rule-width) solid transparent; border-radius: var(--radius); padding: var(--space-2) 0; min-height: var(--tap); cursor: pointer; text-decoration: underline; text-decoration-color: var(--rule-control); text-underline-offset: 0.18em; transition: color var(--transition), text-decoration-color var(--transition); } .ds-btn-quiet:hover { color: var(--accent); text-decoration-color: var(--accent); } .ds-btn-quiet:focus-visible { outline: none; box-shadow: var(--focus-ring); }"
+    },
+    {
+      "name": "Field",
+      "kind": "input",
+      "refersTo": "input-field",
+      "description": "Repo URLs, wallet addresses, prices. All data, so monospace by default. A textarea is the exception and takes the text face.",
+      "html": "<label class=\"ds-label\" for=\"ds-price\">Price</label><input class=\"ds-input\" id=\"ds-price\" type=\"text\" value=\"9.00\" />",
+      "css": ".ds-label { display: block; font-family: var(--font-mono); font-size: var(--size-label); font-weight: var(--weight-medium); letter-spacing: var(--tracking-label); text-transform: uppercase; color: var(--ink-muted); margin-bottom: var(--space-2); } .ds-input { font-family: var(--font-mono); font-size: var(--size-listing); line-height: var(--leading-listing); color: var(--ink); background-color: var(--paper); border: var(--rule-width) solid var(--rule-control); border-radius: var(--radius); padding: var(--space-2) var(--space-3); min-height: var(--tap); width: 100%; max-width: 24rem; transition: border-color var(--transition); } .ds-input::placeholder { color: var(--ink-muted); opacity: 1; } .ds-input:hover { border-color: var(--ink-muted); } .ds-input:focus-visible { outline: none; box-shadow: var(--focus-ring); } .ds-input[aria-invalid=\"true\"] { border-color: var(--status-fail); } .ds-input:disabled { background-color: var(--paper-sunk); color: var(--ink-muted); border-color: var(--rule); cursor: not-allowed; }"
+    },
+    {
+      "name": "Long Listing (Table)",
+      "kind": "custom",
+      "refersTo": "table-row",
+      "description": "The signature component. File tree, dependency list, release log, purchase history and earnings ledger are all this one table. Real tab stops: first and last cells lose their outer padding so columns align flush with the container edge.",
+      "html": "<table class=\"ds-listing\"><caption>3,537 files &middot; 87.5 MB &middot; computed 2026-08-29</caption><thead><tr><th></th><th>Mode</th><th class=\"ds-num\">Size</th><th>Date</th><th>Path</th></tr></thead><tbody><tr><td></td><td>-rw-r--r--</td><td class=\"ds-num\">12.4 KB</td><td>2026-03-14</td><td>lib/core/access.ts</td></tr><tr><td>+</td><td>-rw-r--r--</td><td class=\"ds-num\">3.1 KB</td><td>2026-03-14</td><td>lib/core/quote.ts</td></tr><tr><td>M</td><td>-rw-r--r--</td><td class=\"ds-num\">880 B</td><td>2026-03-12</td><td>README.md</td></tr></tbody></table>",
+      "css": ".ds-listing { width: 100%; border-collapse: collapse; font-family: var(--font-mono); font-size: var(--size-listing); line-height: var(--leading-listing); font-variant-numeric: tabular-nums; } .ds-listing caption { text-align: left; font-family: var(--font-mono); font-size: var(--size-label); letter-spacing: var(--tracking-label); text-transform: uppercase; color: var(--ink-muted); padding-bottom: var(--space-2); } .ds-listing th { font-size: var(--size-label); font-weight: var(--weight-medium); line-height: var(--leading-label); letter-spacing: var(--tracking-label); text-transform: uppercase; color: var(--ink-muted); text-align: left; padding: var(--space-2) var(--space-3); border-bottom: var(--rule-width) solid var(--rule-strong); white-space: nowrap; } .ds-listing td { padding: var(--space-1) var(--space-3); min-height: var(--row-height); border-bottom: var(--rule-width) solid var(--rule); vertical-align: top; } .ds-listing th:first-child, .ds-listing td:first-child { padding-left: 0; } .ds-listing th:last-child, .ds-listing td:last-child { padding-right: 0; } .ds-listing .ds-num { text-align: right; white-space: nowrap; } .ds-listing tbody tr:hover { background-color: var(--paper-sunk); }"
+    },
+    {
+      "name": "Scan Verdict",
+      "kind": "chip",
+      "refersTo": "status-verdict",
+      "description": "A verdict is a word and an ink, never a pill. The word is always present, so the verdict reads identically to a screen reader and to curl.",
+      "html": "<p class=\"ds-verdict\"><span data-status=\"pass\">SCAN PASS</span> &middot; <span class=\"ds-prov\">secrets, CVE, licence &middot; analyzer 0.4.1 &middot; 2026-08-29T14:02Z</span></p>",
+      "css": ".ds-verdict { font-family: var(--font-mono); font-size: var(--size-listing); margin: 0; } .ds-verdict [data-status=\"pass\"] { color: var(--accent); } .ds-verdict [data-status=\"fail\"] { color: var(--status-fail); } .ds-verdict [data-status=\"warn\"] { color: var(--status-warn); } .ds-verdict [data-status=\"pending\"] { color: var(--ink-muted); } .ds-prov { font-size: var(--size-label); letter-spacing: var(--tracking-label); text-transform: uppercase; color: var(--ink-muted); }"
+    },
+    {
+      "name": "Link",
+      "kind": "nav",
+      "refersTo": "link",
+      "description": "Ink, always underlined. Colour alone never marks a link, in either face.",
+      "html": "<a class=\"ds-link\" href=\"#\">pbakaus/impeccable</a>",
+      "css": ".ds-link { color: var(--ink); text-decoration: underline; text-decoration-color: var(--rule-control); text-decoration-thickness: 1px; text-underline-offset: 0.18em; transition: color var(--transition), text-decoration-color var(--transition); } .ds-link:hover { color: var(--accent); text-decoration-color: var(--accent); } .ds-link:active { color: var(--accent-deep); } .ds-link:focus-visible { outline: none; box-shadow: var(--focus-ring); text-decoration-color: var(--ink); }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Long Listing",
+    "overview": "`tar -tvf` and `ls -l` produce the most trusted document in a developer's life: a complete enumeration of what is inside something, in fixed columns, with nothing withheld. That is exactly what this product sells. The manifest is public and the contents are private, so the manifest has to look like an inventory that could not be hiding anything — not like a store page with a picture of a box. The listing page *is* the listing: repo and version on the first line, computed facts under it, every path with its mode, size and date, the README set inline, the release log below, and the price on the last line where a total belongs.\n\nThe rendition is printed, not terminal. A green-on-black shell would be a costume; this world is the same output laid down in ink on a warm off-white sheet (paper #F7F7F5 / ink #1A1A1A), which is what a listing looks like when someone means to keep it. There is exactly one accent — a deep, unlit green (#0B6E4F) — and it is spent on the order line and on a passing scan. Nothing is rounded, nothing casts a shadow, and every rule on every page is one pixel.\n\nThe system's one product-specific invariant is typographic. PRODUCT.md requires that computed fields be visually distinct from creator-supplied ones, so the two faces carry that distinction and nothing else: Azeret Mono sets everything the platform computed or measured, and Public Sans sets everything a human wrote. A reader can tell provenance from the shape of the letters before reading a word.",
+    "keyCharacteristics": [
+      "One sheet of warm off-white paper, one ink, one accent, hairline rules.",
+      "Zero corner radius, zero shadows, zero gradients anywhere in the system.",
+      "Monospace marks machine-computed truth; the text face marks human authorship.",
+      "Tables are the primary component, not a fallback for one.",
+      "No motion beyond 100ms state changes; the cursor line snaps.",
+      "Semantic HTML with no classes must already look like the design."
+    ],
+    "rules": [
+      {
+        "name": "The Closed Ink Set Rule",
+        "body": "The system has eleven colours and no ramps. There is no --accent-light, no tint, no alpha wash over the accent, and no twelfth hex in any component file. If a state needs to read differently, it changes weight, ground, or rule colour — not hue.",
+        "section": "colors"
+      },
+      {
+        "name": "The Two Rule Greys Rule",
+        "body": "--rule and --rule-strong divide content; they are decoration and carry no contrast obligation. --rule-control outlines things a person operates and things they click. Never swap them: a control edge in --rule-strong fails WCAG 1.4.11 at 1.76:1.",
+        "section": "colors"
+      },
+      {
+        "name": "The One Order Line Rule",
+        "body": "Accent as a ground appears once per page, on the single paid action. Everything else clickable is ink on paper inside a hairline rectangle.",
+        "section": "colors"
+      },
+      {
+        "name": "The Verdict Ink Rule",
+        "body": "Fail Red and Caution Ochre belong to scan verdicts, invalid fields, and payment failure. They never appear as chrome, decoration, category colour, or emphasis. Price and the order line never borrow them.",
+        "section": "colors"
+      },
+      {
+        "name": "The AA Floor Rule",
+        "body": "Ash (#6B6B6B) is the lightest text in the system. Ghosted states in an update diff are rendered by dropping to Ash and removing weight, never by fading below it. Contrast is never spent on hierarchy.",
+        "section": "colors"
+      },
+      {
+        "name": "The Computed / Written Rule",
+        "body": "Every value the platform derived is set in Azeret Mono. Every string a person authored is set in Public Sans. The two faces are the disclosure boundary made visible, so neither may be used for the other's content for consistency.",
+        "section": "typography"
+      },
+      {
+        "name": "The No Kicker Rule",
+        "body": "The uppercase tracked Label style is for a table column header, a form label, and a legend. It is never a word placed above a heading. There are no eyebrows, no kickers, and no section numbers in this system.",
+        "section": "typography"
+      },
+      {
+        "name": "The Tabular Rule",
+        "body": "Anything a reader might compare down a column is right-aligned with font-variant-numeric: tabular-nums. The .num utility does both.",
+        "section": "typography"
+      },
+      {
+        "name": "The Last Line Rule",
+        "body": "The paid action sits at the end of the listing, after the reader has seen what they are buying, as a full-width bar carrying price and version. Not sticky, not floated, not duplicated at the top. Never bill blind is a layout decision before it is a copy decision.",
+        "section": "layout"
+      },
+      {
+        "name": "The Bare HTML Rule",
+        "body": "globals.css styles elements, not classes. A page built from h1, table, p, a, button and input with no class attribute must already render as this design system. Agents and curl are first-class readers.",
+        "section": "layout"
+      },
+      {
+        "name": "The Flat Sheet Rule",
+        "body": "If a change of ground and a hairline rule cannot express a relationship, the relationship is wrong — reach for space or a heading, never for a shadow.",
+        "section": "elevation"
+      },
+      {
+        "name": "The Hairline Rule",
+        "body": "One pixel, one of two greys. A thicker or coloured rule is how this world stops looking printed and starts looking like a component library.",
+        "section": "shapes"
+      },
+      {
+        "name": "The Snap Rule",
+        "body": "The hovered table row changes ground instantly, with no transition, because a cursor line in a listing does not fade in. It is the one authored motion moment in the system, and it is the absence of motion.",
+        "section": "elevation"
+      }
+    ],
+    "dos": [
+      "Do set every platform-computed value in Azeret Mono and every human-written string in Public Sans, per The Computed / Written Rule.",
+      "Do style elements over classes, so a class-free semantic page already looks right. Every page must be legible and navigable with JavaScript disabled.",
+      "Do reference tokens: var(--ink), var(--space-4), var(--rule-width), var(--radius). A raw hex, px, or radius in a component file is a defect.",
+      "Do put the paid action once, at the end of the listing, as a full-width bar carrying version and price.",
+      "Do right-align and tabular-nums anything a reader compares down a column.",
+      "Do keep prose at 68ch (--measure) even when the container is 1216px wide.",
+      "Do put 48px above a heading and 12px below it.",
+      "Do state a scan verdict in words as well as ink, and put payment state in a role=\"status\" region.",
+      "Do label example listings as synthetic; there are no customers yet and no fabricated numbers, testimonials, or benchmarks may appear in any surface."
+    ],
+    "donts": [
+      "Don't introduce a twelfth colour, a tint, a ramp, or an alpha wash. Eleven inks.",
+      "Don't use Ledger Green as a ground more than once per page, and never on a non-paying action.",
+      "Don't use Fail Red or Caution Ochre for anything but a verdict, an invalid field, or a payment failure.",
+      "Don't add a box-shadow, gradient, blur, glass, or overlay. The focus ring is the only shadow property in the system and it is a ring, not depth.",
+      "Don't round a corner. --radius is 0 and there is no second radius token.",
+      "Don't vary rule weight. Every border is 1px; only its grey changes.",
+      "Don't wrap content sections in bordered boxes, and never nest a box in a box.",
+      "Don't place a kicker, eyebrow, or section number above a heading.",
+      "Don't use Inter, in any role, including as a fallback in a font stack.",
+      "Don't ship text lighter than Ash (#6B6B6B); render a ghosted diff state by dropping to Ash and removing weight, not by fading past AA.",
+      "Don't add entrance animation, scroll reveals, spinners, or skeleton states.",
+      "Don't put the price or the buy action above the manifest. Never bill blind.",
+      "Don't add zebra striping to a table that already has row rules.",
+      "Don't build a search box, a category browse, a rating, or a profile. This is not a marketplace and no surface may imply a second side of the market."
+    ]
+  }
+}

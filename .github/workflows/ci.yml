@@ -1,0 +1,91 @@
+# CI for pull requests and main. No repository secrets: the test suite is hermetic,
+# and nothing here settles testnet USDC (the FR-34 e2e stays a manual run).
+# The only token used is the automatic, read-only GITHUB_TOKEN that gitleaks needs
+# to list a pull request's commits.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Typecheck and test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+
+  audit:
+    name: npm audit (production deps)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+      - run: npm ci
+      # npm audit --omit=dev, minus the dated exceptions in .audit-allowlist.json;
+      # fails on any other high or critical advisory, and on an expired exception.
+      - run: npm run audit:check
+
+  gitleaks:
+    name: Secret scan (gitleaks)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      # v3 is v2 on the Node 24 runtime; v2 stopped running when GitHub removed Node 20.
+      # Personal-account repos need no GITLEAKS_LICENSE.
+      - uses: gitleaks/gitleaks-action@v3
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_ENABLE_COMMENTS: "false"
+
+  dco:
+    name: DCO sign-off
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Every commit carries Signed-off-by
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+          commits=$(git rev-list --no-merges "origin/${BASE_REF}..HEAD")
+          missing=0
+          for sha in $commits; do
+            msg=$(git log -1 --format=%B "$sha")
+            if ! grep -qE '^Signed-off-by: .+ <.+>' <<<"$msg"; then
+              echo "::error::Commit ${sha} has no Signed-off-by trailer. Sign with 'git commit -s'; see CONTRIBUTING.md."
+              missing=1
+            fi
+          done
+          exit $missing

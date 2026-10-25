@@ -1,0 +1,58 @@
+/**
+ * lib/listings/live.ts — every listing that is on sale right now, as `owner/slug`.
+ *
+ * One query, shared by the documents that enumerate the catalogue for a machine:
+ * `sitemap.xml` (search engines), `/.well-known/x402` and the per-listing paths in
+ * `/openapi.json` (x402 indexers such as x402scan), the Bazaar check script, and the MCP
+ * `search_listings` tool (lib/listings/search.ts). Drafts are out because they are not
+ * readable by URL; retired listings are out because there is nothing left to buy, though
+ * their pages still render (FR-43).
+ */
+
+import { db } from "@/lib/db";
+import { toMicro } from "@/lib/db/types";
+
+export type LiveListing = {
+  listingId: string;
+  handle: string;
+  slug: string;
+  publishedAt: Date;
+  /** The new-buyer price, micro-USDC. What an index that advertises one number gets. */
+  priceMicro: bigint;
+  /** What a holder pays for a later release, micro-USDC; 0 is lifetime (FR-16). */
+  updatePriceMicro: bigint;
+  /** The creator's own blurb (self-reported), or null. */
+  description: string | null;
+  /** The creator's "use this when…" line (self-reported), or null. */
+  triggerHint: string | null;
+};
+
+export async function liveListings(): Promise<LiveListing[]> {
+  const { data: listings, error } = await db()
+    .from("listing")
+    .select("id, slug, creator_id, published_at, price_micro, update_price_micro, description, trigger_hint")
+    .not("published_at", "is", null)
+    .is("retired_at", null);
+  if (error || !listings?.length) return [];
+
+  const creatorIds = [...new Set(listings.map((l) => l.creator_id as string))];
+  const { data: creators } = await db().from("creator").select("id, handle").in("id", creatorIds);
+  const handleById = new Map((creators ?? []).map((c) => [c.id as string, c.handle as string]));
+
+  const out: LiveListing[] = [];
+  for (const listing of listings) {
+    const handle = handleById.get(listing.creator_id as string);
+    if (!handle) continue;
+    out.push({
+      listingId: listing.id as string,
+      handle,
+      slug: listing.slug as string,
+      publishedAt: new Date(listing.published_at as string),
+      priceMicro: toMicro(listing.price_micro as string),
+      updatePriceMicro: toMicro(listing.update_price_micro as string),
+      description: (listing.description as string | null) ?? null,
+      triggerHint: (listing.trigger_hint as string | null) ?? null,
+    });
+  }
+  return out.sort((a, b) => a.handle.localeCompare(b.handle) || a.slug.localeCompare(b.slug));
+}

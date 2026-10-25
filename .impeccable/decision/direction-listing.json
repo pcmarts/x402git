@@ -1,0 +1,156 @@
+{
+  "title": "Choose the visual world for the listing page",
+  "question": "The roll assigned The Datasheet. Keep it, take the pick or an alternate, or re-roll.",
+  "options": [
+    {
+      "id": "assigned",
+      "label": "The Datasheet",
+      "kicker": "THE ROLL",
+      "lineage": "electronic component datasheets (TI, Analog Devices, 1970s–today)",
+      "thesis": "A private repo sold the way an engineer buys a part: every spec disclosed on one dense sheet, then an ordering block.",
+      "palette": ["#FFFFFF", "#141414", "#5C5C5C", "#C8102E"],
+      "materials": ["thin black rules", "two-column tabular print", "monospace numerals", "one red only"],
+      "viewport": "Part-number header (pbakaus / impeccable · Rev 4.1.2) across the top. Left: FEATURES as computed facts (3,537 files · 87.5 MB · Apache-2.0 · scan pass), DESCRIPTION from the README, then CONTENTS (file tree), DEPENDENCIES, REVISION HISTORY (release log). Right rail: ORDERING INFORMATION with price, update price and one order line, and ABSOLUTE MAXIMUM RATINGS (scan, size caps). Owned state: your revision printed solid in the history table, later revisions dashed, changed files bright and unchanged files ghosted, the order line reading UPDATE TO 4.1.2 · $3.",
+      "risk": "Reads like a PDF if the type is set at datasheet size; the sheet must be tabular in structure but sized and spaced for a screen.",
+      "raised": [
+        { "from": "challenger-brick", "raise": "Owned state: what you already have prints ghosted, what the update adds prints bright, so the diff is read before it is paid for." },
+        { "from": "challenger-sewing", "raise": "Revision history: the revision you own is the solid line, every other revision is dashed." },
+        { "from": "challenger-vu", "raise": "One red on the whole sheet, reserved for a failed scan; price and the order line never borrow it." },
+        { "from": "challenger-wpa", "raise": "One imperative per sheet: a single order line, GET 4.1.2 · $9, and nothing else asks for a click." },
+        { "from": "challenger-treasure", "raise": "Every computed number carries its provenance: computed-at and analyzer version in the table footers." },
+        { "from": "challenger-riso", "raise": "Total commitment to the ink set: three greys and one red, no tints, no gradients, no shadows." }
+      ],
+      "wireframe": { "cols": 12, "rows": 10, "regions": [
+        { "label": "part-number header · rev 4.1.2", "x": 0, "y": 0, "w": 12, "h": 1 },
+        { "label": "FEATURES · computed facts", "x": 0, "y": 1, "w": 8, "h": 1 },
+        { "label": "ORDERING INFORMATION · $9 · updates $3 · GET 4.1.2", "x": 8, "y": 1, "w": 4, "h": 2, "accent": true },
+        { "label": "DESCRIPTION · README", "x": 0, "y": 2, "w": 8, "h": 2 },
+        { "label": "ABSOLUTE MAXIMUM RATINGS · scan pass", "x": 8, "y": 3, "w": 4, "h": 2 },
+        { "label": "CONTENTS · file tree table", "x": 0, "y": 4, "w": 8, "h": 3 },
+        { "label": "DEPENDENCIES", "x": 8, "y": 5, "w": 4, "h": 2 },
+        { "label": "REVISION HISTORY · release log", "x": 0, "y": 7, "w": 12, "h": 3 }
+      ] }
+    },
+    {
+      "id": "model-pick",
+      "label": "The Long Listing",
+      "kicker": "IMPECCABLE’S PICK",
+      "lineage": "tar -tvf and ls -l terminal output",
+      "thesis": "The manifest is literally the listing: mode, size, date, path, in columns, and the price is the last line.",
+      "palette": ["#F7F7F5", "#1A1A1A", "#6B6B6B", "#0B6E4F"],
+      "materials": ["monospace columns", "fixed tab stops", "cursor-line highlight"],
+      "viewport": "A single monospace column listing that scrolls: header line with repo and version, then every path with its size and blob date, README rendered inline as a heredoc, dependencies as a second listing, release log as git log --oneline, and a final prompt line: $ pay 9.00 USDC.",
+      "risk": "The most familiar destination for a developer tool; many runs in this category land on a terminal look, and it can read as a costume if the columns are not real.",
+      "wireframe": { "cols": 12, "rows": 10, "regions": [
+        { "label": "$ x402 show pbakaus/impeccable@4.1.2", "x": 0, "y": 0, "w": 12, "h": 1 },
+        { "label": "long listing · mode size date path", "x": 0, "y": 1, "w": 12, "h": 4 },
+        { "label": "README <<EOF", "x": 0, "y": 5, "w": 12, "h": 2 },
+        { "label": "git log --oneline · release log", "x": 0, "y": 7, "w": 12, "h": 2 },
+        { "label": "$ pay 9.00 USDC", "x": 0, "y": 9, "w": 12, "h": 1, "accent": true }
+      ] }
+    },
+    {
+      "id": "challenger-brick",
+      "label": "Build Instructions",
+      "verdict": "competitive",
+      "lineage": "brick build-instruction booklets",
+      "thesis": "The repo as a numbered build: an inventory of parts up front, each release a step that adds bright pieces to a ghosted assembly.",
+      "palette": ["#9CC9EA", "#111111", "#D02A2A", "#F2C200"],
+      "materials": ["sky-blue page", "keyline ink", "1:1 call-out boxes", "stud grid"],
+      "viewport": "Parts inventory (file inventory by kind) in a cornered box, then release steps in sequence, the newest step's added files bright red against the ghosted prior tree, the order button as the bag number.",
+      "case": "Holds audience identification: developers recognise it instantly and the ghosted-prior / bright-new grammar is exactly the update state. Loses product clarity: a listing page needs prose and tables, and wordless arrows cannot carry a README or a licence.",
+      "risk": "Playful register can undercut a $9 purchase decision and the sky-blue ground fights dense text.",
+      "wireframe": { "cols": 12, "rows": 10, "regions": [
+        { "label": "step numeral · 4.1.2", "x": 0, "y": 0, "w": 2, "h": 2 },
+        { "label": "parts inventory · 1:1 call-outs", "x": 2, "y": 0, "w": 10, "h": 3 },
+        { "label": "assembly · ghosted prior tree, new files bright", "x": 0, "y": 3, "w": 9, "h": 6 },
+        { "label": "bag · $9", "x": 9, "y": 3, "w": 3, "h": 2, "accent": true },
+        { "label": "steps · release log", "x": 0, "y": 9, "w": 12, "h": 1 }
+      ] }
+    },
+    {
+      "id": "challenger-sewing",
+      "label": "Pattern Envelope",
+      "verdict": "declined",
+      "lineage": "home sewing pattern envelopes",
+      "thesis": "Views A/B/C as versions, nested size lines as releases.",
+      "palette": ["#E9DFC7", "#1B1B1B", "#C43B2B"],
+      "materials": ["manila tissue", "dashed cutting lines"],
+      "viewport": "Envelope front indexes versions; the chosen one prints solid.",
+      "case": "Developers do not identify with dressmaking, and the tissue metaphor obscures a file tree.",
+      "kept": "The chosen size solid, every other size dashed.",
+      "risk": "Reads as craft-fair whimsy on a purchase page."
+    },
+    {
+      "id": "challenger-vu",
+      "label": "VU Meter Bridge",
+      "verdict": "declined",
+      "lineage": "recording-desk VU meter bridges",
+      "thesis": "Releases as a row of identical meters read at a sweep.",
+      "palette": ["#F1E9D6", "#151515", "#B5121B"],
+      "materials": ["ivory meter faces", "glass", "walnut"],
+      "viewport": "A row of meters, one per release, needles resting.",
+      "case": "There is no live signal on a listing page; the meters would be decoration, and audiences do not identify a repo with a mixing desk.",
+      "kept": "The arc past zero is the only red the instrument allows.",
+      "risk": "Pure ornament without a signal to drive it."
+    },
+    {
+      "id": "challenger-riso",
+      "label": "Risograph System",
+      "verdict": "declined",
+      "lineage": "risograph print",
+      "thesis": "Two spot inks misregistered over paper.",
+      "palette": ["#F3E9D2", "#FF48B0", "#0033A0", "#F5C400"],
+      "materials": ["fluoro spot inks", "halftone grain"],
+      "viewport": "Cut-paper blocks in two inks; hover shudders the registration.",
+      "case": "Misregistration destroys legibility in exactly the dense tables this page is made of; identification with developers is incidental.",
+      "kept": "Total commitment to a small ink set.",
+      "risk": "Decorative noise on a disclosure surface."
+    },
+    {
+      "id": "challenger-treasure",
+      "label": "Treasure Map",
+      "verdict": "declined",
+      "lineage": "vellum treasure maps",
+      "thesis": "Navigation as inference across an aged chart.",
+      "palette": ["#D9C39A", "#4A3421", "#A4362B"],
+      "materials": ["vellum", "iron-gall ink"],
+      "viewport": "A chart with a faint red route rising under light.",
+      "case": "The product's whole point is that nothing is hidden; a map that rewards inference contradicts disclosure.",
+      "kept": "Every inference retains its provenance.",
+      "risk": "Theme-park register, and it argues against the product."
+    },
+    {
+      "id": "challenger-wpa",
+      "label": "WPA Park Poster",
+      "verdict": "declined",
+      "lineage": "WPA national-park travel posters",
+      "thesis": "Stacked flat planes and one imperative caption.",
+      "palette": ["#F4EBD3", "#1E6F6B", "#2F5D3A", "#C77B2A"],
+      "materials": ["four flat silkscreen inks", "caption bar"],
+      "viewport": "A flattened scene above a one-word imperative.",
+      "case": "A poster carries one sentence; the listing page carries three thousand file paths.",
+      "kept": "One imperative per sheet.",
+      "risk": "Nothing on the page to render as a landscape."
+    }
+  ],
+  "reroll": { "registers": ["safer", "bolder"] },
+  "buildPath": { "value": "code", "toggle": false },
+  "canon": true,
+  "canonCard": {
+    "label": "The category standard",
+    "thesis": "A package-registry product page: title, sidebar stats, tabs, a primary button.",
+    "palette": ["#FFFFFF", "#0D1117", "#6E7781", "#2563EB"],
+    "materials": ["clean grid", "sidebar metadata", "tabs"],
+    "viewport": "Repo title and description, README tab, stats sidebar with an install/buy button.",
+    "risk": "Indistinguishable from GitHub and npm by design.",
+    "wireframe": { "cols": 12, "rows": 10, "regions": [
+      { "label": "title · description", "x": 0, "y": 0, "w": 8, "h": 2 },
+      { "label": "buy · $9", "x": 8, "y": 0, "w": 4, "h": 2, "accent": true },
+      { "label": "tabs · README / files / releases", "x": 0, "y": 2, "w": 8, "h": 1 },
+      { "label": "README", "x": 0, "y": 3, "w": 8, "h": 7 },
+      { "label": "stats sidebar", "x": 8, "y": 2, "w": 4, "h": 8 }
+    ] }
+  },
+  "steer": true
+}

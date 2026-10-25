@@ -1,0 +1,8 @@
+[
+  {
+    "id": "GHSA-mrhx-c7xc-m3w5",
+    "reason": "zod 3.25.76 is pinned by @x402/* 2.x and @coinbase/* (they declare ^3.24 / ^3.25) and zod never patched 3.x; the app's own zod is 4.6.7 and does not carry the flaw. Remove when x402 upstream moves to zod 4 (tracked in docs/x402-upstream.md).",
+    "added": "2026-10-25",
+    "review_by": "2026-12-01"
+  }
+]

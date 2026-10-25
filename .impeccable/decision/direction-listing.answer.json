@@ -1,0 +1,38 @@
+{
+  "question": "direction-listing",
+  "seedKey": "edae2a0b",
+  "answeredAt": "2026-08-29T22:10:00Z",
+  "answeredBy": "agent",
+  "attended": false,
+  "optionId": "model-pick",
+  "label": "The Long Listing",
+  "buildPath": "code",
+  "rationale": [
+    "The decision page was served in the previous session (.impeccable/questions/edae2a0b.log) and closed unanswered — new-work.md's exit-4 path. This session has no structured question tool and no human channel, so per shape.md the assumptions are recorded rather than asked.",
+    "The founder's brief pins the direction: 'clean and simple', no Tailwind, no Inter, no gradients, no cards-in-cards, and impeccable's pick named explicitly. A brief-pinned direction beats the roll (new-work.md §3).",
+    "Product clarity decides it on the merits too. The assigned Datasheet puts ordering information in a right rail; PRODUCT.md requires every listing page to be fully legible through curl with JavaScript off, and a rail reads out of order as plain text. The Long Listing puts the price on the last line, which is both the form's own grammar and the correct linear reading order.",
+    "The craft-floor bans monospace worn as a costume for 'technical'. It is not a costume here: the page is made of paths, byte counts, dates, hashes and prices, which is the material a monospace face exists to set. The columns are real tables with real tab stops, which is the risk line on this card discharged.",
+    "The rendition deliberately avoids the terminal cliche the card warns about: paper ground, printed ink, no phosphor, no scanlines, no blinking cursor, no ASCII frame."
+  ],
+  "raisesTaken": [
+    { "from": "assigned-datasheet", "raise": "Every computed number carries its provenance — analyzer version and computed-at in the block footer." },
+    { "from": "challenger-brick", "raise": "Owned state: files already held print muted, files the update adds print bright, carried by a marker column as well as by weight." },
+    { "from": "challenger-sewing", "raise": "Release log: the release you own is the solid rule, every other release is dashed." },
+    { "from": "challenger-vu", "raise": "One red on the whole product, reserved for a failed scan; price and the order line never borrow it." },
+    { "from": "challenger-wpa", "raise": "One imperative per page — a single order line, and nothing else asks for a click." },
+    { "from": "challenger-riso", "raise": "Total commitment to the ink set: a closed eleven-value set, no tints, no gradients, no shadows." }
+  ],
+  "declined": {
+    "canon": "The package-registry product page (title, sidebar stats, tabs, one blue button) was on the table as the standing exit and was not taken. It is recorded in DESIGN.md as the confirmed anti-reference."
+  },
+  "outputs": [
+    "DESIGN.md",
+    "app/globals.css",
+    ".impeccable/design.json",
+    "app/layout.tsx (direction contract, first child of <body>)"
+  ],
+  "openForTheHuman": [
+    "The direction was chosen without a confirmation round. If Paul wants the Datasheet or the canon instead, re-run /impeccable shape and re-roll; nothing downstream has been built on this yet.",
+    "DESIGN.md is a pre-build seed. Re-run the impeccable documenter in scan mode once the listing page, dashboard and earnings view exist, and correct the file to what shipped."
+  ]
+}

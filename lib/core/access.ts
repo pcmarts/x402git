@@ -1,0 +1,812 @@
+/**
+ * lib/core/access.ts — the only module that knows about entitlements or money.
+ *
+ * Every surface (resource API, version endpoint, MCP tools, the buy button) calls
+ * `quote`; only paid paths call `grant`. See PRD Final.md §11.
+ *
+ * Money is micro-USDC as bigint. Never a float.
+ *
+ * The whole entitlement model is one WHERE clause (PRD §12):
+ *
+ *   purchase WHERE listing_id AND buyer_address AND revoked_at IS NULL
+ *            AND (release_id = N OR all_versions OR granted_at > now() - 7 days)
+ *
+ * It is implemented once, in `entitlingPurchase`, and every branch of `quote` goes
+ * through it. The three disjuncts are FR-19 (you keep what you bought), FR-16 (a $0
+ * update price stamps lifetime access) and FR-18 (at most one update charge per
+ * listing per 7 days).
+ */
+
+import { createHash } from "node:crypto";
+import { buyLinks, chainLabel, paymentInstructions } from "@/lib/buy-links";
+import { db } from "@/lib/db";
+import type { CreatorRow, ListingRow, PurchaseKind, PurchaseRow, PurchaseSource, ReleaseRow } from "@/lib/db/types";
+import { fromMicro, toMicro } from "@/lib/db/types";
+import { appUrl, holdbackDays as holdbackDaysEnv, paymentChain, platformFeeBps, usdcAddress, x402Config } from "@/lib/env";
+import { ApiError } from "@/lib/errors";
+import { DiffSummary, type PaymentRequiredBodyOutput, type ReleaseLogEntryOutput } from "@/lib/schemas";
+import { PLATFORM_FEE_BPS, splitFee } from "@/lib/core/fee";
+import { signedUrl } from "@/lib/storage";
+import { assetDomain } from "@/lib/x402/asset";
+import { bazaarExtensions, type DiscoveryHints, discoveryHints, serviceMetadata } from "@/lib/x402/bazaar";
+
+/**
+ * D6's split lives in `lib/core/fee.ts` — a file with no imports, so a browser bundle
+ * can carry it — and is re-exported here so that this module stays the single address
+ * every caller asks about money at. One implementation, two import paths.
+ */
+export { PLATFORM_FEE_BPS, splitFee };
+
+export type Address = `0x${string}`;
+
+export type ListingRef = { owner: string; slug: string };
+
+export type Release = {
+  id: string;
+  listingId: string;
+  version: string;
+  artifactSha256: string;
+  storagePath: string;
+  publishedAt: Date;
+};
+
+/**
+ * FR-15's public release-log row, in the shape `lib/schemas/releases.ts` publishes and
+ * the OpenAPI document names. The update 402 carries these verbatim (FR-17), so the
+ * quote holds the wire shape rather than a second, camel-cased one that would have to be
+ * translated — and mistranslated — on the way out.
+ */
+export type ReleaseLogEntry = ReleaseLogEntryOutput;
+
+export type Purchase = {
+  id: string;
+  listingId: string;
+  releaseId: string;
+  buyerAddress: Address;
+  allVersions: boolean;
+  updatePriceAtPurchase: bigint;
+  kind: PurchaseKind;
+  source: PurchaseSource;
+  grossMicro: bigint;
+  feeMicro: bigint;
+  netMicro: bigint;
+  txHash: string | null;
+  paymentNonce: string | null;
+  grantedAt: Date;
+  holdbackUntil: Date;
+  revokedAt: Date | null;
+};
+
+export type PaymentRequiredQuote = {
+  kind: "payment_required";
+  /** Which listing this quote is for. `toPaymentRequirements` needs the URLs. */
+  ref: ListingRef;
+  listingId: string;
+  release: Release;
+  priceMicro: bigint;
+  reason: "new" | "update";
+  releasesSince: ReleaseLogEntry[];
+  quoteId: string;
+  /** The listing's *current* update price — what a buyer is stamped with (FR-16). */
+  updatePriceMicro: bigint;
+  /** `update` only: the newest version this buyer already holds. */
+  ownedVersion: string | null;
+  /** Product copy inputs for the 402 `description` (§13 — an agent reads it). */
+  listingDescription: string | null;
+  artifactKind: string | null;
+  /** Computed manifest facts the Bazaar declaration is built from (lib/x402/bazaar.ts). */
+  discovery: DiscoveryHints;
+};
+
+export type Quote =
+  | { kind: "granted"; release: Release; purchase: Purchase }
+  | PaymentRequiredQuote
+  | { kind: "unavailable"; code: "not_found" | "retired" | "no_release" | "not_entitled" };
+
+export type SettleResult = { txHash: string; nonce: string; amountMicro: bigint };
+
+/**
+ * What `toPaymentRequirements` produces. Two views of one quote:
+ *
+ * - `body` is the 402 JSON *and* the `PAYMENT-REQUIRED` header payload.
+ * - `accepts` is the canonical x402 v2 requirement the facilitator is called with.
+ *
+ * They are separate because `@x402/core`'s v2 schema strips every field it does not
+ * name, so the requirement a client echoes back in `accepted` is the canonical one.
+ * See DECISIONS.md, "the 402 body carries both spellings".
+ */
+export type X402Requirement = {
+  scheme: "exact";
+  network: string;
+  amount: string;
+  asset: string;
+  payTo: string;
+  maxTimeoutSeconds: number;
+  extra: { name: string; version: string };
+};
+
+export type PaymentRequirements = {
+  body: PaymentRequiredBodyOutput;
+  accepts: X402Requirement[];
+  quoteId: string;
+  priceMicro: bigint;
+};
+
+/** FR-27: fixed holdback. */
+export const HOLDBACK_DAYS = 7;
+
+/** FR-18: a holder is charged at most one update per listing per this many days. */
+export const UPDATE_BILLING_WINDOW_DAYS = 7;
+
+/** §7.4: a signed download URL lives five minutes. */
+export const DOWNLOAD_TTL_SEC = 300;
+
+/** §13: the payer has this long to submit the authorization. */
+export const PAYMENT_TIMEOUT_SEC = 300;
+
+/**
+ * FR-16: a holder pays the lower of the update price stamped on their purchase
+ * and the listing's current update price. A stamped $0 is lifetime (all_versions)
+ * and never reaches this function.
+ */
+export function updatePriceFor(purchase: Pick<Purchase, "updatePriceAtPurchase">, currentUpdatePriceMicro: bigint): bigint {
+  return purchase.updatePriceAtPurchase < currentUpdatePriceMicro ? purchase.updatePriceAtPurchase : currentUpdatePriceMicro;
+}
+
+// ---------------------------------------------------------------------------
+// Resolution helpers — exported because `/api/v` needs the public columns of a
+// listing whose quote came back `unavailable`, and nothing outside this module
+// should be reading `listing` for a money decision.
+// ---------------------------------------------------------------------------
+
+export type ResolvedListing = { creator: CreatorRow; listing: ListingRow };
+
+export async function resolveListing(ref: ListingRef): Promise<ResolvedListing | null> {
+  const { data: creatorRow, error: creatorError } = await db().from("creator").select("*").eq("handle", ref.owner).maybeSingle();
+  if (creatorError) throw creatorError;
+  if (!creatorRow) return null;
+  const creator = creatorRow as CreatorRow;
+
+  const { data: listingRow, error: listingError } = await db()
+    .from("listing")
+    .select("*")
+    .eq("creator_id", creator.id)
+    .eq("slug", ref.slug)
+    .maybeSingle();
+  if (listingError) throw listingError;
+  if (!listingRow) return null;
+
+  return { creator, listing: listingRow as ListingRow };
+}
+
+/**
+ * §12: "latest sellable = newest `pass`". Ordered by creation, not by semver.
+ *
+ * The licence does not gate the sale. Until 2026-09-02 a release whose per-release
+ * verdict was `block` was skipped here in favour of the newest *licensed* one (W1.8 /
+ * FR-36); the founder took that gate off for the first release along with the publish
+ * gate, because half a change is worse than none — a listing that publishes without a
+ * licence and then has nothing sellable is a dead listing with no error to explain it.
+ * `release.licence_verdict` is still stamped on every cut and still read by the manifest;
+ * it just no longer decides what sells. See DECISIONS.md, "The licence gate is a signal,
+ * not a gate". The scan gate is untouched and still terminal.
+ */
+export async function latestPassingRelease(listingId: string): Promise<ReleaseRow | null> {
+  const { data, error } = await db()
+    .from("release")
+    .select("*")
+    .eq("listing_id", listingId)
+    .eq("scan", "pass")
+    .order("created_at", { ascending: false });
+  if (error) throw error;
+  const rows = (data ?? []) as ReleaseRow[];
+  return rows[0] ?? null;
+}
+
+export function listingStatus(listing: ListingRow): "draft" | "live" | "retired" {
+  if (listing.retired_at) return "retired";
+  return listing.published_at ? "live" : "draft";
+}
+
+// ---------------------------------------------------------------------------
+// quote
+// ---------------------------------------------------------------------------
+
+/**
+ * What this buyer would pay, right now, for this listing.
+ *
+ * `buyer` is `null` for an unauthenticated caller: FR-20 says an unsigned request is
+ * quoted the new-buyer price and is never told what any address owns.
+ */
+export async function quote(ref: ListingRef, buyer: Address | string | null, version?: string, now = new Date()): Promise<Quote> {
+  const resolved = await resolveListing(ref);
+  if (!resolved) return { kind: "unavailable", code: "not_found" };
+  const { listing } = resolved;
+
+  const buyerAddress = buyer ? lower(buyer) : null;
+  const purchases = buyerAddress ? await purchasesFor(listing.id, buyerAddress) : [];
+  const isHolder = purchases.length > 0;
+
+  // FR-19 / FR-46: an explicit version is a re-fetch, and it works forever —
+  // including after the listing retires, and regardless of the release's scan state
+  // at fetch time (the bytes that were sold are the bytes that were scanned).
+  if (version !== undefined) {
+    const release = await releaseByVersion(listing.id, version);
+    if (!release) return { kind: "unavailable", code: "not_found" };
+    // W1.6: an explicit version is entitled by an exact-release match or a lifetime
+    // purchase only. The FR-18 update window (below) must not grant an arbitrary older
+    // version the wallet never bought, so it is disallowed here.
+    const purchase = entitlingPurchase(purchases, release.id, now, false);
+    if (!purchase) return { kind: "unavailable", code: "not_entitled" };
+    return { kind: "granted", release: toRelease(release), purchase };
+  }
+
+  // FR-43 / §8.9: retire is terminal for buyers, not for holders.
+  if (listing.retired_at && !isHolder) return { kind: "unavailable", code: "retired" };
+  // A draft is not a public resource. Holders of an earlier release keep their access
+  // through the explicit-version branch above.
+  if (!listing.published_at && !isHolder) return { kind: "unavailable", code: "not_found" };
+
+  const latest = await latestPassingRelease(listing.id);
+  if (!latest) return { kind: "unavailable", code: "no_release" };
+
+  // The FR-18 window disjunct applies here because `latest` is, by construction, the
+  // current latest release (W1.6).
+  const entitled = entitlingPurchase(purchases, latest.id, now, true);
+  if (entitled) return { kind: "granted", release: toRelease(latest), purchase: entitled };
+
+  // A retired listing sells nothing further, even to a holder.
+  if (listing.retired_at) return { kind: "unavailable", code: "retired" };
+
+  const listingPrice = toMicro(listing.price_micro);
+  const currentUpdatePrice = toMicro(listing.update_price_micro);
+
+  let priceMicro = listingPrice;
+  let reason: "new" | "update" = "new";
+  let ownedVersion: string | null = null;
+  let releasesSince: ReleaseLogEntry[] = [];
+
+  if (isHolder) {
+    reason = "update";
+    // FR-16: the stamped terms never worsen. With several purchases, the best of them.
+    priceMicro = purchases.reduce<bigint>((best, p) => {
+      const candidate = updatePriceFor(p, currentUpdatePrice);
+      return candidate < best ? candidate : best;
+    }, currentUpdatePrice);
+
+    const ownedRelease = await newestOwnedRelease(listing.id, purchases);
+    ownedVersion = ownedRelease?.version ?? null;
+    // FR-17: the update 402 carries every release-log entry between the two.
+    releasesSince = await releaseLogBetween(listing.id, ownedRelease, latest);
+  }
+
+  return {
+    kind: "payment_required",
+    ref,
+    listingId: listing.id,
+    release: toRelease(latest),
+    priceMicro,
+    reason,
+    releasesSince,
+    quoteId: quoteId(listing, latest, priceMicro, reason),
+    updatePriceMicro: currentUpdatePrice,
+    ownedVersion,
+    listingDescription: listing.description,
+    artifactKind: manifestKind(latest),
+    discovery: discoveryHints(latest.manifest),
+  };
+}
+
+/**
+ * PRD §12's access check, verbatim, over rows already filtered to
+ * `listing_id AND buyer_address AND revoked_at IS NULL`.
+ *
+ * Preference order matters only for which purchase is reported, not for the verdict:
+ * an exact release match is the most specific fact, then lifetime, then the FR-18
+ * window.
+ */
+function entitlingPurchase(purchases: Purchase[], releaseId: string, now: Date, allowUpdateWindow: boolean): Purchase | null {
+  const windowStart = new Date(now.getTime() - UPDATE_BILLING_WINDOW_DAYS * 86_400_000);
+  return (
+    purchases.find((p) => p.releaseId === releaseId) ??
+    purchases.find((p) => p.allVersions) ??
+    // FR-18: the window opens on an *update* charge, not on the initial purchase — otherwise
+    // FR-34's "update 402 at the stamped price" could never be observed (DECISIONS, 2026-08-29).
+    // W1.6: it grants only the *current latest* release, never an arbitrary explicit version
+    // the wallet never bought — so callers resolving an explicit version pass `false`.
+    (allowUpdateWindow
+      ? purchases.find((p) => p.kind === "update" && p.grantedAt.getTime() > windowStart.getTime())
+      : undefined) ??
+    null
+  );
+}
+
+/**
+ * FR-23: the quote a payment is bound to. It is a digest of everything that would make
+ * the price wrong, so a `PATCH /api/listings/:id` or a new release changes it and a
+ * payment against the old one is `409 price_changed`.
+ *
+ * A digest rather than a signature: forging one buys nothing, because the server
+ * recomputes the price from the same rows before it accepts any money.
+ */
+export function quoteId(listing: ListingRow, release: ReleaseRow, priceMicro: bigint, reason: string): string {
+  const material = [
+    listing.id,
+    release.id,
+    priceMicro.toString(),
+    String(listing.price_micro),
+    String(listing.update_price_micro),
+    listing.retired_at ?? "",
+    reason,
+  ].join("|");
+  return `q_${createHash("sha256").update(material).digest("hex").slice(0, 32)}`;
+}
+
+// ---------------------------------------------------------------------------
+// toPaymentRequirements — the only place a 402 body is built (§11)
+// ---------------------------------------------------------------------------
+
+export function toPaymentRequirements(q: PaymentRequiredQuote, now = new Date()): PaymentRequirements {
+  const { network, payTo, asset } = x402Config();
+  const base = appUrl();
+  const links = buyLinks({ owner: q.ref.owner, slug: q.ref.slug, appUrl: base });
+  const resource = links.resource_endpoint;
+  const manifestUrl = links.manifest_url;
+  const amount = q.priceMicro.toString();
+
+  const canonical: X402Requirement = {
+    scheme: "exact",
+    network,
+    amount,
+    asset,
+    payTo,
+    maxTimeoutSeconds: PAYMENT_TIMEOUT_SEC,
+    // EIP-712 domain of the asset, per x402 v2, looked up per network: Base Sepolia
+    // USDC is ("USDC", "2") and Base mainnet USDC is ("USD Coin", "2"). Getting it
+    // wrong is not a validation error — the buyer signs for a domain the token does
+    // not recognise and settlement fails on simulation. See lib/x402/asset.ts.
+    extra: assetDomain(network, asset),
+  };
+
+  const description = paymentDescription(q);
+
+  // Both spellings: the v2 names `@x402/core` validates, and the v1 names PRD §13 and
+  // `lib/schemas/payment.ts` specify. A v2 client strips the aliases before it signs,
+  // so `accepted` still deep-equals `canonical`.
+  const accept = {
+    ...canonical,
+    maxAmountRequired: amount,
+    resource,
+    description,
+    mimeType: "application/zip",
+  };
+
+  const body = {
+    x402Version: 2 as const,
+    // ResourceInfo — required by the x402 v2 envelope. `serviceName` and `tags` are the
+    // Bazaar's, computed from the manifest and never from the creator's copy (FR-52).
+    resource: { url: resource, description, mimeType: "application/zip", ...serviceMetadata(q.ref, q.discovery) },
+    accepts: [accept],
+    // The Bazaar discovery declaration (adopted 16 Sep 2026). An x402 client echoes it
+    // in the payment payload and the facilitator catalogues this URL on settlement.
+    extensions: bazaarExtensions(q.ref, q.release.version, base),
+    extra: {
+      kind: q.reason,
+      version: q.release.version,
+      ...(q.reason === "update" && q.ownedVersion ? { from: q.ownedVersion, to: q.release.version } : {}),
+      manifest_url: manifestUrl,
+      scan_badge_url: `${manifestUrl}#scan`,
+      update_price_micro: q.updatePriceMicro.toString(),
+      ...(q.releasesSince.length > 0 ? { releases: q.releasesSince } : {}),
+      quote_id: q.quoteId,
+      // FR-23: a quote carries `quote_id` *and* a validity horizon. It is the same
+      // window the payer has to submit the authorization (`maxTimeoutSeconds`), and it
+      // is advisory: the binding check is that the amount still equals the price.
+      valid_before: new Date(now.getTime() + PAYMENT_TIMEOUT_SEC * 1000).toISOString(),
+      // The self-describing part (2026-09-02). An x402 client never reads these; every
+      // other reader — a shell agent, a chat model's fetch tool, a person with curl —
+      // has nothing else to go on, and this is the moment it decides what to do next.
+      instructions: paymentInstructions(links, chainLabel(network)),
+      listing_url: links.listing_url,
+      skill_url: links.skill_url,
+      mcp_url: links.mcp_url,
+    },
+  } satisfies PaymentRequiredBodyOutput;
+
+  return { body, accepts: [canonical], quoteId: q.quoteId, priceMicro: q.priceMicro };
+}
+
+/**
+ * §13: "The `description` is read inside an agent's reasoning — it is product copy."
+ * It has to answer, in one line, what this is, what version, and why this price.
+ */
+function paymentDescription(q: PaymentRequiredQuote): string {
+  const name = `${q.ref.owner}/${q.ref.slug}`;
+  const kind = q.artifactKind ? ` ${q.artifactKind}` : "";
+  if (q.reason === "update" && q.ownedVersion) {
+    const n = q.releasesSince.length;
+    const releases = n === 1 ? "1 release" : `${n} releases`;
+    return `${name} v${q.ownedVersion} → v${q.release.version} — the update price for a${kind} you already own. ${releases} since.`;
+  }
+  const summary = q.listingDescription ? ` ${q.listingDescription}` : "";
+  return `${name} v${q.release.version} —${kind ? kind : " release"}.${summary} Security scan passed; signed download, 5-minute URL.`;
+}
+
+// ---------------------------------------------------------------------------
+// grant — only ever called after `settle` returned a tx hash (FR-22)
+// ---------------------------------------------------------------------------
+
+export type GrantOptions = { source?: PurchaseSource; now?: Date };
+
+/**
+ * Write the purchase. Idempotent on the EIP-3009 nonce (FR-22, §13):
+ *
+ * - the same nonce with the same `{listing, version, amount}` returns the existing row;
+ * - the same nonce with anything else is `authorization_mismatch`;
+ * - a race that loses the `payment_nonce` unique index re-reads and returns the winner.
+ */
+export async function grant(
+  q: PaymentRequiredQuote,
+  buyer: Address | string,
+  settlement: SettleResult,
+  options: GrantOptions = {},
+): Promise<Purchase> {
+  const now = options.now ?? new Date();
+  const buyerAddress = lower(buyer);
+
+  // The chain `insertPurchase` stamps. A row for the same nonce on another chain is a
+  // different authorization (CORE-1), never this one's idempotent replay.
+  const existing = await purchaseByNonce(settlement.nonce, paymentChain().chainId);
+  if (existing) {
+    const matches =
+      existing.listingId === q.listingId && existing.releaseId === q.release.id && existing.grossMicro === settlement.amountMicro;
+    if (!matches) {
+      throw new ApiError("authorization_mismatch", {
+        message: "That payment authorization was already used for a different listing, version or amount.",
+        details: { nonce_bound_to: { listing_id: existing.listingId, release_id: existing.releaseId } },
+      });
+    }
+    return existing;
+  }
+
+  return await insertPurchase(q, buyerAddress, settlement, options.source ?? "api", now);
+}
+
+/**
+ * FR-24: a $0 listing hands over the artifact with no payment at all. A purchase row is
+ * written only when the caller signed, because an anonymous fetch has no address to
+ * stamp — and without a row the re-fetch and update-pricing paths cannot work.
+ */
+export async function grantFree(q: PaymentRequiredQuote, buyer: Address | string, options: GrantOptions = {}): Promise<Purchase> {
+  if (q.priceMicro !== 0n) throw new Error("grantFree called on a priced quote");
+  const now = options.now ?? new Date();
+  const buyerAddress = lower(buyer);
+
+  const held = await purchasesFor(q.listingId, buyerAddress);
+  const already = held.find((p) => p.releaseId === q.release.id);
+  if (already) return already;
+
+  return await insertPurchase(q, buyerAddress, null, options.source ?? "api", now);
+}
+
+async function insertPurchase(
+  q: PaymentRequiredQuote,
+  buyerAddress: string,
+  settlement: SettleResult | null,
+  source: PurchaseSource,
+  now: Date,
+): Promise<Purchase> {
+  const grossMicro = q.priceMicro;
+  const { feeMicro, netMicro } = splitFee(grossMicro, platformFeeBps());
+  const holdbackUntil = new Date(now.getTime() + holdbackDaysEnv() * 86_400_000);
+
+  // FR-16: $0 updates are lifetime, irrevocably, whatever the price does later.
+  const allVersions = q.updatePriceMicro === 0n;
+  const kind: PurchaseKind = grossMicro === 0n ? "free" : q.reason;
+
+  const { data, error } = await db()
+    .from("purchase")
+    .insert({
+      listing_id: q.listingId,
+      release_id: q.release.id,
+      buyer_address: buyerAddress,
+      all_versions: allVersions,
+      update_price_at_purchase: fromMicro(q.updatePriceMicro),
+      kind,
+      source,
+      gross_micro: fromMicro(grossMicro),
+      fee_micro: fromMicro(feeMicro),
+      net_micro: fromMicro(netMicro),
+      tx_hash: settlement?.txHash ?? null,
+      payment_nonce: settlement?.nonce ?? null,
+      granted_at: now.toISOString(),
+      holdback_until: holdbackUntil.toISOString(),
+      // Which chain this settled on. One database serves both networks (dev is Sepolia,
+      // production is mainnet), so without this the sweep would pay real USDC for
+      // testnet sales — see the 20260906010000 migration.
+      chain_id: paymentChain().chainId,
+    })
+    .select("*")
+    .single();
+
+  if (error) {
+    // 23505: a concurrent request for the same purchase won the race. Re-read and return
+    // the winner rather than surfacing a duplicate-key error.
+    if (error.code === "23505") {
+      // Paid path: the `payment_nonce` unique index (FR-22).
+      if (settlement) {
+        const winner = await purchaseByNonce(settlement.nonce, paymentChain().chainId);
+        if (winner) return winner;
+      } else {
+        // W1.7 / W3.7: the free path's `(listing_id, release_id, buyer_address) where
+        // kind='free'` partial unique index — mirror the paid path's idempotency.
+        const winner = await freePurchaseFor(q.listingId, q.release.id, buyerAddress);
+        if (winner) return winner;
+      }
+    }
+    throw error;
+  }
+  return toPurchase(data as PurchaseRow);
+}
+
+// ---------------------------------------------------------------------------
+// downloadUrl / owned
+// ---------------------------------------------------------------------------
+
+/**
+ * A short-lived signed URL over the exact bytes that were scanned (§6, D3). The hash is
+ * returned with it so the caller can verify what it got without trusting the URL.
+ */
+export async function downloadUrl(
+  p: Purchase,
+  ttlSec = DOWNLOAD_TTL_SEC,
+): Promise<{ url: string; artifactSha256: string; version: string; expiresAt: Date }> {
+  const release = await releaseById(p.releaseId);
+  if (!release) throw new ApiError("not_found", { message: "The release for that purchase no longer exists." });
+  return await downloadUrlForRelease(toRelease(release), ttlSec);
+}
+
+export async function downloadUrlForRelease(
+  release: Release,
+  ttlSec = DOWNLOAD_TTL_SEC,
+): Promise<{ url: string; artifactSha256: string; version: string; expiresAt: Date }> {
+  if (!release.storagePath) {
+    throw new ApiError("not_found", { message: "That release has no stored artifact." });
+  }
+  const { url, expiresAt } = await signedUrl(release.storagePath, ttlSec);
+  return { url, artifactSha256: release.artifactSha256, version: release.version, expiresAt };
+}
+
+/** Everything this wallet owns, newest first. FR-32. */
+export async function owned(buyer: Address | string, ref?: ListingRef): Promise<Purchase[]> {
+  const buyerAddress = lower(buyer);
+  let listingId: string | null = null;
+  if (ref) {
+    const resolved = await resolveListing(ref);
+    if (!resolved) return [];
+    listingId = resolved.listing.id;
+  }
+
+  // This chain only. One database serves both networks, so without the filter a wallet
+  // that bought on Sepolia would read as owning the version on mainnet and be handed a
+  // free download of something it paid test money for (2026-09-07, the cutover).
+  let query = db()
+    .from("purchase")
+    .select("*")
+    .eq("buyer_address", buyerAddress)
+    .eq("chain_id", paymentChain().chainId)
+    .is("revoked_at", null);
+  if (listingId) query = query.eq("listing_id", listingId);
+  const { data, error } = await query.order("granted_at", { ascending: false });
+  if (error) throw error;
+  return ((data ?? []) as PurchaseRow[]).map(toPurchase);
+}
+
+export type OwnedEntitlement = { purchase: Purchase; owner: string; slug: string; version: string };
+
+/**
+ * `owned`, plus the names FR-32 has to render. One extra read per distinct listing and
+ * release rather than a join, because PostgREST embedding is not in the mock DB.
+ */
+export async function ownedWithContext(buyer: Address | string, limit = 100, cursor?: string): Promise<{ items: OwnedEntitlement[]; nextCursor: string | null }> {
+  const buyerAddress = lower(buyer);
+  let query = db().from("purchase").select("*").eq("buyer_address", buyerAddress);
+  if (cursor) query = query.lt("granted_at", cursor);
+  const { data, error } = await query.order("granted_at", { ascending: false }).limit(limit + 1);
+  if (error) throw error;
+
+  const rows = (data ?? []) as PurchaseRow[];
+  const page = rows.slice(0, limit);
+  const nextCursor = rows.length > limit ? page[page.length - 1].granted_at : null;
+
+  const items: OwnedEntitlement[] = [];
+  for (const row of page) {
+    const listing = await listingById(row.listing_id);
+    const release = await releaseById(row.release_id);
+    if (!listing || !release) continue;
+    const creator = await creatorById(listing.creator_id);
+    if (!creator) continue;
+    items.push({ purchase: toPurchase(row), owner: creator.handle, slug: listing.slug, version: release.version });
+  }
+  return { items, nextCursor };
+}
+
+// ---------------------------------------------------------------------------
+// row plumbing
+// ---------------------------------------------------------------------------
+
+async function purchasesFor(listingId: string, buyerAddress: string): Promise<Purchase[]> {
+  const { data, error } = await db()
+    .from("purchase")
+    .select("*")
+    .eq("listing_id", listingId)
+    .eq("buyer_address", buyerAddress)
+    // See the note in `entitlementsFor`: entitlement does not cross chains.
+    .eq("chain_id", paymentChain().chainId)
+    .is("revoked_at", null)
+    .order("granted_at", { ascending: false });
+  if (error) throw error;
+  return ((data ?? []) as PurchaseRow[]).map(toPurchase);
+}
+
+/**
+ * §13: "a replay returns the existing purchase". The route looks the nonce up before it
+ * spends a facilitator call, so a resent authorization is answered from our own ledger.
+ *
+ * Chain-scoped, like every other entitlement read (CORE-1, RED-TEAM-2026-09-21). An
+ * EIP-3009 nonce is unique per token contract *per chain*, so the same 32 bytes can be
+ * signed legally on Base Sepolia and on Base mainnet, and one database holds both. An
+ * unscoped lookup let a testnet purchase answer a mainnet replay: buy with test USDC on
+ * a Sepolia deployment, then present a signed-but-unsubmitted mainnet authorization with
+ * the same nonce and be handed the mainnet download. The default is the chain this
+ * deployment settles on, which is the chain the replayed signature is verified against.
+ */
+export async function findPurchaseByNonce(nonce: string, chainId: number = paymentChain().chainId): Promise<Purchase | null> {
+  return await purchaseByNonce(nonce, chainId);
+}
+
+async function purchaseByNonce(nonce: string, chainId: number): Promise<Purchase | null> {
+  const { data, error } = await db()
+    .from("purchase")
+    .select("*")
+    .eq("payment_nonce", nonce)
+    .eq("chain_id", chainId)
+    .maybeSingle();
+  if (error) throw error;
+  return data ? toPurchase(data as PurchaseRow) : null;
+}
+
+/** W1.7: the single free purchase for this `(listing, release, wallet)`, if one exists. */
+async function freePurchaseFor(listingId: string, releaseId: string, buyerAddress: string): Promise<Purchase | null> {
+  const { data, error } = await db()
+    .from("purchase")
+    .select("*")
+    .eq("listing_id", listingId)
+    .eq("release_id", releaseId)
+    .eq("buyer_address", buyerAddress)
+    .eq("kind", "free")
+    .is("revoked_at", null)
+    .maybeSingle();
+  if (error) throw error;
+  return data ? toPurchase(data as PurchaseRow) : null;
+}
+
+async function releaseById(id: string): Promise<ReleaseRow | null> {
+  const { data, error } = await db().from("release").select("*").eq("id", id).maybeSingle();
+  if (error) throw error;
+  return (data as ReleaseRow) ?? null;
+}
+
+async function releaseByVersion(listingId: string, version: string): Promise<ReleaseRow | null> {
+  const { data, error } = await db().from("release").select("*").eq("listing_id", listingId).eq("version", version).maybeSingle();
+  if (error) throw error;
+  return (data as ReleaseRow) ?? null;
+}
+
+async function listingById(id: string): Promise<ListingRow | null> {
+  const { data, error } = await db().from("listing").select("*").eq("id", id).maybeSingle();
+  if (error) throw error;
+  return (data as ListingRow) ?? null;
+}
+
+async function creatorById(id: string): Promise<CreatorRow | null> {
+  const { data, error } = await db().from("creator").select("*").eq("id", id).maybeSingle();
+  if (error) throw error;
+  return (data as CreatorRow) ?? null;
+}
+
+/** The newest release this buyer holds — the `from` of an update 402. */
+async function newestOwnedRelease(listingId: string, purchases: Purchase[]): Promise<ReleaseRow | null> {
+  const ids = new Set(purchases.map((p) => p.releaseId));
+  if (ids.size === 0) return null;
+  const { data, error } = await db().from("release").select("*").eq("listing_id", listingId).order("created_at", { ascending: false });
+  if (error) throw error;
+  const rows = (data ?? []) as ReleaseRow[];
+  return rows.find((r) => ids.has(r.id)) ?? null;
+}
+
+/**
+ * FR-17: the release-log entries strictly after `from`, up to and including `to`, in the
+ * FR-15 wire shape. `diff_summary` is passed through only when it validates, so a 402
+ * body can never fail its own published schema because an analyzer wrote something odd.
+ */
+async function releaseLogBetween(listingId: string, from: ReleaseRow | null, to: ReleaseRow): Promise<ReleaseLogEntry[]> {
+  const { data, error } = await db().from("release").select("*").eq("listing_id", listingId).order("created_at", { ascending: true });
+  if (error) throw error;
+  const rows = (data ?? []) as ReleaseRow[];
+
+  const fromTime = from ? new Date(from.created_at).getTime() : -Infinity;
+  const toTime = new Date(to.created_at).getTime();
+
+  return rows
+    .filter((r) => {
+      const t = new Date(r.created_at).getTime();
+      return t > fromTime && t <= toTime && r.scan === "pass";
+    })
+    .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+    .map(toReleaseLogEntry);
+}
+
+export function toReleaseLogEntry(r: ReleaseRow): ReleaseLogEntry {
+  const diff = DiffSummary.safeParse(r.diff_summary);
+  return {
+    version: r.version,
+    tag: r.git_ref,
+    commit_sha: r.commit_sha,
+    artifact_sha256: r.artifact_sha256,
+    published_at: new Date(r.created_at).toISOString(),
+    changelog: r.changelog,
+    diff_summary: diff.success ? diff.data : null,
+    scan: r.scan,
+    scanner_version: r.scanner_version,
+    analyzer_version: r.analyzer_version,
+    price_micro: toMicro(r.price_micro_at_publish).toString(),
+    update_price_micro: toMicro(r.update_price_micro_at_publish).toString(),
+  };
+}
+
+function manifestKind(release: ReleaseRow): string | null {
+  const manifest = release.manifest as { kind?: unknown } | null;
+  const kind = manifest && typeof manifest === "object" ? manifest.kind : null;
+  return typeof kind === "string" && kind.length > 0 ? kind : null;
+}
+
+export function toRelease(row: ReleaseRow): Release {
+  return {
+    id: row.id,
+    listingId: row.listing_id,
+    version: row.version,
+    artifactSha256: row.artifact_sha256 ?? "",
+    storagePath: row.storage_path ?? "",
+    publishedAt: new Date(row.created_at),
+  };
+}
+
+export function toPurchase(row: PurchaseRow): Purchase {
+  return {
+    id: row.id,
+    listingId: row.listing_id,
+    releaseId: row.release_id,
+    buyerAddress: row.buyer_address as Address,
+    allVersions: row.all_versions,
+    updatePriceAtPurchase: toMicro(row.update_price_at_purchase),
+    kind: row.kind,
+    source: row.source,
+    grossMicro: toMicro(row.gross_micro),
+    feeMicro: toMicro(row.fee_micro),
+    netMicro: toMicro(row.net_micro),
+    txHash: row.tx_hash,
+    paymentNonce: row.payment_nonce,
+    grantedAt: new Date(row.granted_at),
+    holdbackUntil: new Date(row.holdback_until),
+    revokedAt: row.revoked_at ? new Date(row.revoked_at) : null,
+  };
+}
+
+/** DECISIONS.md: every address column is stored lowercase so `.eq()` is always right. */
+function lower(address: Address | string): string {
+  return address.toLowerCase();
+}
+
+/** Re-exported so callers do not have to know which module owns the default. */
+export { usdcAddress };

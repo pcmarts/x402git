@@ -1,0 +1,15 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": ["supabase/**", "scripts/**", "**/*.test.ts"],
+    "ignoreValues": []
+  },
+  "hook": {
+    "enabled": true,
+    "quiet": false,
+    "limits": {
+      "maxFindings": 5,
+      "maxChars": 8000
+    }
+  }
+}

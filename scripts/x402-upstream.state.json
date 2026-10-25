@@ -1,0 +1,22 @@
+{
+  "note": "Watermark for scripts/x402-upstream-check.mjs. Standing decisions live in docs/x402-upstream.md.",
+  "repo": "x402-foundation/x402",
+  "lastReviewed": "2026-09-10",
+  "installed": {
+    "@coinbase/x402": "2.1.0",
+    "@x402/core": "2.25.0",
+    "@x402/evm": "2.25.0",
+    "@x402/fetch": "2.25.0"
+  },
+  "knownExtensions": [
+    "bazaar.mdx",
+    "builder-code.mdx",
+    "eip2612-gas-sponsoring.mdx",
+    "erc20-approval-gas-sponsoring.mdx",
+    "offer-receipt.mdx",
+    "overview.mdx",
+    "payment-identifier.mdx",
+    "sign-in-with-x.mdx"
+  ],
+  "knownSchemes": ["batch-settlement.mdx", "exact.mdx", "overview.mdx", "upto.mdx"]
+}
