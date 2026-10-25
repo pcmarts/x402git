@@ -24,11 +24,13 @@
 import { createHash } from "node:crypto";
 import { mirrorToVercel } from "@/lib/analytics/vercel";
 import type { AuthedCreator } from "@/lib/auth/api-key";
+import { chainLabel } from "@/lib/buy-links";
+import { payoutRailsFor } from "@/lib/core/access";
 import { db } from "@/lib/db";
 import { recordedChainId } from "@/lib/events";
 import type { ApiKeyKind, CreatorRow, ListingRow, PurchaseRow, ReleaseRow } from "@/lib/db/types";
 import { fromMicro, toMicro } from "@/lib/db/types";
-import { inviteCodes } from "@/lib/env";
+import { inviteCodes, paymentNetworks } from "@/lib/env";
 import { ApiError } from "@/lib/errors";
 import { record } from "@/lib/events";
 import { isPaused } from "@/lib/ops/switches";
@@ -210,6 +212,8 @@ export async function createListing(creator: AuthedCreator, input: CreateListing
   const priceMicro = input.price_micro === undefined ? DEFAULT_PRICE_MICRO : micro.parse(input.price_micro);
   const updatePriceMicro = input.update_price_micro === undefined ? DEFAULT_UPDATE_PRICE_MICRO : micro.parse(input.update_price_micro);
   assertPrices(priceMicro, updatePriceMicro);
+  // Before any repo is provisioned, so a refusal here has nothing to roll back.
+  const offered = input.offered_networks === undefined ? null : offeredNetworksValue(creator, input.offered_networks);
 
   const row: Record<string, unknown> = {
     creator_id: creator.id,
@@ -220,6 +224,8 @@ export async function createListing(creator: AuthedCreator, input: CreateListing
     update_price_micro: fromMicro(updatePriceMicro),
     description: input.description ?? null,
     trigger_hint: input.trigger_hint ?? null,
+    // Only a narrowing is written; null is the column's default and means "every rail".
+    ...(offered ? { offered_networks: offered } : {}),
   };
 
   let remote: string | null = null;
@@ -576,13 +582,27 @@ export async function patchListing(creator: CreatorRow, listingId: string, input
   if (input.description !== undefined) patch.description = input.description;
   if (input.trigger_hint !== undefined) patch.trigger_hint = input.trigger_hint;
 
+  // Offered rails (25 Oct 2026). Omitted leaves them alone; null clears to "every rail".
+  // A null onto a listing that already offers every rail writes nothing: the dashboard
+  // sends null on every Save where every box is ticked, and that Save must not depend on
+  // migration 20261025213000 having been pushed, or touch a column it does not change.
+  const offeredSent = input.offered_networks !== undefined;
+  if (offeredSent) {
+    const offered = offeredNetworksValue(creator, input.offered_networks ?? null);
+    const current = Array.isArray(listing.offered_networks) ? listing.offered_networks : null;
+    if (offered !== null || current !== null) patch.offered_networks = offered;
+  }
+
   // Open releases (25 Oct 2026). Only when one of the three fields is in the request:
   // the own-repo check may ask GitHub, and a price change should not.
   if (hasOpenReleaseFields(input)) Object.assign(patch, openReleasePatch(listing, input, await ownSourceRepo(creator, listing)));
 
   if (Object.keys(patch).length === 0) {
+    // Asked for something that is already so: the answer is the listing as it stands.
+    if (offeredSent) return listingView(listing, creator.handle, await latestPassingRelease(listing.id), creator);
     throw new ApiError("invalid_request", {
-      message: "Nothing to change. Send at least one of price_micro, update_price_micro, description, trigger_hint, open_release, public_repo_url, open_after_days.",
+      message:
+        "Nothing to change. Send at least one of price_micro, update_price_micro, description, trigger_hint, offered_networks, open_release, public_repo_url, open_after_days.",
     });
   }
 
@@ -592,6 +612,55 @@ export async function patchListing(creator: CreatorRow, listingId: string, input
   const updated = data as ListingRow;
 
   return listingView(updated, creator.handle, await latestPassingRelease(updated.id), creator);
+}
+
+// ---------------------------------------------------------------------------
+// Offered rails (25 Oct 2026, HackMeridian; migration 20261025213000)
+// ---------------------------------------------------------------------------
+
+/**
+ * `offered_networks` as it will be stored, or a refusal naming the field (founder, 25 Oct
+ * 2026: a creator chooses, per listing, which of their ways to be paid it is sold on).
+ *
+ * - **null clears**: every rail the creator can be paid on, including ones bound or
+ *   switched on later.
+ * - **Served here.** Each network must be one this deployment runs (`paymentNetworks()`);
+ *   anything else could never appear in a 402.
+ * - **Reaches the creator.** An EVM network needs an EVM payout address and a Stellar one a
+ *   Stellar address (JOURNEYS rule 4, `payoutRailsFor`). The 402 would drop such a rail
+ *   anyway; the creator should hear it now, not find a listing sold on fewer rails than
+ *   they ticked.
+ * - **Not empty.** No offered rail is a listing off sale, and the way off sale is retire.
+ *
+ * Stored without repeats, in the deployment's rail order, so the row reads like the 402.
+ */
+export function offeredNetworksValue(creator: Pick<CreatorRow, "payout_address" | "stellar_payout_address">, input: string[] | null): string[] | null {
+  if (input === null) return null;
+  if (input.length === 0) {
+    throw new ApiError("invalid_request", {
+      message: "`offered_networks` cannot be empty. Offer at least one network, or send null to offer every rail you can be paid on.",
+      details: { field: "offered_networks" },
+    });
+  }
+  const served = paymentNetworks();
+  const rails = payoutRailsFor(creator);
+  for (const network of input) {
+    if (!served.includes(network)) {
+      throw new ApiError("invalid_request", {
+        message: `\`offered_networks\`: ${network} is not a network this deployment serves. It serves ${served.join(", ")}.`,
+        details: { field: "offered_networks", network },
+      });
+    }
+    if (!rails.find((r) => r.network === network)?.address) {
+      const family = network.startsWith("stellar:") ? "Stellar" : "EVM";
+      throw new ApiError("invalid_request", {
+        message: `\`offered_networks\`: ${chainLabel(network)} (${network}) pays out to a ${family} address, and you have none yet. Add one on the wallet page, or leave ${network} out.`,
+        details: { field: "offered_networks", network },
+      });
+    }
+  }
+  const wanted = new Set(input);
+  return served.filter((network) => wanted.has(network));
 }
 
 // ---------------------------------------------------------------------------

@@ -136,6 +136,12 @@ export type ListingRow = {
   public_repo_url?: string | null;
   open_after_days?: number | null;
   open_eligibility?: unknown | null;
+  /**
+   * Migration 20261025213000 (25 Oct 2026). Which rails this listing is sold on, as CAIP-2
+   * networks; null is every rail its creator can be paid on (`lib/core/access.ts#railsFor`).
+   * Optional for the same reason as the four above.
+   */
+  offered_networks?: string[] | null;
 };
 
 /** Migration 20261025160000. What the promise-kept check concluded for one release. */

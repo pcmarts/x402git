@@ -51,6 +51,14 @@
  * saved. PRODUCT.md's rule that earnings are what the creator keeps survives the
  * itemisation: the fee is a line, "You receive" is the line it ends on and the only
  * number set large.
+ *
+ * **Where you get paid** (25 Oct 2026, HackMeridian; founder: "we should have the option
+ * to switch between" payout addresses, not only a link to the wallet page). A creator may
+ * hold an EVM and a Stellar payout address, and each rail lands at one of them. The block
+ * sits in the form right after the price, because it is the other half of the same
+ * question — what a sale costs, and where its money goes — and the one Save carries it as
+ * `offered_networks`. One row per rail, its address, an Offer box; binding an address is
+ * still the wallet page's (where-you-get-paid.tsx).
  */
 
 import type { Metadata } from "next";
@@ -64,7 +72,7 @@ import { GitHubMark } from "@/app/_components/github-mark";
 import { BLOCKING_COPY, Notice } from "@/app/_components/notice";
 import { PayoutSummary } from "@/app/_components/payout-summary";
 import { SaveBar } from "@/app/_components/save-bar";
-import { PLATFORM_FEE_BPS } from "@/lib/core/access";
+import { PLATFORM_FEE_BPS, payoutRailsFor } from "@/lib/core/access";
 import { RESALE_COMPATIBLE_SPDX } from "@/lib/licence";
 import { type ListingRow, toMicro } from "@/lib/db/types";
 import { appUrl } from "@/lib/env";
@@ -76,6 +84,7 @@ import { blockingReasons, loadListingById, manifestFor, repoUrlFor } from "@/lib
 import { checkRowsFrom, checkTone, formatDate, formatDateTime } from "@/lib/web/manifest-view";
 import { formatPrice, PRICE_FLOOR_PATTERN } from "@/lib/web/money";
 import { readmeSnippet } from "@/lib/web/readme-snippet";
+import { shortAddress, WhereYouGetPaid } from "./where-you-get-paid";
 
 export const metadata: Metadata = { title: "Listing" };
 export const dynamic = "force-dynamic";
@@ -183,18 +192,6 @@ function Help({ href, children }: { href: string; children: React.ReactNode }) {
       {children}
     </a>
   );
-}
-
-/**
- * `0x7Ae2f4C1b93dE05a8814FbA9c0341eD6b27C5019` → `0x7Ae2…5019`.
- *
- * Not a secret — a payout address is public on-chain by construction — but a dashboard
- * is a thing people screenshot, and the whole string is of no use to its owner, who is
- * checking that it is the wallet they hold. The full value is one link away, on the page
- * that binds it.
- */
-function shortAddress(value: string): string {
-  return value.length > 14 ? `${value.slice(0, 6)}…${value.slice(-4)}` : value;
 }
 
 /**
@@ -413,6 +410,10 @@ export default async function ListingDashboardPage({
   // plus a suffix, so the guess strips one; `pcmarts/open-release-demo-next` suggests
   // `pcmarts/open-release-demo`.
   const publicSlugGuess = listing.slug.replace(/-(next|private|mirror|early|pro|paid)$/i, "") || listing.slug;
+  // Where you get paid: every rail this deployment runs with this creator's address on it,
+  // and the listing's choice among them (null, or a row from before the migration: all).
+  const payoutRails = payoutRailsFor(creator);
+  const offeredNetworks = Array.isArray(listing.offered_networks) ? listing.offered_networks : null;
 
   /**
    * The gates FR-42 enforces, printed whether or not they are failing. A checklist that
@@ -839,6 +840,10 @@ export default async function ListingDashboardPage({
                 Save changes it; a second button here was a second answer to "did that
                 take?" and the reason this file's header says there is one Save. */}
           </section>
+
+          {/* Where you get paid (25 Oct 2026): which rails this listing is sold on, each
+              beside the address it pays out to. In the form, so Save carries it. */}
+          <WhereYouGetPaid rails={payoutRails} offered={offeredNetworks} />
 
           {/* Open releases (25 Oct 2026, HackMeridian; docs/HACKMERIDIAN-STRATEGY.md §6a;
               reshaped that evening on the founder's direction). Inside the one form, so the

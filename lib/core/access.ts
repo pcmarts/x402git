@@ -130,6 +130,12 @@ export type PaymentRequiredQuote = {
   discovery: DiscoveryHints;
   /** Who gets paid, and so which rails the 402 may offer (`paymentOptionsFor`). */
   payee: Payee;
+  /**
+   * The listing's own choice among those rails (migration 20261025213000, 25 Oct 2026):
+   * null offers every rail the payee can be paid on, an array only those CAIP-2 networks.
+   * Carried beside the payee so the 402 reads the same filter `paymentOptionsFor` does.
+   */
+  offeredNetworks: string[] | null;
 };
 
 export type Quote =
@@ -345,12 +351,21 @@ export async function quote(ref: ListingRef, buyer: Address | string | null, ver
     artifactKind: manifestKind(latest),
     discovery: discoveryHints(latest.manifest),
     payee: payeeOf(creator),
+    offeredNetworks: offeredNetworksOf(listing),
   };
 }
 
 /** The two bound addresses, as `paymentOptionsFor` reads them. */
 function payeeOf(creator: Pick<CreatorRow, "payout_address" | "stellar_payout_address">): Payee {
   return { payoutAddress: creator.payout_address, stellarPayoutAddress: creator.stellar_payout_address ?? null };
+}
+
+/**
+ * `listing.offered_networks`, or null. A row read before migration 20261025213000 has no
+ * such key at all, and that listing offers what every listing offered before it: everything.
+ */
+function offeredNetworksOf(listing: Pick<ListingRow, "offered_networks">): string[] | null {
+  return Array.isArray(listing.offered_networks) ? listing.offered_networks : null;
 }
 
 /**
@@ -415,38 +430,78 @@ export function quoteId(listing: ListingRow, release: ReleaseRow, priceMicro: bi
  * `CROSS_CHAIN_PAYOUTS` is off (BUILD §0b B3): an EVM-only creator gets Base only. When
  * W5 lands, this is the one place that changes.
  *
+ * **Then only the rails the listing offers** (25 Oct 2026, founder: "give the user the
+ * option to switch their payment address easily"). `listing.offered_networks` narrows the
+ * rails above to the networks the creator ticked on the listing's dashboard. Null, the
+ * default, is all of them, so a listing nobody has touched picks up a newly bound wallet
+ * or a newly enabled rail without being edited. The filter only ever removes: a network
+ * it names that the creator cannot be paid on, or that this deployment no longer runs, is
+ * simply not offered, and a listing left with nothing lands in the 402's "no rail" case.
+ *
  * The 402's `accepts`, `payment_options` in the listing JSON and MCP, and the listing
- * page's Pay area all derive from this, so they cannot disagree.
+ * page's Pay area all derive from this, so they cannot disagree. `evmList` is the one
+ * difference between them: `evmChains` for an option (no `payTo`; a page renders where no
+ * receiving address is held), `evmRails` for the 402. It is only called for an EVM payee.
  */
-function railsFor(payee: Payee): { evm: boolean; stellar: StellarRail | null } {
-  const identity = addressFamily(payee.payoutAddress);
+function railsFor(payee: Payee, offered: readonly string[] | null, evmList: () => EvmRail[]): { evm: EvmRail[]; stellar: StellarRail | null } {
+  const addresses = addressesOf(payee);
+  const offers = (network: string) => offered === null || offered.includes(network);
   const stellar = stellarRail();
   return {
-    evm: identity === "evm",
-    stellar: stellar && (payee.stellarPayoutAddress !== null || identity === "stellar") ? stellar : null,
+    evm: addresses.evm !== null ? evmList().filter((rail) => offers(rail.network)) : [],
+    stellar: stellar && addresses.stellar !== null && offers(stellar.network) ? stellar : null,
   };
+}
+
+/** Where each family of rail pays this payee out, or null where they hold no address for it. Rule 4 above, once. */
+function addressesOf(payee: Payee): { evm: string | null; stellar: string | null } {
+  const identity = addressFamily(payee.payoutAddress);
+  return {
+    evm: identity === "evm" ? payee.payoutAddress : null,
+    stellar: payee.stellarPayoutAddress ?? (identity === "stellar" ? payee.payoutAddress : null),
+  };
+}
+
+/**
+ * One rail this deployment runs, as the listing dashboard's "Where you get paid" rows show
+ * it: the chip's network and symbol, and the address a sale on it pays out to for this
+ * creator, or null when they have no wallet of that family yet.
+ */
+export type PayoutRail = { network: string; symbol: string; family: "evm" | "stellar"; address: string | null };
+
+/**
+ * Every rail this deployment runs, in the 402's order, each with where it would pay this
+ * creator. The listing's filter is not applied: this is the menu the creator chooses
+ * from, and `offered_networks` is the choice. The dashboard rows, the save route's "all
+ * ticked means null" and the service's validation all read it, so none of them can offer a
+ * rail `paymentOptionsFor` would not.
+ */
+export function payoutRailsFor(creator: Pick<CreatorRow, "payout_address" | "stellar_payout_address">): PayoutRail[] {
+  const addresses = addressesOf(payeeOf(creator));
+  const rows: PayoutRail[] = evmChains().map((rail) => ({ network: rail.network, symbol: rail.symbol, family: "evm", address: addresses.evm }));
+  const stellar = stellarRail();
+  if (stellar) rows.push({ network: stellar.network, symbol: stellar.asset.code, family: "stellar", address: addresses.stellar });
+  return rows;
 }
 
 export function paymentOptionsFor(
   creator: Pick<CreatorRow, "handle" | "payout_address" | "stellar_payout_address">,
-  listing: Pick<ListingRow, "slug" | "price_micro">,
+  listing: Pick<ListingRow, "slug" | "price_micro" | "offered_networks">,
 ): PaymentOption[] {
-  const rails = railsFor(payeeOf(creator));
+  const rails = railsFor(payeeOf(creator), offeredNetworksOf(listing), evmChains);
   const priceMicro = toMicro(listing.price_micro);
   const options: PaymentOption[] = [];
-  if (rails.evm) {
-    // `evmChains()`, not `evmRails()`: the listing page renders on deployments that hold
-    // no receiving address, and an option carries no `payTo`. One option per EVM rail,
-    // the primary first, each in its own token (USDC on Base, USDT0 on Arbitrum).
-    for (const rail of evmChains()) {
-      options.push({
-        network: rail.network,
-        asset: rail.asset,
-        asset_symbol: rail.symbol,
-        amount: priceMicro.toString(),
-        how: `Sign the ${rail.network} entry of accepts as an EIP-3009 ${rail.symbol} authorization on ${chainLabel(rail.network)} and retry with it in PAYMENT-SIGNATURE.`,
-      });
-    }
+  // `evmChains`, not `evmRails`: the listing page renders on deployments that hold no
+  // receiving address, and an option carries no `payTo`. One option per EVM rail the
+  // listing offers, the primary first, each in its own token (USDC on Base, USDT0 on Arbitrum).
+  for (const rail of rails.evm) {
+    options.push({
+      network: rail.network,
+      asset: rail.asset,
+      asset_symbol: rail.symbol,
+      amount: priceMicro.toString(),
+      how: `Sign the ${rail.network} entry of accepts as an EIP-3009 ${rail.symbol} authorization on ${chainLabel(rail.network)} and retry with it in PAYMENT-SIGNATURE.`,
+    });
   }
   if (rails.stellar) {
     const rail = rails.stellar;
@@ -484,23 +539,33 @@ export function toPaymentRequirements(q: PaymentRequiredQuote, now = new Date())
   // first of all (BUILD H10): an x402 client picks the first entry whose network it has a
   // scheme for, so a Base agent still finds Base at [0], and the Stellar CLI and an
   // Arbitrum wallet find theirs by `network` wherever they sit.
-  const rails = railsFor(q.payee);
-  if (!rails.evm && !rails.stellar) {
+  const rails = railsFor(q.payee, q.offeredNetworks, evmRails);
+  if (rails.evm.length === 0 && !rails.stellar) {
     // A Stellar-only creator on a deployment with the Stellar rail off. The listing exists
     // and the price is right; there is simply no rail here that reaches the creator. 503,
-    // like the kill switch, because turning the rail on is what fixes it.
-    throw new ApiError("paused", { message: "This listing's creator cannot be paid on any payment rail this deployment serves." });
+    // like the kill switch, because turning the rail on is what fixes it. Since 25 Oct 2026
+    // also a listing whose offered rails have all gone (the wallet was unbound, the rail
+    // switched off): the same answer, and ticking a rail on the dashboard fixes it.
+    throw new ApiError("paused", {
+      message:
+        q.offeredNetworks === null
+          ? "This listing's creator cannot be paid on any payment rail this deployment serves."
+          : "None of the payment rails this listing is offered on can reach its creator on this deployment right now.",
+    });
   }
 
   const description = paymentDescription(q);
   const canonicals: X402Requirement[] = [];
   const accepts: PaymentRequiredBodyOutput["accepts"] = [];
 
-  // Every EVM rail, the primary first. The ones beyond it are named again in the
-  // instructions below; there are none on a deployment that sets no
-  // `X402_EXTRA_EVM_RAILS`, which leaves the Base 402 byte-identical.
-  const evm = rails.evm ? evmRails() : [];
+  // Every EVM rail the listing offers, the primary first. The ones beyond the first are
+  // named again in the instructions below; there are none on a deployment that sets no
+  // `X402_EXTRA_EVM_RAILS`, which leaves the Base 402 byte-identical. "Primary" is the
+  // deployment's, not the list's: a listing that offers Arbitrum alone leads with Arbitrum
+  // and still names its token in the entry's description.
+  const evm = rails.evm;
   const extraEvm = evm.slice(1);
+  const primaryNetwork = paymentChain().network;
   for (const rail of evm) {
     // Spelled out rather than spread from the union type, so the published schema's
     // narrower EVM shape typechecks; the key order is the wire order it always had.
@@ -526,7 +591,7 @@ export function toPaymentRequirements(q: PaymentRequiredQuote, now = new Date())
     // so `accepted` still deep-equals `canonical`. The primary's description is the one
     // it always had; an extra rail's names its token and chain, as the Stellar one does,
     // so an agent holding USDT0 on Arbitrum and USDC on Base knows which entry is which.
-    const railDescription = rail === evm[0] ? description : `${description} ${dollars(q.priceMicro)} in ${rail.symbol} on ${chainLabel(rail.network)}.`;
+    const railDescription = rail.network === primaryNetwork ? description : `${description} ${dollars(q.priceMicro)} in ${rail.symbol} on ${chainLabel(rail.network)}.`;
     accepts.push({ ...canonical, maxAmountRequired: amount, resource, description: railDescription, mimeType: "application/zip" });
   }
 
@@ -561,7 +626,7 @@ export function toPaymentRequirements(q: PaymentRequiredQuote, now = new Date())
   // Stellar-only creator's reader is told the Stellar procedure instead, and a creator on
   // both families gets the EVM sentence with the Stellar alternative appended.
   const stellarSentence = rails.stellar ? stellarHow(rails.stellar, `${q.ref.owner}/${q.ref.slug}`) : null;
-  const evmSentence = rails.evm ? `${paymentInstructions(links, chainLabel(canonicals[0].network))}${otherEvmRails(extraEvm)}` : null;
+  const evmSentence = evm.length > 0 ? `${leadEvmInstructions(links, evm[0])}${otherEvmRails(extraEvm)}` : null;
   const instructions = evmSentence
     ? stellarSentence
       ? `${evmSentence} Or on Stellar: ${stellarSentence}`
@@ -603,6 +668,17 @@ export function toPaymentRequirements(q: PaymentRequiredQuote, now = new Date())
   } satisfies PaymentRequiredBodyOutput;
 
   return { body, accepts: canonicals, quoteId: q.quoteId, priceMicro: q.priceMicro };
+}
+
+/**
+ * The EVM sentence for the first EVM rail a listing offers. `signAndRetry` (lib/buy-links.ts)
+ * names USDC because the primary rail always was the first; a listing that leaves the
+ * primary off (25 Oct 2026, `offered_networks`) leads with another token, and the sentence
+ * must not tell an agent holding USDT0 on Arbitrum to sign a USDC authorization. A no-op
+ * on every USDC rail, so the Base 402 is byte-identical.
+ */
+function leadEvmInstructions(links: ReturnType<typeof buyLinks>, rail: EvmRail): string {
+  return paymentInstructions(links, chainLabel(rail.network)).replace("EIP-3009 USDC authorization", `EIP-3009 ${rail.symbol} authorization`);
 }
 
 /**

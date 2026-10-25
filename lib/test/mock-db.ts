@@ -159,6 +159,8 @@ function defaultsFor(table: string, now: string): Row {
         public_repo_url: null,
         open_after_days: null,
         open_eligibility: null,
+        // Offered rails (20261025213000): null, every rail the creator can be paid on.
+        offered_networks: null,
       };
     case "release":
       return {

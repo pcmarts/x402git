@@ -36,6 +36,8 @@ export type SeedListing = {
   stellarPayoutAddress?: string | null;
   /** The hash of the creator's live `agent` key (FR-54): seeded into `api_key`. */
   apiKeyHash?: string;
+  /** `listing.offered_networks` (migration 20261025213000). Null, the default, offers every rail the creator can be paid on. */
+  offeredNetworks?: string[] | null;
   releases?: SeedRelease[];
 };
 
@@ -114,6 +116,7 @@ export function seedListing(mock: MockDb, input: SeedListing = {}): SeededListin
     published_at: input.published === false ? null : new Date(now).toISOString(),
     retired_at: input.retired ? new Date(now).toISOString() : null,
     created_at: new Date(now).toISOString(),
+    offered_networks: input.offeredNetworks ?? null,
   });
 
   const specs = input.releases ?? [{ version: "1.0.0" }];

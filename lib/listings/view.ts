@@ -182,6 +182,9 @@ export function listingView(
     latest_release: latestReleaseView(latestRelease, handle, listing.slug),
     pricing: pricingFor(listing),
     ...(creator ? { payment_options: paymentOptionsFor(creator, listing) } : {}),
+    // The creator's choice of rails (migration 20261025213000); `payment_options` above is
+    // already filtered by it. Null, and absent on a row read before the migration: every rail.
+    offered_networks: Array.isArray(listing.offered_networks) ? listing.offered_networks : null,
     // The promise on the release that sells, else what the next cut will stamp. This is
     // the creator's own view, so the standing offer belongs here; public surfaces call
     // `openReleaseView` alone.

@@ -158,6 +158,20 @@ export const OpenReleaseBlock = z
 export type OpenReleaseBlockOutput = z.infer<typeof OpenReleaseBlock>;
 export type OpenReleaseCheckOutput = z.infer<typeof OpenReleaseCheck>;
 
+/**
+ * Which rails a listing is sold on (25 Oct 2026, migration 20261025213000), shared by create
+ * and patch. Only the shape is checked here: whether each network is one this deployment
+ * serves and one the creator can be paid on is `lib/listings/service.ts`'s, because only it
+ * knows the deployment and the creator, and its refusal names the network.
+ */
+const OfferedNetworks = z
+  .array(z.string())
+  .nullable()
+  .optional()
+  .describe(
+    "The CAIP-2 networks this listing is sold on, a subset of the ones its creator can be paid on: `eip155:8453` (USDC on Base), `eip155:42161` (USDT0 on Arbitrum), `stellar:pubnet` (USDT0 on Stellar). `null` offers every one, including rails the creator adds later. Omit to leave it alone.",
+  );
+
 /** The three listing fields behind an open release, shared by create and patch. */
 const OpenReleaseFields = {
   /** Sell each release early and promise a public opening. Both fields below are then required. */
@@ -189,6 +203,7 @@ export const CreateListingRequest = z
     update_price_micro: UpdatePriceMicro.optional(),
     description: z.string().min(1).max(4000).optional(),
     trigger_hint: z.string().min(1).max(500).optional(),
+    offered_networks: OfferedNetworks,
     ...OpenReleaseFields,
   })
   .meta({
@@ -288,6 +303,11 @@ export const ListingResponse = z
     pricing: PricingBlock,
     /** The networks this listing can be paid on, from the creator's bound addresses (25 Oct 2026). */
     payment_options: PaymentOptions.optional(),
+    /** The listing's own choice of rails; `payment_options` already reflects it. Null offers every rail the creator can be paid on. */
+    offered_networks: z
+      .array(z.string())
+      .nullable()
+      .describe("The CAIP-2 networks the creator chose to sell this listing on, or null for every rail they can be paid on. `payment_options` is the result."),
     /** The open-release promise on the release that sells, or the standing offer; null on an ordinary listing. */
     open_release: OpenReleaseBlock.nullable(),
     endpoints: ListingEndpoints,
@@ -313,6 +333,7 @@ export const PatchListingRequest = z
     update_price_micro: UpdatePriceMicro.optional(),
     description: z.string().min(1).max(4000).optional(),
     trigger_hint: z.string().min(1).max(500).optional(),
+    offered_networks: OfferedNetworks,
     ...OpenReleaseFields,
   })
   .meta({

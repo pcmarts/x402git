@@ -20,8 +20,13 @@
  * Over-length text bounces the whole POST rather than being cut to fit. The form's limits
  * are far under the API's, and a creator who pasted 340 characters into a 200-character
  * field is owed the sentence they wrote back, not the first 200 of it.
+ *
+ * "Where you get paid" (25 Oct 2026) posts one `offered_networks[]` per ticked rail. Every
+ * rail the creator can be paid on ticked is sent as `null`, not as the list; the list is
+ * sent only when something is left out. See the block below for why.
  */
 
+import { payoutRailsFor } from "@/lib/core/access";
 import { handle } from "@/lib/errors";
 import { micro, OPEN_RELEASE_MAX_DAYS } from "@/lib/schemas";
 import { creatorApi } from "@/lib/web/api-client";
@@ -75,7 +80,7 @@ export const POST = handle(async (req: Request, ctx: { params: Promise<{ id: str
     });
   }
 
-  const body: Record<string, string | boolean | number> = {
+  const body: Record<string, string | boolean | number | string[] | null> = {
     price_micro: micro.serialize(priceMicro),
     update_price_micro: micro.serialize(updateMicro),
   };
@@ -101,6 +106,28 @@ export const POST = handle(async (req: Request, ctx: { params: Promise<{ id: str
       return back(target, { error: `Days until a release goes public must be a whole number from 1 to ${OPEN_RELEASE_MAX_DAYS}. Nothing was saved.` });
     }
     if (days !== null) body.open_after_days = days;
+  }
+
+  // Where you get paid (25 Oct 2026, founder: switch between payout addresses per
+  // listing). A browser posts only the ticked boxes, so `offered_networks_shown` is what
+  // says the rows were on screen; a form without them leaves the choice alone.
+  //
+  // All ticked → null, deliberately not the list. Null means "every rail I can be paid
+  // on", so the listing follows a wallet bound or a rail switched on later without anyone
+  // coming back here to tick it; the list would freeze today's set. Anything less is the
+  // list, and the API checks each entry is served and reaches this creator. None ticked is
+  // refused in words: the way to stop selling is Retire, not an empty row of boxes. A
+  // creator with no rail that can pay them (every box disabled) sends nothing, so their
+  // price and description still save.
+  if (form.get("offered_networks_shown") === "1") {
+    const payable = payoutRailsFor(actor.creator)
+      .filter((rail) => rail.address !== null)
+      .map((rail) => rail.network);
+    const ticked = [...new Set(form.getAll("offered_networks[]").map(String))];
+    if (payable.length > 0) {
+      if (ticked.length === 0) return back(target, { error: "Offer at least one way to get paid. Nothing was saved." });
+      body.offered_networks = payable.every((network) => ticked.includes(network)) ? null : ticked;
+    }
   }
 
   const result = await creatorApi<{ description?: string | null; trigger_hint?: string | null }>({
