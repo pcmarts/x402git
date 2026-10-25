@@ -58,7 +58,7 @@
     "@types/react-dom": "^19",
     "@x402/fetch": "^2.25.0",
     "typescript": "^5.9",
-    "vitest": "^4.1.11"
+    "vitest": "^5.0.5"
   },
   "overrides": {
     "axios": "~1.20.0"
