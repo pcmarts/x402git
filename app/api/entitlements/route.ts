@@ -62,6 +62,10 @@ export const GET = handle(async (req: NextRequest) => {
         kind: purchase.kind,
         source: purchase.source,
         tx_hash: purchase.txHash,
+        // The rail the row settled on (25 Oct 2026): the purchases page draws its chip and
+        // explorer from these, never from a deployment-wide chain.
+        network: purchase.network,
+        asset: purchase.asset,
         granted_at: purchase.grantedAt.toISOString(),
         revoked_at: purchase.revokedAt ? purchase.revokedAt.toISOString() : null,
         resource_endpoint: `${base}/api/r/${owner}/${slug}`,

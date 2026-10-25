@@ -34,6 +34,9 @@ export const Entitlement = z
     kind: z.enum(["new", "update", "free"]),
     source: z.enum(["web", "api", "mcp"]),
     tx_hash: z.string().nullable(),
+    /** Where it settled (CAIP-2) and in which token contract, so a reader can draw the right chip and explorer link. */
+    network: z.string(),
+    asset: z.string().nullable(),
     granted_at: IsoDateTime,
     revoked_at: IsoDateTime.nullable(),
     resource_endpoint: z.string(),
