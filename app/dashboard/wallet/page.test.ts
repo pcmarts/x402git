@@ -9,7 +9,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CreatorRow } from "@/lib/db/types";
-import { resetEnv } from "@/lib/env";
+import { resetEnv, stellarRail } from "@/lib/env";
 import { clearStellarEnv, setStellarTestnetEnv, STELLAR_CREATOR } from "@/lib/test/stellar";
 import WalletPage from "./page";
 
@@ -57,7 +57,7 @@ describe("/dashboard/wallet by rail", () => {
     expect(html).toContain(`${STELLAR_CREATOR.slice(0, 6)}…${STELLAR_CREATOR.slice(-4)}`);
     expect(html).toContain("Change the EVM wallet");
     expect(html).toContain("Change the Stellar wallet");
-    expect(html).toContain("tUSDT0 allowed");
+    expect(html).toContain(`${stellarRail()!.asset.code} allowed`);
   });
 
   it("says 'not yet' on a rail with no wallet and offers to add it", async () => {
