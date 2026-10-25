@@ -89,6 +89,7 @@ import { headers } from "next/headers";
 import { notFound } from "next/navigation";
 import { type Reading, StorefrontColophon, StorefrontMark } from "@/app/_components/chrome";
 import { BuyBar } from "@/app/_components/buy-bar";
+import { BuyWithFreighter } from "@/app/_components/buy-with-freighter";
 import { BuyWithWallet } from "@/app/_components/buy-with-wallet";
 import { CopyEndpoint } from "@/app/_components/copy-endpoint";
 import { CreatorStrip } from "@/app/_components/creator-strip";
@@ -97,9 +98,11 @@ import { ClipScript, ClipToggle, ReadmeSection, TRUST_BODY_ID } from "@/app/_com
 import { WebMcpTools } from "@/app/_components/webmcp";
 import { OpenReleaseBlock } from "./open-release";
 import { StellarPay } from "./stellar-pay";
-import { type ListingRef, paymentOptionsFor, quote, toPaymentRequirements } from "@/lib/core/access";
+import { chainLabel } from "@/lib/buy-links";
+import { type ListingRef, type PaymentOption, paymentOptionsFor, quote, toPaymentRequirements } from "@/lib/core/access";
 import { toMicro } from "@/lib/db/types";
-import { appUrl } from "@/lib/env";
+import { appUrl, stellarRail } from "@/lib/env";
+import type { StellarCheckoutConfig } from "@/lib/web/stellar-checkout";
 import { record } from "@/lib/events";
 import { isLikelyBot } from "@/lib/web/user-agent";
 import { optionalSession } from "@/lib/web/current";
@@ -247,6 +250,28 @@ export async function generateMetadata({ params }: Params): Promise<Metadata> {
   };
 }
 
+/**
+ * The rail, reduced to what a browser may know (25 Oct 2026): the one Stellar network this
+ * deployment pays on, its passphrase, the public RPC and Horizon, and the token. Null when
+ * the rail is off or misconfigured, or pays on a network other than the option's — then
+ * the page shows the terminal line alone rather than a button that cannot work.
+ */
+function stellarCheckoutConfig(option: PaymentOption): StellarCheckoutConfig | null {
+  try {
+    const rail = stellarRail();
+    if (!rail || rail.network !== option.network) return null;
+    return {
+      network: rail.network,
+      passphrase: rail.passphrase,
+      rpcUrl: rail.rpcUrl,
+      horizonUrl: rail.horizonUrl,
+      asset: { code: rail.asset.code, issuer: rail.asset.issuer, contract: rail.asset.contract, symbol: option.asset_symbol },
+    };
+  } catch {
+    return null;
+  }
+}
+
 export default async function ListingPage({ params, searchParams }: Params) {
   const { owner, slug } = await params;
   const query = searchParams ? await searchParams : {};
@@ -354,6 +379,10 @@ export default async function ListingPage({ params, searchParams }: Params) {
   const evmOption = options.find((o) => o.network.startsWith("eip155:")) ?? null;
   const stellarOption = options.find((o) => o.network.startsWith("stellar:")) ?? null;
   const chain = evmOption ? chainInfo(Number(evmOption.network.split(":")[1])) : null;
+  // What the Freighter button needs from the rail: network, passphrase, public endpoints
+  // and the token. Picked field by field, so nothing else in the rail's config (the
+  // facilitator key) can ever reach a client component.
+  const stellarConfig = stellarOption ? stellarCheckoutConfig(stellarOption) : null;
 
   // GitHub's own reading of the repository and the creator. Never throws, never blocks
   // publishing, never feeds a computed field: if this is `{ repo: null, owner: null }`
@@ -461,16 +490,22 @@ export default async function ListingPage({ params, searchParams }: Params) {
                   sizeLabel={latest.size_bytes ? formatBytes(Number(latest.size_bytes)) : undefined}
                 />
               ) : null}
-              {stellarOption ? (
-                <StellarPay
+              {/* The Stellar button (buy-with-freighter.tsx), then the terminal line under
+                  it, closed. Both render from the same `payment_options` entry as the 402. */}
+              {stellarOption && stellarConfig ? (
+                <BuyWithFreighter
                   owner={creator.handle}
                   slug={listing.slug}
-                  option={stellarOption}
+                  version={latest.version}
+                  priceMicro={price.toString()}
                   priceLabel={price === 0n ? "free" : formatPrice(price)}
+                  chainName={chainLabel(stellarOption.network)}
+                  config={stellarConfig}
                   forSale={status === "live"}
-                  alone={!evmOption}
+                  sizeLabel={latest.size_bytes ? formatBytes(Number(latest.size_bytes)) : undefined}
                 />
               ) : null}
+              {stellarOption ? <StellarPay owner={creator.handle} slug={listing.slug} option={stellarOption} forSale={status === "live"} /> : null}
               {!evmOption && !stellarOption ? (
                 <p className="written buy-fallback">
                   This listing cannot be bought on this site yet: its creator is paid on a network this deployment does not offer.

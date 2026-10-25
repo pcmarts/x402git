@@ -1269,36 +1269,41 @@ describe("the Pay area follows payment_options (JOURNEYS B0 [today, Must], BATTL
     expect(markup).not.toContain("<code>npx x402git-stellar");
   });
 
-  it("hides the EVM button and server-renders the Stellar command for a Stellar-only creator", async () => {
+  it("hides the EVM button and renders the Freighter button plus the closed terminal line for a Stellar-only creator", async () => {
     setStellarTestnetEnv();
     resetEnv();
     seed();
     mock.rows("creator")[0].payout_address = STELLAR_CREATOR;
 
     const markup = await html();
-    // No control that cannot work: not the button, not its JavaScript sentence.
-    expect(markup).not.toContain("Turn on JavaScript to pay from this page");
-    // The price in the listing's own token, from the same function as the 402.
-    expect(markup).toContain("<strong>$9</strong> in USDC on Stellar testnet.");
-    expect(markup).toContain("Pay from the command line: ");
+    // The Base button and its sentence are gone; the Stellar button's own pre-mount
+    // sentence stands in their place (buy-with-freighter.tsx renders nothing else on the
+    // server), and the terminal is a closed disclosure under it.
+    expect(markup).not.toContain("Turn on JavaScript to pay from this page, or pay from the terminal — see");
+    expect(markup).toContain("Turn on JavaScript to pay from this page with a Stellar wallet");
+    expect(markup).toContain("Pay from a terminal or an agent");
     expect(markup).toContain("<code>npx x402git-stellar buy adrian/humanizer</code>");
+    expect(markup.indexOf("with a Stellar wallet")).toBeLessThan(markup.indexOf("x402git-stellar buy"));
     // The bridge hint is for mainnet USDT0; testnet money does not come from usdt0.to.
     expect(markup).not.toContain("usdt0.to");
+    // Nothing from the rail's config but the public endpoints: never the facilitator key.
+    expect(markup).not.toContain("facilitator");
     // The agent prompt is still there under it.
     expect(markup).toContain("Buy with your agent");
   });
 
-  it("shows the button and the command line under it when the creator takes both", async () => {
+  it("shows both buttons, Base first, and the terminal line under them when the creator takes both", async () => {
     setStellarTestnetEnv();
     resetEnv();
     seed();
     mock.rows("creator")[0].stellar_payout_address = STELLAR_CREATOR;
 
     const markup = await html();
-    expect(markup).toContain("Turn on JavaScript to pay from this page");
-    expect(markup).toContain("Or pay in USDC on Stellar testnet from the command line: ");
+    expect(markup).toContain("Turn on JavaScript to pay from this page, or pay from the terminal — see");
+    expect(markup).toContain("Turn on JavaScript to pay from this page with a Stellar wallet");
     expect(markup).toContain("<code>npx x402git-stellar buy adrian/humanizer</code>");
-    expect(markup.indexOf("Turn on JavaScript")).toBeLessThan(markup.indexOf("x402git-stellar buy"));
+    expect(markup.indexOf("pay from the terminal — see")).toBeLessThan(markup.indexOf("with a Stellar wallet"));
+    expect(markup.indexOf("with a Stellar wallet")).toBeLessThan(markup.indexOf("x402git-stellar buy"));
   });
 
   it("points a Stellar holder of a retired listing at fetch, and sells nothing", async () => {
