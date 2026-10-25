@@ -2673,3 +2673,26 @@ lib/scan/index.ts.
 
 **Not done.** Already-failed releases stay failed; a scan verdict is terminal. The
 creator cuts a new version (or pins) to get a passing one.
+
+## 2026-10-25 — Sign-up ends at the repo picker; the agent key is made on demand
+
+**Context.** Binding a wallet created the account, minted two keys, and landed on
+`/dashboard/key`: the agent key, shown once, under four paragraphs about bearer headers,
+scopes, what the key cannot do and how to rotate it from a script. For a creator who had
+just signed up to sell a repository, the first screen of the product was a credential
+they had not asked for, on a page they could never come back to. HackMeridian, founder:
+"sign up, connect a wallet, choose a repo, set the details, and list".
+
+**Decision.** Binding a wallet mints the browser's session key only and redirects to
+`/dashboard/new` — or to the path sign-in was parked on, unless that path was the
+dashboard root or one of the two detour pages. No agent key exists until the creator asks
+for one. `/dashboard/key` is a link in the dashboard nav; with no key it says so and its
+one button creates one, after which the same button rotates. The page shows the key once,
+the prefix and dates after that, and keeps everything else — what the key does, its
+scopes, what rotation revokes, the script route — in one closed disclosure. Amends FR-55
+and the FR-59 page in "PRD Session Keys.md". `POST /api/creators` (FR-2) still returns an
+agent key: a headless registration has nothing else to hold.
+
+**Consequences.** `OnboardResult` no longer carries `agentKey`, and the one-time box
+cookie is set only by `/dashboard/key/rotate`. A creator with no agent row signs in with
+`DEFAULT_SCOPES` on the session key, as already happened after a scan revoked the key.

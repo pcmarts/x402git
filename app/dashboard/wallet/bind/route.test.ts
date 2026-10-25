@@ -1,7 +1,8 @@
 /**
- * The FR-55 half of binding a wallet: one write creates the creator and mints both
- * kinds of key, and the two plaintexts go to two different places — the session key into
- * the sealed cookie, the agent key into the one-time box, neither into the URL.
+ * The FR-55 half of binding a wallet: one write creates the creator and mints the
+ * browser's session key, whose plaintext goes into the sealed cookie and nowhere else.
+ * No agent key is minted here since 25 Oct 2026 (DECISIONS.md): the new creator goes
+ * straight on to the repo picker, and makes a key from `/dashboard/key` if they want one.
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -13,7 +14,7 @@ import { resetEnv } from "@/lib/env";
 import { resetScreeningCache } from "@/lib/screening";
 import { makeMockDb } from "@/lib/test/mock-db";
 import { notifyAdmin } from "@/lib/notify";
-import { KEY_BOX_COOKIE, openBox, openSession, SESSION_COOKIE, newSession, sealSession } from "@/lib/web/session";
+import { KEY_BOX_COOKIE, openSession, SESSION_COOKIE, newSession, sealSession } from "@/lib/web/session";
 
 vi.mock("@/lib/notify", () => ({ notifyAdmin: vi.fn(async () => ({ delivered: true })) }));
 
@@ -45,7 +46,7 @@ beforeEach(() => {
   vi.mocked(notifyAdmin).mockClear();
   // FR-38 screening: an empty list, so no test touches the network.
   vi.stubGlobal("fetch", vi.fn(async () => new Response("[]", { status: 200 })));
-  cookieJar =`${SESSION_COOKIE}=${encodeURIComponent(sealSession(newSession({ github: { id: 4242, login: "adrian" } })))}`;
+  cookieJar = `${SESSION_COOKIE}=${encodeURIComponent(sealSession(newSession({ github: { id: 4242, login: "adrian" } })))}`;
 });
 
 afterEach(() => {
@@ -73,17 +74,23 @@ function cookie(res: Response, name: string): string | undefined {
     .slice(name.length + 1);
 }
 
+/** A fresh session cookie parked on `next`, against a fresh database. */
+function parkedOn(next: string | undefined) {
+  mock = makeMockDb();
+  setDb(mock.client as unknown as Db);
+  cookieJar = `${SESSION_COOKIE}=${encodeURIComponent(sealSession(newSession({ github: { id: 4242, login: "adrian" }, next })))}`;
+}
+
 describe("POST /dashboard/wallet/bind (FR-1, FR-55)", () => {
-  it("mints an agent key and a session key, and only their hashes are stored", async () => {
+  it("mints a session key and no agent key, and only the hash is stored", async () => {
     const res = await bind();
     expect(res.status).toBe(303);
 
     const rows = mock.rows("api_key");
-    expect(rows.filter((r) => r.kind === "agent")).toHaveLength(1);
+    expect(rows.filter((r) => r.kind === "agent")).toHaveLength(0);
     expect(rows.filter((r) => r.kind === "session")).toHaveLength(1);
     expect(rows.every((r) => r.creator_id === mock.rows("creator")[0].id)).toBe(true);
-    // The agent key never expires; the session key must (the table's CHECK, FR-56).
-    expect(rows.find((r) => r.kind === "agent")?.expires_at).toBeNull();
+    // The session key must expire (the table's CHECK, FR-56).
     expect(rows.find((r) => r.kind === "session")?.expires_at).toBeTruthy();
   });
 
@@ -97,55 +104,47 @@ describe("POST /dashboard/wallet/bind (FR-1, FR-55)", () => {
     expect(Date.parse(row?.expires_at as string)).toBe((session?.exp as number) * 1000);
   });
 
-  it("carries the agent key in the one-time box, and never in the URL", async () => {
+  it("sends the new creator to the repo picker, with nothing secret in the URL", async () => {
     const res = await bind();
-    const shown = openBox(decodeURIComponent(cookie(res, KEY_BOX_COOKIE) as string));
+    const location = new URL(res.headers.get("location") as string);
 
-    expect(shown).toMatch(/^x4c_live_[0-9A-Za-z]{32}$/);
-    expect(mock.rows("api_key").find((r) => r.kind === "agent")?.hash).toBe(hashApiKey(shown as string));
-
-    const location = res.headers.get("location") as string;
-    expect(new URL(location).pathname).toBe("/dashboard/key");
-    expect(location).not.toContain("x4c_live_");
-    expect(location).not.toContain("x4s_live_");
+    expect(location.pathname).toBe("/dashboard/new");
+    expect(location.searchParams.get("ok")).toBe("Account created.");
+    expect(location.href).not.toContain("x4s_live_");
+    // No one-time box: there is no agent key to carry.
+    expect(cookie(res, KEY_BOX_COOKIE)).toBeUndefined();
   });
 
-  // The repo-picker detour: a creator who installed the App before they had an account
-  // signs in on the way to /dashboard/new and is sent here first. The key page is the
-  // next stop either way; the path they were headed for rides along as its way on.
-  it("hands the key page the path sign-in was headed for", async () => {
-    const parked = newSession({ github: { id: 4242, login: "adrian" }, next: "/dashboard/new" });
-    cookieJar = `${SESSION_COOKIE}=${encodeURIComponent(sealSession(parked))}`;
+  // A creator who installed the App before they had an account signs in on the way to
+  // the picker with an installation id, and is sent through the wallet first. That path
+  // rides along and is spent here.
+  it("keeps the path sign-in was parked on when it is somewhere real", async () => {
+    parkedOn("/dashboard/new?sort=name");
 
-    const location = new URL((await bind()).headers.get("location") as string);
-    expect(location.pathname).toBe("/dashboard/key");
-    expect(location.searchParams.get("next")).toBe("/dashboard/new");
+    const res = await bind();
+    const location = new URL(res.headers.get("location") as string);
+    expect(location.pathname).toBe("/dashboard/new");
+    expect(location.searchParams.get("sort")).toBe("name");
+    expect(location.searchParams.get("ok")).toBe("Account created.");
     // Spent once bound: the new session does not carry it.
-    expect(openSession(decodeURIComponent(cookie(await bind(), SESSION_COOKIE) ?? ""))?.next).toBeUndefined();
+    expect(openSession(decodeURIComponent(cookie(res, SESSION_COOKIE) ?? ""))?.next).toBeUndefined();
   });
 
-  it("falls back to the dashboard when there is no path, or the path is this detour", async () => {
-    const plain = new URL((await bind()).headers.get("location") as string);
-    expect(plain.searchParams.get("next")).toBe("/dashboard");
-
-    for (const next of ["/dashboard/wallet", "/dashboard/key?ok=x", "//evil.example"]) {
-      mock = makeMockDb();
-      setDb(mock.client as unknown as Db);
-      cookieJar = `${SESSION_COOKIE}=${encodeURIComponent(sealSession(newSession({ github: { id: 4242, login: "adrian" }, next })))}`;
+  it("goes to the picker when the parked path is missing, the dashboard root, a detour page, or unsafe", async () => {
+    for (const next of [undefined, "/dashboard", "/dashboard/wallet", "/dashboard/key?ok=x", "//evil.example"]) {
+      parkedOn(next);
       const location = new URL((await bind()).headers.get("location") as string);
-      expect(location.searchParams.get("next")).toBe("/dashboard");
+      expect(location.pathname, String(next)).toBe("/dashboard/new");
     }
   });
 
-  it("keeps both keys out of the cookies in the clear, and both cookies httpOnly", async () => {
+  it("keeps the session key out of the cookies in the clear, and the cookie httpOnly", async () => {
     const res = await bind();
     const raw = res.headers.getSetCookie().join(" | ");
 
-    expect(raw).not.toContain("x4c_live_");
     expect(raw).not.toContain("x4s_live_");
-    expect(res.headers.getSetCookie().filter((c) => c.includes("HttpOnly"))).toHaveLength(2);
-    // The box is short-lived: it exists to survive one redirect (FR-59).
-    expect(res.headers.getSetCookie().find((c) => c.startsWith(`${KEY_BOX_COOKIE}=`))).toContain("Max-Age=300");
+    expect(raw).not.toContain("x4c_live_");
+    expect(res.headers.getSetCookie().filter((c) => c.includes("HttpOnly"))).toHaveLength(1);
   });
 
   it("tells the operator a creator joined on the web rail, and names no address (ADMIN-NOTIFICATIONS.md)", async () => {

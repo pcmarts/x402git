@@ -33,6 +33,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         <a href="/dashboard">Listings</a>
         <a href="/dashboard/earnings">Earnings</a>
         <a href="/dashboard/wallet">Wallet</a>
+        <a href="/dashboard/key">Agent key</a>
         <form method="post" action="/api/auth/logout">
           <button type="submit" data-variant="quiet">
             Sign out

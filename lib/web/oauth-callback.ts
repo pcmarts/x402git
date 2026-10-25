@@ -84,7 +84,7 @@ export async function completeGithubCallback(req: Request, deps: CallbackDeps = 
   // No creator row yet: `creator.payout_address` is NOT NULL and FR-26 pays only to the
   // bound address, so the identity waits in the cookie until a wallet is proved. Nothing
   // is minted for it — there is no creator to mint against, and the bind route (FR-55)
-  // mints both keys when the row appears. The path asked for waits in the cookie too
+  // mints its session key when the row appears. The path asked for waits in the cookie too
   // (`SessionData.next`), so the detour through the wallet does not lose it.
   const destination = creator ? safeReturnPath(parked.next, "/dashboard") : "/dashboard/wallet";
 
@@ -94,8 +94,8 @@ export async function completeGithubCallback(req: Request, deps: CallbackDeps = 
   // revoke, and one that died early would sign a live session out mid-click.
   //
   // Scopes come from the creator's live agent key, so a narrowed key narrows the
-  // dashboard too; `DEFAULT_SCOPES` only when there is no agent row at all (its key was
-  // revoked by a scan hit and never rotated).
+  // dashboard too; `DEFAULT_SCOPES` when there is no agent row — none created yet, or it
+  // was revoked by a scan hit and never rotated.
   const now = new Date();
   let apiKey: string | undefined;
   if (creator) {

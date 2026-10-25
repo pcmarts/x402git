@@ -15,13 +15,14 @@
  * have to differ. Nothing about entitlement or money is decided here.
  * Recorded in DECISIONS.md.
  *
- * ## Why two keys come out of one write
+ * ## Why one key comes out of this write
  *
  * D14 ("PRD Session Keys.md"): a creator has an `agent` key their programmes hold and a
- * `session` key per browser session. Binding a wallet is both events at once — the
- * account comes into existence and the human is sitting in front of it — so it mints
- * both. The agent key is shown once and never again; the session key goes into the
- * sealed cookie and is never shown at all (FR-55).
+ * `session` key per browser session. Binding a wallet is the moment the account comes
+ * into existence with a human in front of it, so it mints the session key, which goes
+ * into the sealed cookie and is never shown (FR-55). It used to mint the agent key too
+ * and land on the page that showed it; since 25 Oct 2026 (DECISIONS.md) the agent key is
+ * created on demand from `/dashboard/key`, and sign-up goes on to the repo picker.
  *
  * ## Why the creator row is not written until a wallet is bound
  *
@@ -71,8 +72,6 @@ export type OnboardInput = {
 
 export type OnboardResult = {
   creator: CreatorRow;
-  /** `x4c_live_…`. Shown to the creator exactly once, then only its hash exists. */
-  agentKey: string;
   /** `x4s_live_…`. Goes straight into the sealed cookie; the creator never sees it. */
   sessionKey: string;
 };
@@ -139,19 +138,18 @@ export async function createCreatorFromGithub(input: OnboardInput): Promise<Onbo
     throw error;
   }
 
-  // FR-54: keys are their own rows, so they are written after the creator exists rather
-  // than as columns on it. Agent first: it is the one the creator is about to be shown,
-  // and the one the partial unique index has an opinion about.
+  // FR-54: keys are their own rows, so the session key is written after the creator
+  // exists rather than as a column on it. No agent key yet: `/dashboard/key` mints one
+  // the first time the creator asks for it (DECISIONS.md, 2026-10-25).
   const creator = data as CreatorRow;
-  const agent = await insertApiKey(creator.id, "agent", DEFAULT_SCOPES, null);
   const session = await insertApiKey(creator.id, "session", DEFAULT_SCOPES, input.sessionExpiresAt);
 
-  // ADMIN-NOTIFICATIONS.md, 13 Sep 2026. Last, after both keys: an account that failed
+  // ADMIN-NOTIFICATIONS.md, 13 Sep 2026. Last, after the key: an account that failed
   // half-way is not a signup worth announcing. No try/catch — `notifyAdmin` never throws
   // and has a 3 s ceiling, the same discipline `record` keeps in lib/events.ts.
   await notifyAdmin({ kind: "creator_joined", via: "web", handle: creator.handle, creatorId: creator.id, walletMode: creator.wallet_mode });
 
-  return { creator, agentKey: agent.key, sessionKey: session.key };
+  return { creator, sessionKey: session.key };
 }
 
 /**

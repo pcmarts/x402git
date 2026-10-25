@@ -96,14 +96,14 @@ describe("POST /dashboard/wallet/bind with Freighter (Stellar-only sign-up)", ()
     withTrustline();
     const res = await bind();
     expect(res.status).toBe(303);
-    expect(res.headers.get("location")).toContain("/dashboard/key");
+    expect(res.headers.get("location")).toContain("/dashboard/new");
 
     const creator = mock.rows("creator")[0];
     expect(creator).toMatchObject({ handle: "orbit", payout_address: G, stellar_payout_address: G, wallet_mode: "linked", onboarded_via: "web" });
     expect(creator.stellar_payout_meta).toMatchObject({ network: "stellar:testnet", address: G, trustline: { authorized: true } });
     expect(creator.stellar_payout_verified_at).toBeTruthy();
     // D14: both keys, and the session cookie names the new creator.
-    expect(mock.rows("api_key").map((k) => k.kind).sort()).toEqual(["agent", "session"]);
+    expect(mock.rows("api_key").map((k) => k.kind).sort()).toEqual(["session"]);
     const session = openSession(decodeURIComponent(cookie(res, SESSION_COOKIE) ?? ""));
     expect(session?.creatorId).toBe(creator.id);
     expect(vi.mocked(notifyAdmin)).toHaveBeenCalledTimes(1);

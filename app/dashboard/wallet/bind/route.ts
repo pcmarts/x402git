@@ -2,18 +2,13 @@
  * POST /dashboard/wallet/bind — the account is created here (FR-1).
  *
  * Everything before this point is a cookie. This is the write: challenge consumed,
- * address screened, handle taken from the GitHub login, creator row inserted, and both
- * keys minted (D14, FR-55) — because binding a wallet is the one moment that is both
- * "this account now exists" and "a human is sitting in front of it".
+ * address screened, handle taken from the GitHub login, creator row inserted, and the
+ * browser's session key minted (D14, FR-55) — sealed into the session cookie, never
+ * shown, never mentioned.
  *
- * The two keys go to two different places, and the difference is the whole point:
- *
- *   session  x4s_live_…  sealed into the session cookie. Never shown, never mentioned.
- *   agent    x4c_live_…  shown once on /dashboard/key, then only its hash exists.
- *
- * The agent key travels there in its own sealed one-time cookie (`sealBox`), not in the
- * query string: a redirect URL ends up in browser history, in the Referer of every asset
- * the next page loads, and in any log in front of us. Five minutes, httpOnly, encrypted.
+ * No agent key is minted here (25 Oct 2026, DECISIONS.md). Sign-up is wallet → repo
+ * picker → price and details → publish; a creator who wants a key for a script makes one
+ * from `/dashboard/key`, which is in the dashboard nav, and sees it there once.
  */
 
 import { NextResponse } from "next/server";
@@ -24,17 +19,7 @@ import { currentSession, signInPath } from "@/lib/web/current";
 import { back, seeOther } from "@/lib/web/dashboard";
 import { createCreatorFromGithub } from "@/lib/web/onboard";
 import { safeReturnPath } from "@/lib/web/safe-redirect";
-import {
-  cookieOptions,
-  KEY_BOX_COOKIE,
-  KEY_BOX_TTL_SEC,
-  newSession,
-  sealBox,
-  sealSession,
-  SESSION_COOKIE,
-  SESSION_TTL_SEC,
-  sessionExpiresAt,
-} from "@/lib/web/session";
+import { cookieOptions, newSession, sealSession, SESSION_COOKIE, SESSION_TTL_SEC, sessionExpiresAt } from "@/lib/web/session";
 
 export const dynamic = "force-dynamic";
 
@@ -90,21 +75,16 @@ export const POST = handle(async (req: Request) => {
     now,
   );
 
-  // Straight to the key page rather than to /dashboard: the agent key is on screen for
-  // one page load and never again, so the page that shows it is the one to land on.
-  const url = new URL("/dashboard/key", base);
-  // The notice sits on a row with the ordinary Copy, which takes the sentence, so the
-  // sentence points at the key rather than claiming to be it (2026-09-21, founder):
-  // the key is a section below, and it now carries a Copy of its own.
-  url.searchParams.set("ok", "Account created. Your agent key is below, and this is the only load that shows it. Copy it there.");
-  // And the way on from there: the path sign-in was headed for before it detoured through
-  // the wallet (`SessionData.next`) — the repo picker, for a creator who installed the App
-  // before they had an account. The wallet and key pages are the detour, not a destination.
-  const onward = safeReturnPath(session.next, "/dashboard");
-  url.searchParams.set("next", /^\/dashboard\/(wallet|key)(?:[/?#]|$)/.test(onward) ? "/dashboard" : onward);
+  // On to the repo picker: the next thing after a wallet is choosing what to sell. The
+  // path sign-in was parked on (`SessionData.next`) wins when it is somewhere real — the
+  // picker with an installation id, for a creator who installed the App first — but the
+  // dashboard root and the two detour pages are not destinations for a brand-new account.
+  const parked = safeReturnPath(session.next, "/dashboard/new");
+  const onward = /^\/dashboard(?:\/?(?:[?#]|$)|\/(?:wallet|key)(?:[/?#]|$))/.test(parked) ? "/dashboard/new" : parked;
+  const url = new URL(onward, base);
+  url.searchParams.set("ok", "Account created.");
   const response = NextResponse.redirect(url, { status: 303 });
   response.cookies.set(SESSION_COOKIE, sealSession(next), cookieOptions(SESSION_TTL_SEC, base));
-  response.cookies.set(KEY_BOX_COOKIE, sealBox(created.agentKey, now), cookieOptions(KEY_BOX_TTL_SEC, base));
   response.headers.set("cache-control", "no-store");
   return response;
 });

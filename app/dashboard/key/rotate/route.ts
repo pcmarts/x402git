@@ -18,6 +18,7 @@ import { rotateAgentKey } from "@/lib/auth/api-key";
 import { appUrl } from "@/lib/env";
 import { handle } from "@/lib/errors";
 import { requireActor } from "@/lib/web/dashboard";
+import { agentKeyFor } from "@/lib/web/loaders";
 import { cookieOptions, KEY_BOX_COOKIE, KEY_BOX_TTL_SEC, sealBox } from "@/lib/web/session";
 
 export const dynamic = "force-dynamic";
@@ -26,11 +27,14 @@ export const POST = handle(async (req: Request) => {
   const actor = await requireActor(req, "/dashboard/key");
   if (actor instanceof NextResponse) return actor;
 
+  // Since 25 Oct 2026 the first key is made here too, not at sign-up (DECISIONS.md), so
+  // the sentence has to know whether there was a key to revoke.
+  const had = (await agentKeyFor(actor.creator.id)) !== null;
   const { key } = await rotateAgentKey(actor.creator.id);
 
   const base = appUrl();
   const url = new URL("/dashboard/key", base);
-  url.searchParams.set("ok", "New agent key issued. The previous one stopped working just now.");
+  url.searchParams.set("ok", had ? "New key issued. The old one no longer works." : "Key created.");
   const response = NextResponse.redirect(url, { status: 303 });
   response.cookies.set(KEY_BOX_COOKIE, sealBox(key), cookieOptions(KEY_BOX_TTL_SEC, base));
   response.headers.set("cache-control", "no-store");
