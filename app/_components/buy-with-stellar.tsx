@@ -82,6 +82,42 @@ export function BuyWithStellar(props: Props) {
 
   const transport = useCallback(() => ({ fetch: window.fetch.bind(window), baseUrl: "" }), []);
 
+  /** The payment, with the wallet as an argument so `connect` can run it in the same press (25 Oct 2026, 23:59). */
+  const pay = useCallback(async (w: Wallet) => {
+    if (!w.canPay) return;
+    const kind = free ? "free" : "new";
+    track("pay_clicked", { kind, rail: "stellar" });
+    setResult(null);
+    setPhase("paying");
+    try {
+      const { buyWithStellarWallet, kitSigner } = await import("@/lib/web/stellar-checkout");
+      const signer = kitSigner(w.address, config.passphrase, { walletName: w.walletName });
+      const outcome = await buyWithStellarWallet({
+        signer,
+        address: w.address,
+        walletName: w.walletName,
+        owner,
+        slug,
+        config,
+        transport: transport(),
+        account: w.account,
+      });
+      track(outcome.ok ? "payment_completed" : "payment_failed", outcome.ok ? { kind, rail: "stellar" } : { kind, rail: "stellar", code: outcome.code });
+      if (!alive.current) return;
+      setResult(outcome);
+      setPhase(outcome.ok ? "done" : "error");
+    } catch (error) {
+      const { mapStellarThrown } = await import("@/lib/web/stellar-checkout");
+      const failed = mapStellarThrown(error);
+      track("payment_failed", { kind, rail: "stellar", code: failed.ok ? "unknown" : failed.code });
+      if (!alive.current) return;
+      setResult(failed);
+      setPhase("error");
+    }
+  }, [config, free, owner, slug, transport]);
+
+  const buy = useCallback(() => (wallet ? pay(wallet) : undefined), [pay, wallet]);
+
   const connect = useCallback(async () => {
     track("buy_clicked", { kind: free ? "free" : "new", rail: "stellar" });
     setResult(null);
@@ -96,10 +132,18 @@ export function BuyWithStellar(props: Props) {
       const account = cannot ? null : await checkout.readAccount(config, address, window.fetch.bind(window)).catch(() => null);
       track("wallet_connected", { rail: "stellar", wallet: walletId, funded: Boolean(account?.trustline) });
       if (!alive.current) return;
-      setWallet({ address, account, walletId, walletName, canPay: !cannot });
+      const w: Wallet = { address, account, walletId, walletName, canPay: !cannot };
+      setWallet(w);
       onWallet?.(walletName);
       // A wallet that cannot sign the payment is told so now, beside a Change button.
       setResult(cannot);
+      // One press, two prompts (see buy-with-wallet.tsx): a wallet that can pay, and holds
+      // the token, goes straight on to the payment. One without the trustline stops here,
+      // under the steps to add it.
+      if (!cannot && forSale && (account === null || account.trustline)) {
+        await pay(w);
+        return;
+      }
       setPhase(cannot ? "error" : "idle");
     } catch (error) {
       const { isPickerClosed, mapStellarThrown } = await import("@/lib/web/stellar-checkout");
@@ -114,7 +158,7 @@ export function BuyWithStellar(props: Props) {
       setResult(failed);
       setPhase("error");
     }
-  }, [config, free, onWallet]);
+  }, [config, forSale, free, onWallet, pay]);
 
   const disconnect = useCallback(() => {
     setWallet(null);
@@ -125,38 +169,6 @@ export function BuyWithStellar(props: Props) {
     import("@/lib/web/stellar-checkout").then((c) => c.disconnectStellarWallet(config.passphrase)).catch(() => undefined);
   }, [config.passphrase, onWallet]);
 
-  const buy = useCallback(async () => {
-    if (!wallet || !wallet.canPay) return;
-    const kind = free ? "free" : "new";
-    track("pay_clicked", { kind, rail: "stellar" });
-    setResult(null);
-    setPhase("paying");
-    try {
-      const { buyWithStellarWallet, kitSigner } = await import("@/lib/web/stellar-checkout");
-      const signer = kitSigner(wallet.address, config.passphrase, { walletName: wallet.walletName });
-      const outcome = await buyWithStellarWallet({
-        signer,
-        address: wallet.address,
-        walletName: wallet.walletName,
-        owner,
-        slug,
-        config,
-        transport: transport(),
-        account: wallet.account,
-      });
-      track(outcome.ok ? "payment_completed" : "payment_failed", outcome.ok ? { kind, rail: "stellar" } : { kind, rail: "stellar", code: outcome.code });
-      if (!alive.current) return;
-      setResult(outcome);
-      setPhase(outcome.ok ? "done" : "error");
-    } catch (error) {
-      const { mapStellarThrown } = await import("@/lib/web/stellar-checkout");
-      const failed = mapStellarThrown(error);
-      track("payment_failed", { kind, rail: "stellar", code: failed.ok ? "unknown" : failed.code });
-      if (!alive.current) return;
-      setResult(failed);
-      setPhase("error");
-    }
-  }, [config, free, owner, slug, transport, wallet]);
 
   // --- what a reader without JavaScript gets, and what the server renders ------------
 
@@ -211,7 +223,7 @@ export function BuyWithStellar(props: Props) {
       ) : (
         <button type="button" data-variant="primary" onClick={buy} disabled={!forSale || busy || !wallet.canPay}>
           {busy ? (
-            `Waiting for ${wallet.walletName}…`
+            `Confirm in ${wallet.walletName}…`
           ) : free ? (
             "Get it — free"
           ) : (
@@ -233,7 +245,7 @@ export function BuyWithStellar(props: Props) {
           </small>
         ) : (
           <small className="muted">
-            {wallet.walletName} will ask you to approve one payment of {props.priceLabel}. The network fee is covered.
+            One approval in {wallet.walletName}, no fee: it authorises exactly {props.priceLabel} of {symbol} to x402git&rsquo;s account and nothing else.
           </small>
         )}
       </p>

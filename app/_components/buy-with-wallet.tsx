@@ -97,6 +97,54 @@ export function BuyWithWallet(props: BuyWithWalletProps) {
   const transport = useCallback(() => ({ fetch: window.fetch.bind(window), baseUrl: "" }), []);
 
   /**
+   * The paid path, and the $0 path, which differ only in whether anything settles. Takes
+   * the wallet as an argument rather than reading state, so `connect` can run it in the
+   * same press (25 Oct 2026, 23:59; the founder, after the first real press: "needed to
+   * click it again … needs some sort of state change").
+   */
+  const pay = useCallback(async (w: { address: string; ownership: Ownership | null }) => {
+    const kind = free ? "free" : w.ownership?.owned ? "update" : "new";
+    track("pay_clicked", { kind, rail: `eip155:${chainId}` });
+    setResult(null);
+    setPhase("paying");
+    try {
+      const p = await provider();
+      if (!p) {
+        track("no_wallet");
+        setNoWallet(true);
+        setPhase("idle");
+        return;
+      }
+      const { buyWithWallet } = await import("@/lib/web/wallet-checkout");
+      const outcome = await buyWithWallet({
+        provider: p,
+        owner,
+        slug,
+        chainId,
+        transport: transport(),
+        // Only worth the extra prompt when the wallet may already hold a version: the
+        // header's whole effect is to turn a new-buyer quote into an update or a grant.
+        proveWallet: free || Boolean(w.ownership?.owned),
+      });
+      const rail = `eip155:${chainId}`;
+      track(outcome.ok ? "payment_completed" : "payment_failed", outcome.ok ? { kind, rail } : { kind, rail, code: outcome.code });
+      if (!alive.current) return;
+      setResult(outcome);
+      setPhase(outcome.ok ? "done" : "error");
+    } catch (error) {
+      const { mapThrown } = await import("@/lib/web/wallet-checkout");
+      const failed = mapThrown(error);
+      track("payment_failed", { kind, code: failed.ok ? "unknown" : failed.code });
+      if (!alive.current) return;
+      setResult(failed);
+      setPhase("error");
+    }
+  }, [chainId, free, owner, provider, slug, transport]);
+
+  /** The Pay button: the connected wallet pays. */
+  const buy = useCallback(() => (wallet ? pay(wallet) : undefined), [pay, wallet]);
+
+  /**
    * Connect, then ask what this wallet already owns (FR-20). The ownership call costs
    * one signature and is what lets the box say "You already own v1.0.0" instead of
    * quoting the full price to somebody who has already paid it.
@@ -124,6 +172,14 @@ export function BuyWithWallet(props: BuyWithWalletProps) {
       track("wallet_connected", { owned: Boolean(ownership?.owned) });
       if (!alive.current) return;
       setWallet({ address, ownership });
+      // One press, two wallet prompts: the button said "Buy", so a connected wallet goes
+      // straight on to the payment. A wallet that already owns the version stops here,
+      // where the button becomes a download; a refusal or failure stops at "Pay" with
+      // the reason under it, so the next press is plainly the payment again.
+      if (forSale && !ownership?.owned) {
+        await pay({ address, ownership });
+        return;
+      }
       setPhase("idle");
     } catch (error) {
       const { mapThrown } = await import("@/lib/web/wallet-checkout");
@@ -133,7 +189,7 @@ export function BuyWithWallet(props: BuyWithWalletProps) {
       setResult(failed);
       setPhase("error");
     }
-  }, [chainId, free, owner, provider, slug, transport]);
+  }, [chainId, forSale, free, owner, pay, provider, slug, transport]);
 
   /**
    * Forget the connected wallet on this page. The site never holds a session for a
@@ -146,45 +202,6 @@ export function BuyWithWallet(props: BuyWithWalletProps) {
     setPhase("idle");
   }, []);
 
-  /** The paid path, and the $0 path, which differ only in whether anything settles. */
-  const buy = useCallback(async () => {
-    const kind = free ? "free" : wallet?.ownership?.owned ? "update" : "new";
-    track("pay_clicked", { kind, rail: `eip155:${chainId}` });
-    setResult(null);
-    setPhase("paying");
-    try {
-      const p = await provider();
-      if (!p) {
-        track("no_wallet");
-        setNoWallet(true);
-        setPhase("idle");
-        return;
-      }
-      const { buyWithWallet } = await import("@/lib/web/wallet-checkout");
-      const outcome = await buyWithWallet({
-        provider: p,
-        owner,
-        slug,
-        chainId,
-        transport: transport(),
-        // Only worth the extra prompt when the wallet may already hold a version: the
-        // header's whole effect is to turn a new-buyer quote into an update or a grant.
-        proveWallet: free || Boolean(wallet?.ownership?.owned),
-      });
-      const rail = `eip155:${chainId}`;
-      track(outcome.ok ? "payment_completed" : "payment_failed", outcome.ok ? { kind, rail } : { kind, rail, code: outcome.code });
-      if (!alive.current) return;
-      setResult(outcome);
-      setPhase(outcome.ok ? "done" : "error");
-    } catch (error) {
-      const { mapThrown } = await import("@/lib/web/wallet-checkout");
-      const failed = mapThrown(error);
-      track("payment_failed", { kind, code: failed.ok ? "unknown" : failed.code });
-      if (!alive.current) return;
-      setResult(failed);
-      setPhase("error");
-    }
-  }, [chainId, free, owner, provider, slug, transport, wallet]);
 
   /** FR-19: a version this wallet already owns, fetched again at no charge. */
   const redownload = useCallback(async () => {
@@ -244,6 +261,8 @@ export function BuyWithWallet(props: BuyWithWalletProps) {
   }
 
   const busy = phase === "connecting" || phase === "checking" || phase === "paying";
+  // Each step names itself, so the button is never the same words twice in one press.
+  const busyLabel = phase === "paying" ? "Confirm in your wallet…" : phase === "checking" ? "Checking what you own…" : "Opening your wallet…";
   const owned = wallet?.ownership?.owned ?? null;
   const latest = wallet?.ownership?.latest ?? version;
   const updateAvailable = Boolean(owned && latest && owned !== latest);
@@ -299,7 +318,7 @@ export function BuyWithWallet(props: BuyWithWalletProps) {
       {!wallet ? (
         <button type="button" data-variant="primary" onClick={connect} disabled={!forSale || busy}>
           {busy ? (
-            "Opening your wallet…"
+            busyLabel
           ) : free ? (
             `Get it free${withWallet}`
           ) : (
@@ -316,7 +335,7 @@ export function BuyWithWallet(props: BuyWithWalletProps) {
       ) : (
         <button type="button" data-variant="primary" onClick={buy} disabled={!forSale || busy}>
           {busy ? (
-            "Waiting for your wallet…"
+            busyLabel
           ) : (
             <>
               {mark}
@@ -341,7 +360,10 @@ export function BuyWithWallet(props: BuyWithWalletProps) {
         ) : owned ? (
           <small className="muted">You own v{owned}.</small>
         ) : (
-          <small className="muted">Your wallet will ask you to approve the payment.</small>
+          <small className="muted">
+            One signature, no gas: it authorises exactly {updateAvailable ? props.updatePriceLabel : props.priceLabel} of {symbol} to x402git&rsquo;s settlement
+            account and nothing else. Your wallet may call that account unknown or untrusted; it is ours.
+          </small>
         )}
       </p>
 
