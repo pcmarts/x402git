@@ -102,10 +102,10 @@ describe("the wallet line beside each row", () => {
     expect(line("stellar", null, "Freighter")).toBe("Freighter connected");
   });
 
-  it("keeps the EVM row's detected wallet, or where to get one", () => {
+  it("keeps the EVM row's detected wallet, and says nothing when there is none", () => {
     expect(line("evm", undefined)).toBe("");
     expect(line("evm", "MetaMask")).toBe("MetaMask detected");
-    expect(line("evm", null)).toContain("No EVM wallet");
+    expect(line("evm", null)).toBe("");
   });
 });
 

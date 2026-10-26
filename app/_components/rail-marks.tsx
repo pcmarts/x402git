@@ -55,6 +55,25 @@ export function ChainMark({ network }: { network: string }) {
 }
 
 /**
+ * The token and the chain on the committing button, the chain's disc tucked under the
+ * token's (26 Oct 2026; founder: "the 2 logos - slightly overlapped"). Only held files are
+ * drawn, never a letter fallback: the row's chip above already says them in words.
+ */
+export function ButtonMarks({ symbol, network }: { symbol: string; network: string }) {
+  const token = TOKEN_MARKS[symbol.toUpperCase()];
+  const chain = CHAIN_MARKS[network];
+  const marks = [token, chain].filter((src): src is string => Boolean(src && HELD.has(src)));
+  if (marks.length === 0) return null;
+  return (
+    <span className="button-marks" aria-hidden="true">
+      {marks.map((src) => (
+        <img key={src} className="mark" src={src} alt="" width={16} height={16} decoding="async" />
+      ))}
+    </span>
+  );
+}
+
+/**
  * "USDT0 on Arbitrum", with both marks. `short` drops the chain mark for dense tables,
  * where two circles per row is noise and the words still say everything.
  */

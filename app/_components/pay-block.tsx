@@ -93,8 +93,6 @@ type Props = {
 /** Per browser, per site, not per listing: a buyer's wallet does not change with the repo. */
 export const LAST_RAIL_KEY = "x402git.pay.rail";
 
-const GET_EVM_WALLET = "https://metamask.io/download/";
-
 /** The Stellar row's line before connect: the kit's picker, by the wallets that can pay in it. */
 export const STELLAR_WALLETS_LINE = "Stellar wallets: Freighter, Hana, HOT…";
 
@@ -307,20 +305,13 @@ export function PayBlock(props: Props) {
   );
 }
 
-/** The wallet this row would use, said in as few words as hold it — or where to get one. */
+/**
+ * The wallet this row would use, said in as few words as hold it. A browser with no EVM
+ * wallet gets nothing on that row (26 Oct 2026, founder: hide "No EVM wallet, get one");
+ * the preselect has already put it on the Stellar row, whose picker covers having none.
+ */
 export function WalletLine({ row, detected, stellarWallet }: { row: Pick<PayRow, "kind">; detected: Detected; stellarWallet: string | null }) {
-  if (row.kind === "evm") {
-    if (detected.evm === undefined) return null;
-    if (detected.evm) return <>{detected.evm} detected</>;
-    return (
-      <>
-        No EVM wallet,{" "}
-        <a href={GET_EVM_WALLET} rel="noopener noreferrer" target="_blank">
-          get one
-        </a>
-      </>
-    );
-  }
+  if (row.kind === "evm") return detected.evm ? <>{detected.evm} detected</> : null;
   // Which Stellar wallets are installed is the picker's to find; this line only names them.
   if (stellarWallet) return <>{stellarWallet} connected</>;
   return <>{STELLAR_WALLETS_LINE}</>;

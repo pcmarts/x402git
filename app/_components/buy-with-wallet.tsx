@@ -29,7 +29,7 @@
 
 import { track } from "@vercel/analytics";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { hasTokenMark, TokenMark } from "@/app/_components/rail-marks";
+import { ButtonMarks } from "@/app/_components/rail-marks";
 import { withRail } from "@/lib/web/checkout-copy";
 import type { CheckoutResult, Eip1193Provider, Ownership } from "@/lib/web/wallet-checkout";
 
@@ -301,9 +301,10 @@ export function BuyWithWallet(props: BuyWithWalletProps) {
   // "with MetaMask" only when the block saw it: naming a wallet that is not there would
   // promise a sheet that never opens.
   const withWallet = props.walletName ? ` with ${props.walletName}` : "";
-  // The token's mark on the committing button (founder, 25 Oct 2026: "if usdc or usdt0
-  // lets use their logos on the Payment button too"); none on a free copy or a download.
-  const mark = !free && hasTokenMark(symbol) ? <TokenMark symbol={symbol} /> : null;
+  // The token's and the chain's marks on the committing button (founder, 25 Oct 2026: "if
+  // usdc or usdt0 lets use their logos on the Payment button too"; 26 Oct: both logos,
+  // overlapped); none on a free copy or a download.
+  const mark = free ? null : <ButtonMarks symbol={symbol} network={`eip155:${chainId}`} />;
 
   return (
     <div className="buy-state">

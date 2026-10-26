@@ -33,7 +33,7 @@
 
 import { track } from "@vercel/analytics";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { hasTokenMark, TokenMark } from "@/app/_components/rail-marks";
+import { ButtonMarks } from "@/app/_components/rail-marks";
 import { withRail } from "@/lib/web/checkout-copy";
 import type { CheckoutResult } from "@/lib/web/wallet-checkout";
 import type { StellarAccount, StellarCheckoutConfig } from "@/lib/web/stellar-checkout";
@@ -224,11 +224,11 @@ export function BuyWithStellar(props: Props) {
           {busy ? (
             "Choose a wallet…"
           ) : free ? (
-            "Get it free with a Stellar wallet"
+            "Get it free"
           ) : (
             <>
-              {hasTokenMark(symbol) ? <TokenMark symbol={symbol} /> : null}
-              {`Buy — ${props.priceLabel} with a Stellar wallet`}
+              <ButtonMarks symbol={symbol} network={config.network} />
+              {`Buy ${props.priceLabel}`}
             </>
           )}
         </button>
@@ -240,7 +240,7 @@ export function BuyWithStellar(props: Props) {
             "Get it — free"
           ) : (
             <>
-              {hasTokenMark(symbol) ? <TokenMark symbol={symbol} /> : null}
+              <ButtonMarks symbol={symbol} network={config.network} />
               {`Pay ${props.priceLabel} in ${symbol}`}
             </>
           )}
