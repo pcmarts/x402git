@@ -51,7 +51,7 @@ But it only sold private code, on one chain:
 | --- | --- | --- |
 | What it sells | Access to private repos, which stay private | Early access to an open source project's next release, which then goes public |
 | What buyers pay in | USDC on Base | USDT0 on Stellar, USDT0 on Arbitrum, or USDC on Base |
-| How buyers pay | An EVM wallet | Also a Stellar wallet (Freighter, Hana or HOT Wallet), or an agent CLI that pays from a Stellar account |
+| How buyers pay | An EVM wallet | Also a Stellar wallet (Freighter, Hana, HOT, Klever or GhostSig), or an agent CLI that pays from a Stellar account |
 | Where the maintainer is paid | A Base address | Their own address on the chain the sale came in on. A maintainer can be Stellar-only |
 | The opening date | Didn't exist | Promised before the first sale, then checked against GitHub |
 | Stellar code | None | A Stellar rail through the whole money core, with its own tests |
@@ -69,16 +69,30 @@ Everything below was written at the event, after `d87ea40`: about 180 files and 
    Code: [`lib/x402/stellar.ts`](lib/x402/stellar.ts), [`lib/x402/server.ts`](lib/x402/server.ts), [`lib/env.ts`](lib/env.ts)
 2. **Stellar payers in the money core.** A `G…` address can buy, own and re-download a version. Ownership is proven with a SEP-53 signed message. Every money table is partitioned on the CAIP-2 network, so Stellar rows and Base rows can never be confused. Access is still granted in one module, and only after settle returns a transaction hash. We don't take the facilitator's word for payer, amount or network: each is checked against what the buyer signed before anything is recorded. Code: [`lib/core/access.ts`](lib/core/access.ts), [`lib/auth/stellar-binding.ts`](lib/auth/stellar-binding.ts)
 3. **Stellar payouts.** The sweep pays 90% in USDT0 to the maintainer's bound Stellar address. It refuses an address without a USDT0 trustline, sends one payment at a time from the platform account, and only ever pays a Stellar sale out on Stellar. Code: [`lib/payouts/stellar.ts`](lib/payouts/stellar.ts), [`lib/payouts/sweep.ts`](lib/payouts/sweep.ts)
-4. **One-press checkout from a Stellar wallet.** The listing page's Pay block has one row per way to pay. The Stellar row uses the [Stellar Wallets Kit](https://github.com/Creit-Tech/Stellar-Wallets-Kit): one press connects, checks what you already own and asks for the signature. Freighter, Hana and HOT Wallet can approve the payment. A wallet that can't, such as xBull or Lobstr, is told so before you press Pay, and can still bind a payout address. Code: [`app/_components/pay-block.tsx`](app/_components/pay-block.tsx), [`lib/web/stellar-checkout.ts`](lib/web/stellar-checkout.ts)
+4. **One-press checkout from a Stellar wallet.** The listing page's Pay block has one row per way to pay. The Stellar row uses the [Stellar Wallets Kit](https://github.com/Creit-Tech/Stellar-Wallets-Kit): one press connects, checks what you already own and asks for the signature. Freighter, Hana, HOT, Klever and GhostSig can approve the payment. A wallet that can't, such as xBull or Lobstr, is told so before you press Pay, and can still bind a payout address. Code: [`app/_components/pay-block.tsx`](app/_components/pay-block.tsx), [`lib/web/stellar-checkout.ts`](lib/web/stellar-checkout.ts)
 5. **USDT0 on Arbitrum too.** The same listing also takes USDT0 on Arbitrum One, so a buyer can pay from where their USDT0 is, or bridge it to Stellar first. Code: [`lib/x402/flow.ts`](lib/x402/flow.ts)
 6. **An agent buyer CLI,** [`x402git-stellar`](https://github.com/pcmarts/x402git-stellar) (MIT, a new repo, on npm). `npx x402git-stellar buy <owner>/<slug>` pays for early access, checks the sha256 and writes the zip; `fetch` re-downloads it for free with a signed message. The agent's wallet is a plain Stellar account holding its budget. The CLI refuses before signing when the account can't cover the price, and the chain would refuse anyway. It never signs for a token it can't name.
 7. **Agent discovery over MCP.** The `search_listings`, `get_listing` and `how_to_buy` tools report each listing's payment options per network, and when the release goes public. Claude Code can find an early-access release, read its terms, decide whether to pay now or wait for the opening date, and pay through the CLI.
 8. **Early access with a checked opening date.** A maintainer lists the next release from a private mirror of the public repo and sets when it goes public: 7, 30 or 90 days after each release, or a custom number. Eligibility is computed, never declared: the licence passes, the public repo exists, the commit isn't public there yet, and the maintainer can be paid. After the date, the platform asks GitHub whether the same commit is public under the same licence and shows *Opened on time* or *Overdue*, with a link to the evidence. The verdict is on the page, in the manifest JSON and in MCP. Code: [`lib/release/open.ts`](lib/release/open.ts), [`lib/release/promise.ts`](lib/release/promise.ts), [`app/api/cron/promises`](app/api/cron/promises)
 9. **Stellar-only maintainers.** A maintainer can sign up, bind a Stellar payout address with one signature and list a repo without touching an EVM wallet. Adding another chain later takes one wallet and one signature. Code: [`app/dashboard/wallet/page.tsx`](app/dashboard/wallet/page.tsx)
 
-There's no smart contract of our own. Every Stellar part already existed: the USDT0 SAC, the x402 scheme, a hosted facilitator, Horizon and SEP-53.
-
 **Tests:** 175 files and 2,449 tests in this repo, and 38 in the CLI, all passing. Every money path (402, settle, entitlement, sweep) has a Stellar test file next to the Base one.
+
+## Integrations
+
+Nine integrations, and no smart contract of our own. Every part already existed; the work was joining them to the money core.
+
+| Integration | What it does here |
+| --- | --- |
+| **x402 on Stellar** ([`@x402/stellar`](https://www.npmjs.com/package/@x402/stellar)) | Stellar is now a payment option in every 402 |
+| **USDT0 on Stellar mainnet** | Tether's USDT that works across chains. Pinned to Tether's issuer and its SAC |
+| **OpenZeppelin facilitator** | Settles Stellar payments and pays the network fees, so the buyer spends no XLM |
+| **Stellar SDK** ([`@stellar/stellar-sdk`](https://www.npmjs.com/package/@stellar/stellar-sdk)) | Builds the payment in the browser checkout. On the server it checks signed messages and sends payouts |
+| **Stellar Wallets Kit** ([`@creit.tech/stellar-wallets-kit`](https://github.com/Creit-Tech/Stellar-Wallets-Kit)) | Buyers can pay with Freighter, Hana, HOT, Klever or GhostSig |
+| **SEP-53** | You prove you own a Stellar address by signing a message: to bind a payout address, or to re-download a release you bought |
+| **Horizon** | Before a purchase, we look up the buyer's account, trustline and balance, so a payment that would fail is explained before anything is signed |
+| **USDT0 on Arbitrum** | Paid from MetaMask, through the Coinbase facilitator |
+| **USDC on Base** | Moved to mainnet for the hack deployment |
 
 ## Proof on mainnet
 
@@ -136,7 +150,7 @@ npx x402git-stellar fetch pcmarts/open-release-demo-next     # downloads it agai
 
 The CLI is [`x402git-stellar`](https://www.npmjs.com/package/x402git-stellar) on npm; its source is [`pcmarts/x402git-stellar`](https://github.com/pcmarts/x402git-stellar). To run it from source instead: clone it, then `npm install && npm run build && npm link`.
 
-**Or buy it in a browser.** Open [the listing](https://hack.x402git.com/pcmarts/open-release-demo-next), press the Stellar row of the Pay block and sign with Freighter, Hana or HOT Wallet.
+**Or buy it in a browser.** Open [the listing](https://hack.x402git.com/pcmarts/open-release-demo-next), press the Stellar row of the Pay block and sign with Freighter, Hana, HOT, Klever or GhostSig.
 
 ## How a purchase works
 
