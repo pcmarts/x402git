@@ -31,6 +31,18 @@ describe("assertRpcServesChain", () => {
     await expect(assertRpcServesChain(reader(8453), 84532, "sweep")).rejects.toThrow(/serves chain 8453.*configured for chain 84532/s);
   });
 
+  it("names the rail's own RPC when one is passed, and memoises per URL", async () => {
+    const err = await assertRpcServesChain(reader(8453), 42161, "sweep eip155:42161", "https://arb1.arbitrum.io/rpc/KEY").catch((e: Error) => e);
+    expect((err as Error).message).toContain("arb1.arbitrum.io");
+    expect((err as Error).message).not.toContain("KEY");
+    expect((err as Error).message).not.toContain("api.developer.coinbase.com");
+    // A different URL for the same chain is asked again, not answered from the primary's memo.
+    const client = reader(42161);
+    await assertRpcServesChain(client, 42161, "sweep", "https://a.example");
+    await assertRpcServesChain(client, 42161, "sweep", "https://b.example");
+    expect(client.getChainId).toHaveBeenCalledTimes(2);
+  });
+
   /** An RPC URL is often a credential. The error names the host and never the path. */
   it("never puts the RPC URL in the error", async () => {
     const err = await assertRpcServesChain(reader(8453), 84532, "sweep").catch((e: Error) => e);

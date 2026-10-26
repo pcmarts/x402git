@@ -19,6 +19,7 @@
 
 import type { Metadata } from "next";
 import { Purchases } from "@/app/_components/purchases";
+import { stellarCli } from "@/lib/buy-links";
 import { appUrl, evmChains, KNOWN_EVM_RAILS, stellarRail } from "@/lib/env";
 import { agentPurchasesPrompt } from "@/lib/web/agent-prompt";
 import { currentSession } from "@/lib/web/current";
@@ -81,7 +82,7 @@ export default async function PurchasesPage() {
             script off and to an agent reading this page. */}
         <p className="written measure">
           <small className="muted">
-            Bought on Stellar? Re-download from the command line: <code>npx x402git-stellar fetch &lt;owner&gt;/&lt;slug&gt;</code>. It signs with
+            Bought on Stellar? Re-download from the command line: <code>{stellarCli("fetch", "<owner>/<slug>", appUrl())}</code>. It signs with
             the same Stellar key that paid.
           </small>
         </p>

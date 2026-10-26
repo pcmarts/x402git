@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buyLinks, chainLabel, paymentInstructions, signAndRetry } from "./buy-links";
+import { buyLinks, chainLabel, paymentInstructions, signAndRetry, stellarCli } from "./buy-links";
 
 const links = buyLinks({ owner: "adrian", slug: "humanizer", appUrl: "https://x402git.com" });
 
@@ -40,5 +40,18 @@ describe("paymentInstructions", () => {
 
   it("is built on the same sentence how_to_buy uses", () => {
     expect(paymentInstructions(links, "Base")).toContain(signAndRetry(links, "Base"));
+  });
+});
+
+describe("stellarCli", () => {
+  it("is the bare command on the CLI's default deployment", () => {
+    expect(stellarCli("buy", "adrian/humanizer", "https://x402git.com")).toBe("npx x402git-stellar buy adrian/humanizer");
+    expect(stellarCli("fetch", "adrian/humanizer", "https://x402git.com/")).toBe("npx x402git-stellar fetch adrian/humanizer");
+  });
+
+  it("names any other deployment, or the CLI would ask x402git.com for a listing it does not have", () => {
+    expect(stellarCli("buy", "pcmarts/open-release-demo-next", "https://hack.x402git.com")).toBe(
+      "npx x402git-stellar buy pcmarts/open-release-demo-next --base-url https://hack.x402git.com",
+    );
   });
 });

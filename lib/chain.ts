@@ -10,7 +10,10 @@
  *
  * There is no way to catch that from the URL: a hostname is not a promise about a chain.
  * So the deployment asks. One `eth_chainId` per process, memoised per (url, chain) pair,
- * and every caller that is about to move or audit money asks first.
+ * and every caller that is about to move or audit money asks first. Per rail since 25 Oct
+ * 2026: a caller passes the rail's own RPC URL, so the memo and the message name the
+ * endpoint that is actually wrong (the primary's `EVM_RPC_URL`, or a `rpcUrl` in
+ * `X402_EXTRA_EVM_RAILS`); without one, the primary's URL is assumed.
  *
  * It throws rather than returning a flag. A chain mismatch is not a per-creator
  * condition to skip past; it is the whole deployment being wrong about where it is.
@@ -28,8 +31,7 @@ export function resetChainCheck(): void {
   verified.clear();
 }
 
-export async function assertRpcServesChain(client: ChainIdReader, expectedChainId: number, context: string): Promise<void> {
-  const url = rpcUrl();
+export async function assertRpcServesChain(client: ChainIdReader, expectedChainId: number, context: string, url: string = rpcUrl()): Promise<void> {
   const key = `${url}|${expectedChainId}`;
   const existing = verified.get(key);
   if (existing) return existing;
@@ -46,8 +48,8 @@ export async function assertRpcServesChain(client: ChainIdReader, expectedChainI
         /* keep the generic label */
       }
       throw new Error(
-        `${context}: EVM_RPC_URL (${host}) serves chain ${actual}, but this deployment is configured for chain ${expectedChainId}. ` +
-          `Refusing to continue — check EVM_RPC_URL against X402_NETWORK.`,
+        `${context}: the RPC at ${host} serves chain ${actual}, but this rail is configured for chain ${expectedChainId}. ` +
+          `Refusing to continue — check that rail's RPC URL (EVM_RPC_URL for the primary rail, rpcUrl in X402_EXTRA_EVM_RAILS for the others) against its network.`,
       );
     }
   })();

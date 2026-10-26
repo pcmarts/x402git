@@ -11,8 +11,9 @@
  * Server component, no script. The price is not repeated here: the button carries it.
  */
 
-import { chainLabel } from "@/lib/buy-links";
+import { chainLabel, stellarCli } from "@/lib/buy-links";
 import type { PaymentOption } from "@/lib/core/access";
+import { appUrl } from "@/lib/env";
 
 type Props = {
   owner: string;
@@ -25,12 +26,13 @@ type Props = {
 export function StellarPay({ owner, slug, option, forSale }: Props) {
   const chain = chainLabel(option.network);
   const ref = `${owner}/${slug}`;
+  const base = appUrl();
 
   if (!forSale) {
     return (
       <div className="buy-state" data-network={option.network}>
         <p className="written buy-fallback">
-          No longer sold. Bought it on {chain}? Re-download from the command line: <code>npx x402git-stellar fetch {ref}</code>
+          No longer sold. Bought it on {chain}? Re-download from the command line: <code>{stellarCli("fetch", ref, base)}</code>
         </p>
       </div>
     );
@@ -42,7 +44,7 @@ export function StellarPay({ owner, slug, option, forSale }: Props) {
         <span className="label">Pay from a terminal or an agent</span>
       </summary>
       <p className="written buy-fallback">
-        Any Stellar account with {option.asset_symbol} on {chain}: <code>npx x402git-stellar buy {ref}</code>
+        Any Stellar account with {option.asset_symbol} on {chain}: <code>{stellarCli("buy", ref, base)}</code>
       </p>
       {option.network === "stellar:pubnet" ? (
         <p className="written buy-fallback">

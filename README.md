@@ -1,22 +1,110 @@
 # X402 Git
 
-X402 Git sells access to private git repositories over [x402](https://x402.org) and USDC, for humans and for agents. A creator lists a repo and sets a price, and buyers pay per release. Before a release can be sold, the platform snapshots it and scans it for secrets, vulnerable dependencies and licence problems. Buyers then get the exact bytes that were scanned. The live service is at [x402git.com](https://x402git.com).
+**Agents pay open source maintainers, per release, on Stellar.**
+
+X402 Git sells early access to a project's next release over [x402](https://x402.org), the HTTP 402 payment standard. A person or an AI agent asks for the release, gets a price back, pays in USDT0 with one signature, and downloads the exact bytes that were scanned. The money goes to the project's own Stellar address. On the date the maintainer set, the same commit goes public under its licence, and the platform checks that it did.
+
+**HackMeridian 2026 submission.** This is the `hackmeridian` branch. It runs live at **[hack.x402git.com](https://hack.x402git.com)** on Stellar mainnet with real money. The maintainer pitch is at [hack.x402git.com/open-source](https://hack.x402git.com/open-source).
+
+## The problem
+
+Open source is worth an estimated $8.8 trillion to the companies that use it, and almost none of that reaches the people who write it. Agents now do a growing share of the reading, installing and upgrading. They never see a sponsor button, and they don't click one. They can pay a 402 in one round trip, though, if the release has a price and an address to pay.
+
+X402 Git gives a release both. A maintainer puts the next release on early access. Users and their agents who want it now pay for it. Everyone else gets it free on the date the maintainer promised.
+
+## It works on mainnet
+
+Our own example listing, [`pcmarts/open-release-demo-next`](https://hack.x402git.com/pcmarts/open-release-demo-next), priced at $1. We were both the buyer and the creator on these runs. They show the money moving, not traction.
+
+| Rail | Step | Transaction |
+| --- | --- | --- |
+| Stellar mainnet | Buyer pays $1.00 USDT0 from Freighter. The facilitator pays the network fee | [`5bd56529…a63a3`](https://stellar.expert/explorer/public/tx/5bd56529a6da515deba4b9a9034ad6800354ccf74b15c4e8a1beb47be37a63a3) |
+| Stellar mainnet | The project is paid 0.90 USDT0 (90%) at its own Stellar address | [`16b6e576…d4b69`](https://stellar.expert/explorer/public/tx/16b6e576d170ccad99183b83f0b42a073eadaf70b86badc785bef47a53dd4b69) |
+| Arbitrum One | Buyer pays $1.00 USDT0 from MetaMask | [`0xec10bbd2…d34037`](https://arbiscan.io/tx/0xec10bbd2c8df0f7e61fcd499ca1320775569c959e6b1c5ae912f12fcb5d34037) |
+| Arbitrum One | The project is paid 0.90 USDT0 | [`0x3c1e8d76…10cc6`](https://arbiscan.io/tx/0x3c1e8d76f5cbb3a7c5e608ac550c86d3f9bf9356215b85ecf500ff7ddbd10cc6) |
+
+Both payouts were sent by the payout sweep (`POST /api/payouts/sweep`). The event deployment sets the holdback to zero days so the payout can follow the sale straight away. Production holds for 7 days.
+
+## What we built at the event
+
+Everything Stellar here was written at HackMeridian, after `d87ea40` (25 Oct 2026, 10:55 UTC). Before that, the app sold releases for USDC on Base only. The diff is `git diff d87ea40 hackmeridian`: 173 files, about 22,000 lines.
+
+- **A Stellar rail in the 402.** Every listing's 402 now has a `stellar:pubnet` entry next to the EVM ones. It is the stock [`@x402/stellar`](https://www.npmjs.com/package/@x402/stellar) exact scheme: a Soroban `transfer` of the USDT0 SAC, settled through the OpenZeppelin facilitator, with fees sponsored. The buyer spends no XLM. ([`lib/x402/stellar.ts`](lib/x402/stellar.ts), [`lib/x402/server.ts`](lib/x402/server.ts))
+- **Stellar payers in the money core.** A `G…` address can buy, own and re-download a version. Ownership is proven with a SEP-53 signed message. Access is still granted in one module, and only after settle returns a transaction hash. ([`lib/core/access.ts`](lib/core/access.ts), [`lib/auth/stellar-binding.ts`](lib/auth/stellar-binding.ts))
+- **Stellar payouts.** The sweep pays 90% to the creator's bound Stellar address, one payment at a time from the platform account. A Stellar sale is only ever paid out to a Stellar address. ([`lib/payouts/stellar.ts`](lib/payouts/stellar.ts), [`lib/payouts/sweep.ts`](lib/payouts/sweep.ts))
+- **Open releases.** A listing can promise that each release goes public in a named repository N days after it is cut (7, 30, 90 or a custom number). Eligibility is computed, never declared: the licence passes, the public repo exists, the commit is not already public there, and the creator can be paid. Once the date passes, the platform asks GitHub whether the same commit is public under the same licence and records *Opened on time* or *Overdue*, with a link to the evidence. The verdict shows on the page, in the manifest JSON and in MCP. ([`lib/release/open.ts`](lib/release/open.ts), [`lib/release/promise.ts`](lib/release/promise.ts), [`app/api/cron/promises`](app/api/cron/promises))
+- **Pay from any Stellar wallet.** The listing page has one Pay block with a row for each way to pay. The Stellar row uses the [Stellar Wallets Kit](https://github.com/Creit-Tech/Stellar-Wallets-Kit), so Freighter, Lobstr, xBull and the rest work. One press connects, checks what you already own, and asks for the signature. ([`app/_components/pay-block.tsx`](app/_components/pay-block.tsx), [`lib/web/stellar-checkout.ts`](lib/web/stellar-checkout.ts))
+- **Stellar-only creators.** A maintainer can sign up, bind a Stellar payout address with one signature, and list a repo without ever touching an EVM wallet. Adding another rail later is one wallet and one signature. ([`app/dashboard/wallet/page.tsx`](app/dashboard/wallet/page.tsx))
+- **A USDT0 rail on Arbitrum,** so a buyer whose dollars are on Arbitrum can pay without bridging first. ([`lib/x402/flow.ts`](lib/x402/flow.ts))
+- **An agent buyer CLI,** [`pcmarts/x402git-stellar`](https://github.com/pcmarts/x402git-stellar) (MIT, separate repo). It is the stock `@x402/stellar` client as a command line: `buy`, `fetch` and `whoami`. It never signs a token it can't name, and it refuses before signing when the account can't cover the price.
+- **Agent discovery.** The MCP server's `search_listings`, `how_to_buy` and `get_listing` tools report each listing's payment options per network, and its open-release status.
+
+Tests: 175 files and 2,444 tests in this repo, 38 in the CLI, all passing. The money paths (402, settle, entitlement, sweep) each have a Stellar test file next to the Base one.
+
+## Intake goals and evidence
+
+| Goal | Status | Evidence |
+| --- | --- | --- |
+| 1. Agents pay open source maintainers on Stellar | Done, on mainnet | The two Stellar transactions above. The CLI runs the same exchange from a terminal: [`x402git-stellar`](https://github.com/pcmarts/x402git-stellar) |
+| 2. Open releases, with the opening date checked | Built and tested. The live flip is in the demo video | [`lib/release/promise.ts`](lib/release/promise.ts) and its tests; the open-release fields in [`/api/openapi.json`](https://hack.x402git.com/api/openapi.json) |
+| 3. An agent with a budget | Done | The agent's wallet is a plain Stellar account holding $5. Ask the CLI to buy above its balance and it exits with code 3 before signing; the chain would refuse anyway |
+| 4. The first open releases: ours plus 3 from other teams | Ours is listed | [`pcmarts/open-release-demo-next`](https://hack.x402git.com/pcmarts/open-release-demo-next) |
+
+## Try it
+
+All of this runs against the live deployment. Reading is free and needs nothing.
+
+```sh
+B=https://hack.x402git.com
+
+# What is in the release and what it costs. Free, no account.
+curl $B/api/label/pcmarts/open-release-demo-next
+
+# The 402 itself. The payment-required header lists Base USDC, Arbitrum USDT0 and Stellar USDT0.
+curl -si $B/api/r/pcmarts/open-release-demo-next | grep -i payment-required \
+  | cut -d' ' -f2 | base64 -d | python3 -m json.tool
+```
+
+**Let Claude Code find it.** Add the MCP server and ask for an open release. No wallet is needed to search.
+
+```sh
+claude mcp add --transport http x402git-hack https://hack.x402git.com/api/mcp
+# then: "find an open release on x402git and tell me how to pay for it on Stellar"
+```
+
+**Buy it with the agent CLI.** This spends $1 of real USDT0 on Stellar mainnet. You need a Stellar account with a USDT0 trustline and at least $1 USDT0 in it. The CLI isn't on npm yet, so build it from source:
+
+```sh
+git clone https://github.com/pcmarts/x402git-stellar && cd x402git-stellar
+npm install && npm run build && npm link
+
+export X402GIT_STELLAR_SECRET=S…            # the paying account's secret, read from the environment only
+export X402GIT_BASE_URL=https://hack.x402git.com
+x402git-stellar whoami                       # the address and its USDT0 balance
+x402git-stellar buy pcmarts/open-release-demo-next   # pays, checks the sha256, writes the zip, prints the stellar.expert link
+x402git-stellar fetch pcmarts/open-release-demo-next # downloads it again for free, with a signed message
+```
+
+**Or buy it in a browser.** Open [the listing](https://hack.x402git.com/pcmarts/open-release-demo-next), press the Stellar row of the Pay block and sign with Freighter, Lobstr or another Stellar wallet.
 
 ## How it works
 
-1. A creator lists a repo: a private GitHub repo through the GitHub App, or a repo the platform hosts for them.
-2. Each release is snapshotted and scanned, and the result is published as a free, public manifest.
-3. A buyer requests the repo and gets an HTTP 402 quote with the price and the payment requirement.
-4. The buyer signs a USDC authorization on Base with their own key, and the facilitator settles it on-chain.
-5. After settlement the buyer has an entitlement and a five-minute download URL. Agents do the same through the MCP server or the agent skills.
+1. A creator lists a repo: a private GitHub repo through the GitHub App, or a repo the platform hosts for them. For an open release, the private repo is a mirror of the public project, one release ahead.
+2. Each release is snapshotted and scanned for secrets, vulnerable dependencies, malware and licence problems. The result is published as a free, public manifest.
+3. A buyer requests the repo and gets an HTTP 402 quote: the price, and one payment option per rail (Stellar USDT0, Arbitrum USDT0, Base USDC).
+4. The buyer signs the payment with their own key, and a facilitator settles it on-chain. The platform never holds a buyer's key.
+5. After settlement the buyer has an entitlement and a five-minute download URL. A version belongs to the address that paid for it, and re-downloading it is free.
+6. The sweep pays the creator 90% on the same rail, to the address they bound with a signature.
+7. For an open release, the platform checks the public repo once the opening date has passed, and shows whether the promise was kept.
 
 ## Architecture
 
 - Next.js 16 App Router on Vercel, in TypeScript with plain CSS. Pages are server-rendered and call the same JSON API that agents use.
 - Supabase Postgres holds the ledger, and Supabase Storage holds the snapshots.
 - `lib/core/access.ts` is the only module that knows about entitlements or money. Every surface calls its `quote`; only paid paths call `grant`.
-- Payments are x402 verify and settle through a facilitator (`lib/x402`). Access is granted only after settle returns a transaction hash.
-- A GitHub App gives read access to creators' repos and creates hosted ones. The scanner in `lib/scan` and `lib/analysis` decides what can be sold.
+- Payments are x402 verify and settle through a facilitator per rail (`lib/x402`): OpenZeppelin for Stellar, Coinbase for Base and Arbitrum. Access is granted only after settle returns a transaction hash. Money is `bigint` micro-dollars everywhere; Stellar's 7 decimals are converted at the edge.
+- A GitHub App gives read access to creators' repos and creates hosted ones. The scanner in `lib/scan` and `lib/analysis` decides what can be sold. `lib/release` stamps and checks open-release promises.
+- No smart contract of our own. The Stellar side is the USDT0 SAC, the stock x402 scheme, a hosted facilitator and Horizon.
 
 The spec is [PRD Final.md](PRD%20Final.md). [AGENTS.md](AGENTS.md) explains the layout and the rules that matter when you change the code.
 
@@ -28,11 +116,11 @@ supabase start && supabase db reset   # local Postgres and Storage in Docker, sc
 npm run dev                           # http://localhost:3000
 ```
 
-Before `npm run dev`, copy `.env.example` to `.env` and fill in `SUPABASE_URL` and `SUPABASE_SECRET_KEY` from `supabase status`. The home page, `/docs` and `/api/openapi.json` then work. Signing in needs your own GitHub App, and paying needs a Base Sepolia wallet. [docs/SELF-HOST.md](docs/SELF-HOST.md) covers both, plus deploying your own instance. `npm run typecheck` and `npm test` need no `.env` and no database.
+Before `npm run dev`, copy `.env.example` to `.env` and fill in `SUPABASE_URL` and `SUPABASE_SECRET_KEY` from `supabase status`. The home page, `/docs` and `/api/openapi.json` then work. Signing in needs your own GitHub App, and paying needs a Base Sepolia wallet. To run the Stellar rail too, fill in the `STELLAR_*` block in `.env.example` (testnet works with the free x402.org facilitator); leave `STELLAR_NETWORK` empty and Base runs alone. [docs/SELF-HOST.md](docs/SELF-HOST.md) covers both, plus deploying your own instance. `npm run typecheck` and `npm test` need no `.env` and no database.
 
 ## Contributing
 
-Read [CONTRIBUTING.md](CONTRIBUTING.md) first. The PRD is the spec, so a change that departs from it starts as a change to the PRD. Money is `bigint` micro-USDC everywhere. `npm run typecheck` and `npm test` must pass. Sign off every commit (`git commit -s`) under the [Developer Certificate of Origin](https://developercertificate.org/).
+Read [CONTRIBUTING.md](CONTRIBUTING.md) first. The PRD is the spec, so a change that departs from it starts as a change to the PRD. Money is `bigint` micro-dollars everywhere. `npm run typecheck` and `npm test` must pass. Sign off every commit (`git commit -s`) under the [Developer Certificate of Origin](https://developercertificate.org/).
 
 ## Security
 
@@ -48,7 +136,7 @@ This is how to use the hosted service at x402git.com. A self-hosted instance ser
 
 Every route, request and response is generated from the same zod schemas the handlers validate against. [`/docs`](https://x402git.com/docs) is the readable list, [`/api/openapi.json`](https://x402git.com/api/openapi.json) is the machine one, and [`/docs/errors`](https://x402git.com/docs/errors) is the catalogue every error body comes from. Every error is `{ code, message, docs_url, details? }`.
 
-Money is micro-USDC everywhere, as a decimal string: `9000000` is $9.00.
+Money is micro-dollars everywhere (micro-USDC or micro-USDT0, both 6 decimals), as a decimal string: `9000000` is $9.00. The Stellar entry of a 402 carries the amount in the token's own 7 decimals.
 
 ### For creators
 

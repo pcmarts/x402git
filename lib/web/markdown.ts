@@ -31,9 +31,9 @@ import type { AuthorPage, ListingBundle, ListingCard } from "@/lib/web/loaders";
 import { languageMix } from "@/lib/web/manifest-view";
 import { formatPrice } from "@/lib/web/money";
 
-/** `9000000` → `"$9.00 (9000000 micro-USDC)"`; `0` → `"Free"`. */
+/** `9000000` → `"$9.00 (9000000 micro-dollars)"`; `0` → `"Free"`. */
 function money(micro: bigint): string {
-  return micro === 0n ? "Free" : `${formatPrice(micro)} (${micro} micro-USDC)`;
+  return micro === 0n ? "Free" : `${formatPrice(micro)} (${micro} micro-dollars)`;
 }
 
 /**
@@ -53,10 +53,11 @@ function section(title: string, lines: (string | null | undefined)[]): string {
 export function homeMarkdown(base: string): string {
   return `# X402 Git
 
-Paid access to private git repositories over x402/USDC, for humans and agents.
+Paid access to private git repositories over x402, paid in dollars — USDC on Base, USDT0 on Arbitrum or Stellar — for humans and agents.
 
 A creator connects a repo, sets a price and gets back a paid endpoint. Buyers pay in
-USDC on Base over HTTP 402 and receive the repository at a version. The manifest of
+dollars over HTTP 402 (USDC on Base, USDT0 on Arbitrum or on Stellar, whichever the listing
+offers) and receive the repository at a version. The manifest of
 every listing — file tree, licence, dependencies, security scan, sha256 of the exact
 artifact — is public and free to read. The contents are private until paid for.
 
@@ -88,7 +89,7 @@ GET ${base}/api/v/{owner}/{slug}        latest version and your price
 GET ${base}/api/r/{owner}/{slug}        the paid resource: 402, sign, 200
 \`\`\`
 
-Money is micro-USDC everywhere: \`9000000\` is $9.00.
+Money is micro-dollars everywhere: \`9000000\` is $9.00, in USDC or USDT0; both are a dollar.
 
 ## More
 
@@ -122,8 +123,9 @@ Later pushes do not change what an existing buyer already bought.
 A listing has a **price** and an **update price**. Every release is a full-price
 purchase for a new buyer; an existing holder pays the update price, and an update price
 of \`0\` is lifetime access. A holder is charged at most one update per listing per 7
-days. Payment is USDC on Base over x402: the buyer signs an EIP-3009 authorization with
-their own key, and access is granted only after settlement returns a transaction hash.
+days. Payment is over x402 in the token the listing offers (USDC on Base, USDT0 on Arbitrum or
+on Stellar): the buyer signs an EIP-3009 authorization on an EVM chain, or a Soroban auth
+entry on Stellar, with their own key, and access is granted only after settlement returns a transaction hash.
 
 Buying, step by step: ${base}${BUY_SKILL_PATH}
 

@@ -57,6 +57,8 @@ type BuyWithWalletProps = {
   forSale: boolean;
   /** Human-readable archive size ("1.2 MB"), shown on the download button. */
   sizeLabel?: string;
+  /** Told when this button starts working, finishes paying, or returns to rest: the pay block locks the other rows meanwhile. */
+  onState?: (state: "idle" | "busy" | "done") => void;
 };
 
 type Phase = "idle" | "connecting" | "checking" | "paying" | "done" | "error";
@@ -87,6 +89,17 @@ export function BuyWithWallet(props: BuyWithWalletProps) {
       alive.current = false;
     };
   }, []);
+
+  // The pay block locks the other rows while this one works or has paid (26 Oct 2026:
+  // switching rows mid-payment unmounted this component, and the result panel with it).
+  const tellState = useRef(props.onState);
+  tellState.current = props.onState;
+  const working = phase === "connecting" || phase === "checking" || phase === "paying";
+  const paid = Boolean(result?.ok);
+  useEffect(() => {
+    tellState.current?.(working ? "busy" : paid ? "done" : "idle");
+  }, [working, paid]);
+  useEffect(() => () => tellState.current?.("idle"), []);
 
   /** The injected wallet, or null. Read at click time: extensions inject late. */
   const provider = useCallback(async (): Promise<Eip1193Provider | null> => {

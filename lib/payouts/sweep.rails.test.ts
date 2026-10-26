@@ -122,6 +122,30 @@ describe("sweepCreatorRails", () => {
     expect(skip?.props).toMatchObject({ creator_id: creator().id, amount_micro: "4500000" });
   });
 
+  it("skips a rail whose float is below the transfer's estimated cost, naming both numbers, and pays when it is above (26 Oct 2026)", async () => {
+    sale("arbitrum", "5000000", "0xarb");
+    const short = await sweepCreatorRails(creator(), {
+      ...success,
+      rail: undefined,
+      nativeBalance: async () => 5n,
+      gasNeeded: async ({ rail }) => (rail.network === "eip155:42161" ? 10n : 0n),
+      broadcast: async () => "0xba5e",
+    });
+    const arb = short.find((r) => r.network === "eip155:42161");
+    expect(arb).toMatchObject({ skipped: "no_gas_float", status: null, payoutId: null });
+    const skip = mock.rows("event").find((e) => e.name === "sweep_skipped" && e.network === "eip155:42161");
+    expect(skip?.props).toMatchObject({ reason: "no_gas_float", balance_wei: "5", needed_wei: "10" });
+    expect(mock.rows("payout")).toHaveLength(0);
+
+    const enough = await sweepCreatorRails(creator(), {
+      ...success,
+      nativeBalance: async () => 20n,
+      gasNeeded: async () => 10n,
+      broadcast: async () => "0xba5e",
+    });
+    expect(enough.find((r) => r.network === "eip155:42161")).toMatchObject({ status: "confirmed" });
+  });
+
   it("an in-flight payout on Arbitrum blocks Arbitrum only", async () => {
     sale("base", "9000000", "0xbase");
     sale("arbitrum", "5000000", "0xarb");

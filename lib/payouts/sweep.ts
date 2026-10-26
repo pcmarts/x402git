@@ -28,9 +28,10 @@
  * `sweepCreator` sweeps one rail (the primary when none is named) and keeps the shape every
  * caller already had; `sweepCreatorRails` walks them all and returns one result per rail.
  *
- * **No gas, no row** (same day). Before a rail broadcasts, the sweep EOA's native balance
- * on that chain is read, and zero skips the rail as `no_gas_float` before anything is
- * written. Without it, a rail added before its float was funded fails `writeContract` at
+ * **No gas, no row** (same day; the estimate 26 Oct). Before a rail broadcasts, the sweep
+ * EOA's native balance on that chain is read and compared with what the transfer would
+ * cost (estimated gas × gas price, 20% headroom); a balance at or below that skips the
+ * rail as `no_gas_float` before anything is written, with both numbers in the event. Without it, a rail added before its float was funded fails `writeContract` at
  * gas estimation, the broadcast catch below reads that as indeterminate, and every creator
  * with a balance on that rail is left blocked behind a `pending` row a human must clear.
  * Skipping costs nothing: the purchases stay unswept and the first run after the float
@@ -106,6 +107,8 @@ export type SweepOptions = {
   confirm?: (txHash: `0x${string}`, rail: EvmRail) => Promise<{ status: "success" | "reverted" }>;
   /** Test seam: the sweep EOA's native balance on `rail`'s chain, in wei. */
   nativeBalance?: (rail: EvmRail) => Promise<bigint>;
+  /** Test seam: what the transfer would cost on `rail`, in wei. With `nativeBalance` alone, zero: the test means the empty case. */
+  gasNeeded?: (args: { to: `0x${string}`; amountMicro: bigint; rail: EvmRail }) => Promise<bigint>;
 };
 
 /**
@@ -205,7 +208,7 @@ export async function sweepCreator(creator: CreatorRow, options: SweepOptions = 
   //
   //     Per rail since 25 Oct 2026: the Arbitrum RPC is asked about Arbitrum.
   if (!options.broadcast && sweepPrivateKey()) {
-    await assertRpcServesChain(railClient(rail), rail.chainId, `sweep ${rail.network}`);
+    await assertRpcServesChain(railClient(rail), rail.chainId, `sweep ${rail.network}`, rail.rpcUrl);
   }
 
   // 1. FR-38: screen before every sweep. A hit freezes and raises a ticket; it never pays.
@@ -233,13 +236,19 @@ export async function sweepCreator(creator: CreatorRow, options: SweepOptions = 
   // 3a. Gas on this chain, before the row (see the header). Read only when this run would
   //     broadcast with the real signer, for the same reason as the chain check in 0b; a
   //     test that injects `broadcast` injects `nativeBalance` when it means to test this.
-  if (options.nativeBalance || (!options.broadcast && sweepPrivateKey())) {
-    const float = await (options.nativeBalance ?? defaultNativeBalance)(rail);
-    if (float <= 0n) {
+  if (options.nativeBalance || options.gasNeeded || (!options.broadcast && sweepPrivateKey())) {
+    const transfer = { to: toAddress as `0x${string}`, amountMicro, rail };
+    const [float, needed] = await Promise.all([
+      (options.nativeBalance ?? defaultNativeBalance)(rail),
+      options.gasNeeded ? options.gasNeeded(transfer) : options.nativeBalance ? Promise.resolve(0n) : defaultGasNeeded(transfer),
+    ]);
+    // A low-but-nonzero float used to fail at `writeContract` and leave the row `pending`
+    // (indeterminate, blocking the creator on this rail). Now it skips, like zero does.
+    if (float <= needed) {
       await record({
         name: "sweep_skipped",
         network: rail.network,
-        props: { creator_id: creator.id, reason: "no_gas_float", amount_micro: amountMicro.toString() },
+        props: { creator_id: creator.id, reason: "no_gas_float", amount_micro: amountMicro.toString(), balance_wei: float.toString(), needed_wei: needed.toString() },
       });
       return { ...empty, amountMicro, skipped: "no_gas_float" };
     }
@@ -512,6 +521,21 @@ export function railClient(rail: EvmRail) {
 
 async function defaultNativeBalance(rail: EvmRail): Promise<bigint> {
   return await railClient(rail).getBalance({ address: sweepAccount().address });
+}
+
+/**
+ * What the transfer would cost in wei: estimated gas × the current gas price, with 20%
+ * headroom for the price moving between the estimate and the broadcast. An estimate that
+ * fails (an RPC that will not simulate, a token balance short of the amount — which the
+ * broadcast reports in its own words) falls back to a generous flat 100k gas.
+ */
+async function defaultGasNeeded({ to, amountMicro, rail }: { to: `0x${string}`; amountMicro: bigint; rail: EvmRail }): Promise<bigint> {
+  const client = railClient(rail);
+  const [gasPrice, gas] = await Promise.all([
+    client.getGasPrice(),
+    client.estimateContractGas({ address: rail.asset as `0x${string}`, abi: erc20Abi, functionName: "transfer", args: [to, amountMicro], account: sweepAccount().address }).catch(() => 100_000n),
+  ]);
+  return (gas * gasPrice * 12n) / 10n;
 }
 
 async function defaultConfirm(txHash: `0x${string}`, rail: EvmRail): Promise<{ status: "success" | "reverted" }> {

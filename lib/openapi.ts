@@ -77,15 +77,15 @@ function build(): Json {
     info: {
       title: "X402 Git",
       version: "0.0.1",
-      summary: "Paid access to private git repos over x402/USDC, for humans and agents.",
+      summary: "Paid access to private git repos over x402, paid in dollars (USDC on Base, USDT0 on Arbitrum or Stellar), for humans and agents.",
       description: [
         "Every creator and buyer capability is an authenticated JSON endpoint before it is a web page (D9); the web app calls these same routes.",
         "",
-        "**Money.** Every amount is micro-USDC (6 decimals) encoded as a decimal integer string: `\"9000000\"` is $9.00. Never a JSON number, because a JSON number is a double.",
+        "**Money.** Every amount is micro-dollars (6 decimals) encoded as a decimal integer string: `\"9000000\"` is $9.00, in whichever token the listing is paid — USDC and USDT0 are both a dollar. Never a JSON number, because a JSON number is a double.",
         "",
         "**Errors.** Every error on every route is `{ code, message, docs_url, details? }` from the catalogue below.",
         "",
-        "**Payment.** x402 v2, `exact` scheme, USDC on Base. Access is granted only after the facilitator's `settle` returns a transaction hash.",
+        "**Payment.** x402 v2, `exact` scheme. A 402 carries one `accepts` entry per rail the listing offers — USDC on Base, USDT0 on Arbitrum, USDT0 on Stellar — and a listing's `payment_options` says the same in words. Access is granted only after the facilitator's `settle` returns a transaction hash.",
       ].join("\n"),
       // The platform's code is public under the AGPL (LICENSE at the repository root).
       // 3.1 takes an SPDX `identifier`; `url` and `identifier` are mutually exclusive.
@@ -95,7 +95,7 @@ function build(): Json {
       // gets before it fetches anything else. The published mailbox is the abuse
       // contact (§19); it is the one address a person answers.
       contact: { name: "X402 Git", email: "abuse@x402git.com", url: `${base}/abuse` },
-      "x-guidance": `Every listing is a private git repository sold as a zip over x402 (USDC on Base). Read the free manifest at GET /api/label/{owner}/{slug} first; GET /api/r/{owner}/{slug} answers 402 with the price and the exact requirement to sign, and 200 with a signed download URL once the payment settles. Echo extra.quote_id as X-Quote-Id and extensions.bazaar in the payment payload. The full procedure is at ${base}/.well-known/agent-skills/buy-a-repo/SKILL.md; the same tools are an MCP server at ${base}/api/mcp. Every live resource is listed at ${base}/.well-known/x402.`,
+      "x-guidance": `Every listing is a private git repository sold as a zip over x402 (USDC on Base, USDT0 on Arbitrum or on Stellar — each listing's payment_options says which). Read the free manifest at GET /api/label/{owner}/{slug} first; GET /api/r/{owner}/{slug} answers 402 with the price and the exact requirement to sign, and 200 with a signed download URL once the payment settles. Echo extra.quote_id as X-Quote-Id and extensions.bazaar in the payment payload. The full procedure is at ${base}/.well-known/agent-skills/buy-a-repo/SKILL.md; the same tools are an MCP server at ${base}/api/mcp. Every live resource is listed at ${base}/.well-known/x402.`,
     },
     servers: [{ url: base }],
     externalDocs: { url: "https://github.com/pcmarts/x402git", description: "Source code and security policy" },

@@ -18,6 +18,18 @@ export const BUY_SKILL_PATH = "/.well-known/agent-skills/buy-a-repo/SKILL.md";
  *  follow (lib/skills owns the names; this owns where they are served). */
 export const SELL_SKILL_PATH = "/.well-known/agent-skills/sell-a-repo/SKILL.md";
 export const MCP_PATH = "/api/mcp";
+/** Where the `x402git-stellar` CLI points when it is given no `--base-url`. */
+export const STELLAR_CLI_DEFAULT_URL = "https://x402git.com";
+
+/**
+ * The CLI command a Stellar buyer pastes. Any deployment other than the CLI's default
+ * (a self-hosted instance, `hack.x402git.com`) is named with `--base-url`; without it the
+ * command would ask x402git.com for a listing that only exists here and get `not_found`.
+ */
+export function stellarCli(command: "buy" | "fetch", ref: string, appUrl: string): string {
+  const base = appUrl.replace(/\/+$/, "");
+  return `npx x402git-stellar ${command} ${ref}${base === STELLAR_CLI_DEFAULT_URL ? "" : ` --base-url ${base}`}`;
+}
 
 export type BuyLinksInput = {
   owner: string;

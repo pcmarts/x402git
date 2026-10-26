@@ -57,7 +57,7 @@ import { encodePaymentSignatureHeader } from "@x402/core/http";
 import type { PaymentPayload } from "@x402/core/types";
 import * as z from "zod";
 import { walletFrom, WALLET_SIGNATURE_HEADER } from "@/lib/auth/wallet-signature";
-import { buyLinks, chainLabel, signAndRetry } from "@/lib/buy-links";
+import { buyLinks, chainLabel, signAndRetry, stellarCli } from "@/lib/buy-links";
 import { type PaymentOption, paymentOptionsFor } from "@/lib/core/access";
 import { appUrl } from "@/lib/env";
 import { ApiError, toApiError } from "@/lib/errors";
@@ -75,7 +75,7 @@ export const MCP_SERVER_NAME = "git-x402";
 export const MCP_SERVER_VERSION = "0.2.1";
 export const MCP_SERVER_TITLE = "X402 Git — buy private repos over x402";
 export const MCP_SERVER_DESCRIPTION =
-  "Find and buy private git repositories and agent skills over x402 — USDC on Base or USDT0 on Stellar, whichever the listing offers. Search live listings by what they do, read a listing's free manifest — file tree, licence, dependencies, security scan — then pay and pull, with no account and no human in the loop.";
+  "Find and buy private git repositories and agent skills over x402 — USDC on Base, USDT0 on Arbitrum or USDT0 on Stellar, whichever the listing offers. Search live listings by what they do, read a listing's free manifest — file tree, licence, dependencies, security scan — then pay and pull, with no account and no human in the loop.";
 
 /**
  * What `initialize` says about the server, and what the server card mirrors. Directories
@@ -163,7 +163,7 @@ export function buildMcpServer(req?: Request): McpServer {
         "`check_version` tells you the latest version and what it would cost this wallet.",
         '`purchase` follows the x402 MCP transport: with no payment attached it returns `isError: true` with the `PaymentRequired` body as structured content, mirrored in `_meta["x402/error"]`. Sign the `accepts` entry whose `network` is yours — never index 0 by position: a listing that takes both lists Base first, a Stellar-only listing lists Stellar first — locally with your own key (this server never sees a private key) and call `purchase` again with the payment as `payment_signature` or `_meta["x402/payment"]`. On Stellar, `npx x402git-stellar buy <owner>/<slug>` does the whole exchange.',
         "`fetch_release` re-fetches a version you already own, forever, for free.",
-        "Money is micro-dollars as a decimal string: 9000000 is $9.00, in USDC on Base or USDT0 on Stellar; both count as $1.",
+        "Money is micro-dollars as a decimal string: 9000000 is $9.00, in USDC on Base, USDT0 on Arbitrum or USDT0 on Stellar; each counts as $1.",
       ].join("\n"),
     },
   );
@@ -327,7 +327,7 @@ export function buildMcpServer(req?: Request): McpServer {
                     .join(" ") +
                   ` ${links.skill_url} has the exact headers. The server never sees your key.`,
                 `You cannot pay for this; a wallet has to sign. Tell the person: ${name} is ${priceLabel} on X402 Git, paid in ${optionsSentence}. ` +
-                  `They can buy it themselves at ${links.listing_url}${options.some((o) => o.network.startsWith("eip155:")) ? " with a browser wallet" : ""}${options.some((o) => o.network.startsWith("stellar:")) ? `, or from the command line with \`npx x402git-stellar buy ${owner}/${slug}\` and a Stellar wallet` : ""}, or give the prompt on that page to an agent that has a wallet. ` +
+                  `They can buy it themselves at ${links.listing_url}${options.some((o) => o.network.startsWith("eip155:")) ? " with a browser wallet" : ""}${options.some((o) => o.network.startsWith("stellar:")) ? `, or from the command line with \`${stellarCli("buy", `${owner}/${slug}`, base)}\` and a Stellar wallet` : ""}, or give the prompt on that page to an agent that has a wallet. ` +
                   `Before anyone pays, the free manifest at ${links.manifest_url} shows the file tree, licence, dependencies and security scan.`,
               ];
 
@@ -428,7 +428,7 @@ export function buildMcpServer(req?: Request): McpServer {
     {
       title: "Buy the latest release (x402)",
       description:
-        'Wraps `GET /api/r/:owner/:slug` — the same quote → screen → verify → settle → grant sequence, with the purchase recorded as `source: mcp`. Call it once with no payment: you get the x402 `PaymentRequired` body back. It arrives as `isError: true` per the x402 MCP transport, but it is not a failure — it is the price. `accepts` has one entry per network the listing takes (USDC on Base, USDT0 on Stellar); sign the one whose `network` is yours — never index 0 by position — with your own key (this server never sees it): an EIP-3009 authorization on Base, a Soroban transfer auth entry on Stellar (`npx x402git-stellar buy <owner>/<slug>` does it). Then call again with the payment as the base64 `payment_signature` argument or as `_meta["x402/payment"]`. On success you get the version, the sha256 of the artifact, a signed download URL that expires in five minutes, and the settlement transaction in `_meta["x402/payment-response"]`. Access is granted only after the facilitator returns a transaction hash. A $0 listing returns `granted` on the first call.',
+        'Wraps `GET /api/r/:owner/:slug` — the same quote → screen → verify → settle → grant sequence, with the purchase recorded as `source: mcp`. Call it once with no payment: you get the x402 `PaymentRequired` body back. It arrives as `isError: true` per the x402 MCP transport, but it is not a failure — it is the price. `accepts` has one entry per network the listing takes (USDC on Base, USDT0 on Arbitrum, USDT0 on Stellar); sign the one whose `network` is yours — never index 0 by position — with your own key (this server never sees it): an EIP-3009 authorization on an EVM network (Base, Arbitrum), a Soroban transfer auth entry on Stellar (`npx x402git-stellar buy <owner>/<slug>` does it). Then call again with the payment as the base64 `payment_signature` argument or as `_meta["x402/payment"]`. On success you get the version, the sha256 of the artifact, a signed download URL that expires in five minutes, and the settlement transaction in `_meta["x402/payment-response"]`. Access is granted only after the facilitator returns a transaction hash. A $0 listing returns `granted` on the first call.',
       inputSchema: {
         owner,
         slug,

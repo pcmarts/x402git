@@ -145,6 +145,11 @@ function rememberRail(network: string): void {
   }
 }
 
+/** Whether a row's radio is disabled: every row but the chosen one, while its button works or has paid. */
+export function rowLocked(lock: "busy" | "done" | null, isSelected: boolean): boolean {
+  return lock !== null && !isSelected;
+}
+
 export function PayBlock(props: Props) {
   const { options, chains, stellar } = props;
   const rows = payRows(options, chains, stellar);
@@ -156,6 +161,13 @@ export function PayBlock(props: Props) {
   const [picked, setPicked] = useState<string | null>(null);
   /** The wallet chosen in the Stellar row's picker, while its button holds it. */
   const [stellarWallet, setStellarWallet] = useState<string | null>(null);
+  /**
+   * The chosen row's button is working, or has paid (26 Oct 2026). Switching rows then
+   * unmounted that button and lost its result panel — the download link, after money had
+   * moved — so the other rows are disabled until it is at rest again.
+   */
+  const [lock, setLock] = useState<"busy" | "done" | null>(null);
+  const onState = useCallback((state: "idle" | "busy" | "done") => setLock(state === "idle" ? null : state), []);
 
   useEffect(() => {
     setMounted(true);
@@ -181,10 +193,14 @@ export function PayBlock(props: Props) {
     if (mounted) setPicked((p) => p ?? auto);
   }, [auto, mounted]);
 
-  const choose = useCallback((network: string) => {
-    setPicked(network);
-    rememberRail(network);
-  }, []);
+  const choose = useCallback(
+    (network: string) => {
+      if (lock) return;
+      setPicked(network);
+      rememberRail(network);
+    },
+    [lock],
+  );
 
   if (rows.length === 0) return null;
 
@@ -206,6 +222,7 @@ export function PayBlock(props: Props) {
           walletName={detected.evm ?? null}
           forSale={props.forSale}
           sizeLabel={props.sizeLabel}
+          onState={onState}
         />
       ) : (
         <BuyWithStellar
@@ -219,6 +236,7 @@ export function PayBlock(props: Props) {
           forSale={props.forSale}
           sizeLabel={props.sizeLabel}
           onWallet={setStellarWallet}
+          onState={onState}
         />
       )}
     </div>
@@ -265,6 +283,7 @@ export function PayBlock(props: Props) {
                     name={`${groupId}-rail`}
                     value={row.network}
                     checked={isSelected}
+                    disabled={rowLocked(lock, isSelected)}
                     onChange={() => choose(row.network)}
                     aria-describedby={statusId}
                   />

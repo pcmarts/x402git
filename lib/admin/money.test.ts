@@ -157,6 +157,7 @@ describe("loadMoney", () => {
 
   beforeEach(() => {
     process.env.X402_NETWORK = "base-sepolia";
+    process.env.X402_EXTRA_EVM_RAILS = '[{"network":"eip155:42161"}]';
     resetEnv();
     setDb(
       makeMockDb({
@@ -168,34 +169,41 @@ describe("loadMoney", () => {
             id: "p1", listing_id: "l1", release_id: "r1", buyer_address: "0xbuyer1",
             gross_micro: "9000000", fee_micro: "900000", net_micro: "8100000",
             kind: "new", source: "web", granted_at: iso(-2 * DAY), holdback_until: iso(5 * DAY),
-            revoked_at: null, payout_id: null, tx_hash: "0xdead", chain_id: 84532,
+            revoked_at: null, payout_id: null, tx_hash: "0xdead", chain_id: 84532, network: "eip155:84532",
           },
           {
             id: "p2", listing_id: "l1", release_id: "r1", buyer_address: "0xBUYER1",
             gross_micro: "5000000", fee_micro: "500000", net_micro: "4500000",
             kind: "update", source: "api", granted_at: iso(-20 * DAY), holdback_until: iso(-13 * DAY),
-            revoked_at: null, payout_id: null, tx_hash: null, chain_id: 84532,
+            revoked_at: null, payout_id: null, tx_hash: null, chain_id: 84532, network: "eip155:84532",
           },
           // Mainnet — must not be counted while X402_NETWORK is Sepolia.
           {
             id: "p3", listing_id: "l1", release_id: "r1", buyer_address: "0xbuyer2",
             gross_micro: "99000000", fee_micro: "9900000", net_micro: "89100000",
             kind: "new", source: "web", granted_at: iso(-DAY), holdback_until: iso(DAY),
-            revoked_at: null, payout_id: null, tx_hash: null, chain_id: 8453,
+            revoked_at: null, payout_id: null, tx_hash: null, chain_id: 8453, network: "eip155:8453",
+          },
+          // Arbitrum USDT0 (25 Oct 2026): a second rail of the same deployment, counted.
+          {
+            id: "p5", listing_id: "l1", release_id: "r1", buyer_address: "0xbuyer1",
+            gross_micro: "1000000", fee_micro: "100000", net_micro: "900000",
+            kind: "new", source: "web", granted_at: iso(-21 * DAY), holdback_until: iso(4 * DAY),
+            revoked_at: null, payout_id: null, tx_hash: "0xarb", chain_id: 42161, network: "eip155:42161",
           },
           // Revoked — not revenue.
           {
             id: "p4", listing_id: "l1", release_id: "r1", buyer_address: "0xbuyer3",
             gross_micro: "9000000", fee_micro: "900000", net_micro: "8100000",
             kind: "new", source: "web", granted_at: iso(-DAY), holdback_until: iso(DAY),
-            revoked_at: iso(0), payout_id: null, tx_hash: null, chain_id: 84532,
+            revoked_at: iso(0), payout_id: null, tx_hash: null, chain_id: 84532, network: "eip155:84532",
           },
         ],
         payout: [
-          { id: "po1", creator_id: "c1", amount_micro: "1000000", gas_micro: "5000", to_address: "0xaaa", status: "confirmed", idempotency_key: "k1", created_at: iso(-DAY), chain_id: 84532 },
+          { id: "po1", creator_id: "c1", amount_micro: "1000000", gas_micro: "5000", to_address: "0xaaa", status: "confirmed", idempotency_key: "k1", created_at: iso(-DAY), chain_id: 84532, network: "eip155:84532" },
           // Stuck at pending: the in-flight index blocks any further sweep for c1, so
           // c1's released-but-unswept net is blocked rather than payable.
-          { id: "po2", creator_id: "c1", amount_micro: "1000000", gas_micro: "9999", to_address: "0xaaa", status: "pending", idempotency_key: "k2", created_at: iso(-DAY), chain_id: 84532 },
+          { id: "po2", creator_id: "c1", amount_micro: "1000000", gas_micro: "9999", to_address: "0xaaa", status: "pending", idempotency_key: "k2", created_at: iso(-DAY), chain_id: 84532, network: "eip155:84532" },
         ],
       }).client as unknown as Db,
     );
@@ -204,14 +212,15 @@ describe("loadMoney", () => {
   afterEach(() => {
     resetDb();
     delete process.env.X402_NETWORK;
+    delete process.env.X402_EXTRA_EVM_RAILS;
     resetEnv();
   });
 
-  it("counts this chain only, and never a revoked purchase", async () => {
+  it("counts every rail this deployment serves (Base Sepolia and Arbitrum), never the other network, never a revoked purchase", async () => {
     const { totals } = await loadMoney("all");
-    expect(totals.sales).toBe(2);
-    expect(totals.grossMicro).toBe(14_000_000n);
-    expect(totals.feeMicro).toBe(1_400_000n);
+    expect(totals.sales).toBe(3);
+    expect(totals.grossMicro).toBe(15_000_000n);
+    expect(totals.feeMicro).toBe(1_500_000n);
     expect(totals.chainId).toBe(84532);
   });
 
@@ -253,7 +262,7 @@ describe("loadMoney", () => {
 
   it("puts newest sales first", async () => {
     const { sales } = await loadMoney("all");
-    expect(sales.map((s) => s.id)).toEqual(["p1", "p2"]);
+    expect(sales.map((s) => s.id)).toEqual(["p1", "p2", "p5"]);
   });
 
 
@@ -265,7 +274,7 @@ describe("loadMoney", () => {
 
       // Flow narrows.
       expect(week.totals.grossMicro).toBe(9_000_000n);
-      expect(all.totals.grossMicro).toBe(14_000_000n);
+      expect(all.totals.grossMicro).toBe(15_000_000n);
       expect(week.totals.sales).toBe(1);
 
       // Balances do not: what is blocked now is blocked regardless of the window asked for.

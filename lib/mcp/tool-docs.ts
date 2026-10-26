@@ -22,6 +22,6 @@ export const MCP_TOOL_DOCS: McpToolDoc[] = [
   },
   { name: "get_listing", does: "The free manifest: file tree, licence, dependencies, security scan.", wraps: "/api/label/:owner/:slug" },
   { name: "check_version", does: "The latest version, and what the next fetch costs this wallet.", wraps: "/api/v/:owner/:slug" },
-  { name: "purchase", does: "Buy the latest release over x402 with a payment you signed locally — USDC on Base or USDT0 on Stellar, whichever the listing offers.", wraps: "/api/r/:owner/:slug" },
+  { name: "purchase", does: "Buy the latest release over x402 with a payment you signed locally — USDC on Base, USDT0 on Arbitrum or USDT0 on Stellar, whichever the listing offers.", wraps: "/api/r/:owner/:slug" },
   { name: "fetch_release", does: "Re-fetch a version this wallet already owns. Free, forever.", wraps: "/api/r/:owner/:slug/v/:version" },
 ];

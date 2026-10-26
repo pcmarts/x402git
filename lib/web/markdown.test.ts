@@ -26,7 +26,7 @@ describe("homeMarkdown", () => {
   });
 
   it("states the two facts an agent needs before it parses anything", () => {
-    expect(md).toContain("micro-USDC");
+    expect(md).toContain("micro-dollars");
     expect(md).toContain("10%");
   });
 });

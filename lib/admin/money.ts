@@ -13,8 +13,11 @@
  *
  * Three rules it inherits, and one it sets:
  *
- * - **One chain.** Every read is `.eq("chain_id", …)`. A mixed ledger reads testnet
- *   traffic as revenue (migration 20260906010000).
+ * - **One network family.** Every read is `.in("network", …)` over the EVM rails this
+ *   deployment serves (the primary and `X402_EXTRA_EVM_RAILS`; since 25 Oct 2026, when the
+ *   ledger gained Arbitrum USDT0 beside Base USDC). A mixed ledger would read testnet
+ *   traffic as revenue (migration 20260906010000); the admin's network switch keeps the
+ *   other network's rows out. Both tokens are a dollar, so the sums are in dollars.
  * - **bigint micro-USDC throughout.** Never a float, never a Number.
  * - **No buyer addresses.** The column is not selected, here or anywhere in `lib/admin`.
  * - **Transaction hashes are shown.** This is the one place that differs from a
@@ -30,7 +33,7 @@ import { splitFee } from "@/lib/core/fee";
 import { db } from "@/lib/db";
 import type { ListingRow, PayoutRow, PurchaseKind, PurchaseRow, PurchaseSource } from "@/lib/db/types";
 import { toMicro } from "@/lib/db/types";
-import { holdbackDays, paymentChain, platformFeeBps } from "@/lib/env";
+import { evmChains, holdbackDays, paymentChain, platformFeeBps } from "@/lib/env";
 import { inWindow, type AdminWindow } from "@/lib/admin/window";
 
 export const SALE_LIMIT = 200;
@@ -227,8 +230,8 @@ export function feeOn(grossMicro: bigint): bigint {
 // --- the read -----------------------------------------------------------------
 
 export async function loadMoney(window: AdminWindow, limit = SALE_LIMIT, chainId = paymentChain().chainId): Promise<MoneyView> {
-
-  const [{ listings, handles }, purchases, payouts] = await Promise.all([listingIndex(), purchaseRows(chainId), payoutRows(chainId)]);
+  const networks = railNetworks(chainId);
+  const [{ listings, handles }, purchases, payouts] = await Promise.all([listingIndex(), purchaseRows(networks), payoutRows(networks)]);
 
   const versions = await versionIndex(purchases.map((p) => p.release_id));
   const buyers = new Set<string>();
@@ -339,11 +342,21 @@ async function listingIndex(): Promise<{ listings: Map<string, ListingMeta>; han
   return { listings, handles };
 }
 
-async function purchaseRows(chainId: number): Promise<PurchaseRow[]> {
+/**
+ * The networks a money read covers. Viewing the configured network means every EVM rail
+ * this deployment serves; the admin's switch to the other network (mainnet from a testnet
+ * deployment, or the reverse) means that one chain, which has no extra rails configured.
+ */
+export function railNetworks(chainId: number): string[] {
+  if (chainId === paymentChain().chainId) return evmChains().map((r) => r.network);
+  return [`eip155:${chainId}`];
+}
+
+async function purchaseRows(networks: string[]): Promise<PurchaseRow[]> {
   const { data, error } = await db()
     .from("purchase")
     .select("*")
-    .eq("chain_id", chainId)
+    .in("network", networks)
     .is("revoked_at", null)
     .limit(LEDGER_LIMIT);
   if (error) throw error;
@@ -354,8 +367,8 @@ async function purchaseRows(chainId: number): Promise<PurchaseRow[]> {
   return rows;
 }
 
-async function payoutRows(chainId: number): Promise<PayoutRow[]> {
-  const { data, error } = await db().from("payout").select("*").eq("chain_id", chainId).limit(LEDGER_LIMIT);
+async function payoutRows(networks: string[]): Promise<PayoutRow[]> {
+  const { data, error } = await db().from("payout").select("*").in("network", networks).limit(LEDGER_LIMIT);
   if (error) throw error;
   return (data as PayoutRow[] | null) ?? [];
 }

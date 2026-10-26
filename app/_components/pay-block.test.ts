@@ -14,7 +14,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { StellarCheckoutConfig } from "@/lib/web/stellar-checkout";
-import { type EvmChain, PayBlock, payRows, preselect, STELLAR_WALLETS_LINE, WalletLine } from "./pay-block";
+import { type EvmChain, PayBlock, payRows, preselect, rowLocked, STELLAR_WALLETS_LINE, WalletLine } from "./pay-block";
 import { rowSymbol } from "./purchases";
 
 const BASE: EvmChain = { network: "eip155:8453", chainId: 8453, chainName: "Base", explorer: "https://basescan.org", symbol: "USDC" };
@@ -161,5 +161,16 @@ describe("the purchases row's token (purchases.tsx)", () => {
     expect(rowSymbol({ network: null, asset: null }, rails)).toBeNull();
     expect(rowSymbol({ network: "eip155:42161", asset: "0x0000000000000000000000000000000000000001" }, rails)).toBeNull();
     expect(rowSymbol({ network: "eip155:1", asset: null }, rails)).toBeNull();
+  });
+});
+
+describe("rowLocked: the other rows wait while one button works or has paid (26 Oct 2026)", () => {
+  it("locks nothing at rest, and every row but the chosen one while busy or done", () => {
+    expect(rowLocked(null, false)).toBe(false);
+    expect(rowLocked(null, true)).toBe(false);
+    expect(rowLocked("busy", false)).toBe(true);
+    expect(rowLocked("busy", true)).toBe(false);
+    expect(rowLocked("done", false)).toBe(true);
+    expect(rowLocked("done", true)).toBe(false);
   });
 });

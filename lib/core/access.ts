@@ -18,7 +18,7 @@
  */
 
 import { createHash } from "node:crypto";
-import { buyLinks, chainLabel, paymentInstructions } from "@/lib/buy-links";
+import { buyLinks, chainLabel, paymentInstructions, stellarCli } from "@/lib/buy-links";
 import { db } from "@/lib/db";
 import type { CreatorRow, ListingRow, PurchaseKind, PurchaseRow, PurchaseSource, ReleaseRow } from "@/lib/db/types";
 import { fromMicro, toMicro } from "@/lib/db/types";
@@ -519,7 +519,7 @@ export function paymentOptionsFor(
 /** The Stellar sentence. The CLI is W4's; the fallback is any x402 client with the Stellar scheme registered. */
 function stellarHow(rail: StellarRail, name: string): string {
   return (
-    `Pay ${rail.asset.code} on ${chainLabel(rail.network)}: \`npx x402git-stellar buy ${name}\`, ` +
+    `Pay ${rail.asset.code} on ${chainLabel(rail.network)}: \`${stellarCli("buy", name, appUrl())}\`, ` +
     `or sign the ${rail.network} entry of accepts as a Soroban \`transfer\` of the ${rail.asset.code} contract with an x402 client that has the Stellar scheme registered.`
   );
 }

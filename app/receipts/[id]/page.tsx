@@ -24,9 +24,9 @@ import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { SiteFooter, SiteHeader } from "@/app/_components/chrome";
 import { RailChip } from "@/app/_components/rail-marks";
-import { chainLabel, stellarExplorerTxUrl } from "@/lib/buy-links";
+import { chainLabel, stellarCli, stellarExplorerTxUrl } from "@/lib/buy-links";
 import { toMicro } from "@/lib/db/types";
-import { evmRailFor, KNOWN_EVM_RAILS, stellarRail } from "@/lib/env";
+import { appUrl, evmRailFor, KNOWN_EVM_RAILS, stellarRail } from "@/lib/env";
 import { loadReceipt, verifyReceiptToken } from "@/lib/receipts";
 import { termsInfo } from "@/lib/terms";
 import { currentSession } from "@/lib/web/current";
@@ -189,7 +189,7 @@ export default async function ReceiptPage({ params, searchParams }: Props) {
           that paid — or from <code>GET /api/r/{owner}/{slug}/v/{release.version}</code> with its signature
           {stellar ? (
             <>
-              , or from the command line with <code>npx x402git-stellar fetch {owner}/{slug}</code> and the same Stellar key
+              , or from the command line with <code>{stellarCli("fetch", `${owner}/${slug}`, appUrl())}</code> and the same Stellar key
             </>
           ) : null}
           . The serve is the exact artifact that was scanned; a later release is a separate version.

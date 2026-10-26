@@ -51,6 +51,8 @@ type Props = {
   sizeLabel?: string;
   /** The chosen wallet's name once connected, null when it is let go: the pay block's row line. */
   onWallet?: (walletName: string | null) => void;
+  /** Told when this button starts working, finishes paying, or returns to rest: the pay block locks the other rows meanwhile. */
+  onState?: (state: "idle" | "busy" | "done") => void;
 };
 
 type Phase = "idle" | "connecting" | "paying" | "done" | "error";
@@ -81,6 +83,16 @@ export function BuyWithStellar(props: Props) {
   }, []);
 
   const transport = useCallback(() => ({ fetch: window.fetch.bind(window), baseUrl: "" }), []);
+
+  // See buy-with-wallet.tsx: the pay block locks the other rows while this one works or has paid.
+  const tellState = useRef(props.onState);
+  tellState.current = props.onState;
+  const working = phase === "connecting" || phase === "paying";
+  const paid = Boolean(result?.ok);
+  useEffect(() => {
+    tellState.current?.(working ? "busy" : paid ? "done" : "idle");
+  }, [working, paid]);
+  useEffect(() => () => tellState.current?.("idle"), []);
 
   /** The payment, with the wallet as an argument so `connect` can run it in the same press (25 Oct 2026, 23:59). */
   const pay = useCallback(async (w: Wallet) => {

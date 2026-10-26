@@ -93,16 +93,21 @@ console.log("\nkill switches");
 say("paused", paused.length ? paused.map((s) => s.name).join(", ") : "none");
 for (const s of paused) problems.push(`${s.name} is PAUSED${s.reason ? ` — ${s.reason}` : ""}`);
 
-// --- payouts ------------------------------------------------------------------
-const { data: payouts } = await db.from("payout").select("*").eq("chain_id", chainId);
-const byStatus = {};
-for (const p of payouts ?? []) byStatus[p.status] = (byStatus[p.status] ?? 0) + 1;
+// --- payouts (every rail: 25 Oct 2026, the ledger is partitioned by `network`) -----------
+const { data: payouts } = await db.from("payout").select("*");
+const byRail = {};
+for (const p of payouts ?? []) {
+  const rail = p.network ?? `eip155:${p.chain_id}`;
+  byRail[rail] ??= {};
+  byRail[rail][p.status] = (byRail[rail][p.status] ?? 0) + 1;
+}
 const stuck = (payouts ?? []).filter((p) => p.status === "pending" || p.status === "broadcast");
-console.log("\npayouts (this chain)");
-say("by status", Object.entries(byStatus).map(([k, v]) => `${k}=${v}`).join(" ") || "none");
+console.log("\npayouts (every rail)");
+if (!Object.keys(byRail).length) say("by status", "none");
+for (const [rail, counts] of Object.entries(byRail)) say(rail, Object.entries(counts).map(([k, v]) => `${k}=${v}`).join(" "));
 if (stuck.length) {
   problems.push(`${stuck.length} payout(s) stuck at pending/broadcast — they block their creator. See scripts/ops-clear-stuck-payout.mjs`);
-  for (const p of stuck) say("  stuck", `${usd(p.amount_micro)} → ${p.to_address}`);
+  for (const p of stuck) say("  stuck", `${usd(p.amount_micro)} → ${p.to_address} on ${p.network ?? `eip155:${p.chain_id}`}`);
 }
 
 // --- can the sweep wallet cover what it owes? ---------------------------------
@@ -156,18 +161,24 @@ if (!sweepAddr) {
   if (gas !== null && gas === 0n && owed > 0n) problems.push("sweep wallet has no ETH for gas and has payouts due");
 }
 
-// --- last reconcile -----------------------------------------------------------
-const { data: recon } = await db.from("event").select("*").eq("name", "reconcile").order("at", { ascending: false }).limit(1);
+// --- last reconcile, per rail (one event per rail per run since 25 Oct 2026) -------------
+const { data: recon } = await db.from("event").select("*").eq("name", "reconcile").order("at", { ascending: false }).limit(40);
 console.log("\nreconcile");
 if (!recon?.length) {
   say("last run", "never");
   problems.push("the reconcile job has never recorded a result");
 } else {
-  const r = recon[0];
-  const age = (Date.now() - new Date(r.at).getTime()) / 3_600_000;
-  say("last run", `${new Date(r.at).toISOString()} (${age.toFixed(1)}h ago)`);
-  say("variance", r.props?.variance_micro !== undefined ? usd(r.props.variance_micro) : JSON.stringify(r.props ?? {}));
-  if (age > 36) problems.push(`the reconcile has not run in ${age.toFixed(0)}h — the daily cron may be failing`);
+  const latest = new Map();
+  for (const r of recon) {
+    const rail = r.network ?? r.props?.network ?? "primary";
+    if (!latest.has(rail)) latest.set(rail, r);
+  }
+  for (const [rail, r] of latest) {
+    const age = (Date.now() - new Date(r.at).getTime()) / 3_600_000;
+    const variance = r.props?.variance_micro !== undefined ? usd(r.props.variance_micro) : JSON.stringify(r.props ?? {});
+    say(rail, `${new Date(r.at).toISOString()} (${age.toFixed(1)}h ago) · variance ${variance}`);
+    if (age > 36) problems.push(`the reconcile for ${rail} has not run in ${age.toFixed(0)}h — the daily cron may be failing`);
+  }
 }
 
 // --- recent trouble in the event log ------------------------------------------

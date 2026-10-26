@@ -105,7 +105,7 @@ async function reconcileRail(rail: EvmRail, sweepAddress: string | null): Promis
   let readError: string | null = null;
   try {
     const client = railClient(rail);
-    await assertRpcServesChain(client, rail.chainId, `reconcile ${rail.network}`);
+    await assertRpcServesChain(client, rail.chainId, `reconcile ${rail.network}`, rail.rpcUrl);
 
     const balances = await Promise.all(
       watched.map(
