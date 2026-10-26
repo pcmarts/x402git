@@ -36,7 +36,7 @@ Everything Stellar here was written at HackMeridian, after `d87ea40` (25 Oct 202
 - **Pay from any Stellar wallet.** The listing page has one Pay block with a row for each way to pay. The Stellar row uses the [Stellar Wallets Kit](https://github.com/Creit-Tech/Stellar-Wallets-Kit), so Freighter, Lobstr, xBull and the rest work. One press connects, checks what you already own, and asks for the signature. ([`app/_components/pay-block.tsx`](app/_components/pay-block.tsx), [`lib/web/stellar-checkout.ts`](lib/web/stellar-checkout.ts))
 - **Stellar-only creators.** A maintainer can sign up, bind a Stellar payout address with one signature, and list a repo without ever touching an EVM wallet. Adding another rail later is one wallet and one signature. ([`app/dashboard/wallet/page.tsx`](app/dashboard/wallet/page.tsx))
 - **A USDT0 rail on Arbitrum,** so a buyer whose dollars are on Arbitrum can pay without bridging first. ([`lib/x402/flow.ts`](lib/x402/flow.ts))
-- **An agent buyer CLI,** [`pcmarts/x402git-stellar`](https://github.com/pcmarts/x402git-stellar) (MIT, separate repo). It is the stock `@x402/stellar` client as a command line: `buy`, `fetch` and `whoami`. It never signs a token it can't name, and it refuses before signing when the account can't cover the price.
+- **An agent buyer CLI,** [`pcmarts/x402git-stellar`](https://github.com/pcmarts/x402git-stellar) (MIT, separate repo). It is the stock `@x402/stellar` client as a command line (`npx x402git-stellar buy|fetch|whoami`). It never signs a token it can't name, and it refuses before signing when the account can't cover the price.
 - **Agent discovery.** The MCP server's `search_listings`, `how_to_buy` and `get_listing` tools report each listing's payment options per network, and its open-release status.
 
 Tests: 175 files and 2,444 tests in this repo, 38 in the CLI, all passing. The money paths (402, settle, entitlement, sweep) each have a Stellar test file next to the Base one.
@@ -72,18 +72,17 @@ claude mcp add --transport http x402git-hack https://hack.x402git.com/api/mcp
 # then: "find an open release on x402git and tell me how to pay for it on Stellar"
 ```
 
-**Buy it with the agent CLI.** This spends $1 of real USDT0 on Stellar mainnet. You need a Stellar account with a USDT0 trustline and at least $1 USDT0 in it. The CLI isn't on npm yet, so build it from source:
+**Buy it with the agent CLI.** This spends $1 of real USDT0 on Stellar mainnet. You need a Stellar account with a USDT0 trustline and at least $1 USDT0 in it. The network fee is sponsored, so no XLM is spent.
 
 ```sh
-git clone https://github.com/pcmarts/x402git-stellar && cd x402git-stellar
-npm install && npm run build && npm link
-
 export X402GIT_STELLAR_SECRET=S…            # the paying account's secret, read from the environment only
 export X402GIT_BASE_URL=https://hack.x402git.com
-x402git-stellar whoami                       # the address and its USDT0 balance
-x402git-stellar buy pcmarts/open-release-demo-next   # pays, checks the sha256, writes the zip, prints the stellar.expert link
-x402git-stellar fetch pcmarts/open-release-demo-next # downloads it again for free, with a signed message
+npx x402git-stellar whoami                                   # the address and its USDT0 balance
+npx x402git-stellar buy pcmarts/open-release-demo-next       # pays, checks the sha256, writes the zip, prints the stellar.expert link
+npx x402git-stellar fetch pcmarts/open-release-demo-next     # downloads it again for free, with a signed message
 ```
+
+The CLI is [`x402git-stellar`](https://www.npmjs.com/package/x402git-stellar) on npm; its source is [`pcmarts/x402git-stellar`](https://github.com/pcmarts/x402git-stellar). To run it from source instead: clone it, then `npm install && npm run build && npm link`.
 
 **Or buy it in a browser.** Open [the listing](https://hack.x402git.com/pcmarts/open-release-demo-next), press the Stellar row of the Pay block and sign with Freighter, Lobstr or another Stellar wallet.
 
