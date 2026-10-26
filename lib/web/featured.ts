@@ -11,6 +11,12 @@
  * "Evidence on Hand" forbids fabricating a listing, and a greyed-out "coming soon" row
  * is a fabricated listing with an apology attached.
  *
+ * *Amended 2026-10-26 (HackMeridian), on the founder's direction: "just have one example
+ * which is the open source example I created".* The home page now pitches open releases,
+ * so the three `examples` listings (sold for USDC, never opening) left the row and the
+ * one example is `pcmarts/open-release-demo-next`, the open release we listed and bought
+ * on mainnet. Same loaders, same card, same rule: absent if it is not live.
+ *
  * Three queries, not three per row: one creator, one listing, one release.
  */
 
@@ -19,11 +25,11 @@ import type { ListingRow, ReleaseRow } from "@/lib/db/types";
 import { ownerLoginOf, ownerProfile, repoProfile } from "@/lib/web/github-profile";
 import { creatorByHandle, listingCard, statusOf, type ListingCard } from "@/lib/web/loaders";
 
-/** The handle the platform's own demonstration listings are published under. */
-export const FEATURED_OWNER = "examples";
+/** The handle the platform's own demonstration listing is published under. */
+export const FEATURED_OWNER = "pcmarts";
 
 /** In render order. A slug that has no live listing yet contributes nothing. */
-export const FEATURED_SLUGS = ["humanizer", "changelog-writer", "repo-digest"] as const;
+export const FEATURED_SLUGS = ["open-release-demo-next"] as const;
 
 /**
  * A featured example is a listing card plus the face of whoever sells it.

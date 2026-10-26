@@ -59,6 +59,20 @@
  * renders and emits as `FAQPage` structured data, so the two pages cannot drift. This
  * page emits no second `FAQPage`; the canonical one stays on `/how-it-works`.
  *
+ * *Amended 2026-10-26 (HackMeridian), on the founder's direction to put the page on the
+ * open-source positioning, in line with the explainer video and the deck.* The page
+ * used to sell a private repo for USDC; on the `hackmeridian` branch it pitches open
+ * releases instead: a maintainer puts the next release on early access, agents pay to
+ * get it now, and on the date the maintainer set it goes public under its licence. The
+ * layout is the one above with its words replaced: the hero is the film's opening line,
+ * the steps row is the deck's *Early access, then open*, the walkthrough is the
+ * 45-second explainer, the band closes on the deck's last line and its three
+ * guarantees, and the five questions are open-release ones from the module
+ * `/open-source` renders, so the two pages cannot drift. One section is new: **Why
+ * now**, the deck's problem slide, set as a three-row table rather than stat tiles,
+ * because tables are this system's signature component and the hero-metric layout is
+ * one it refuses.
+ *
  * Three things this page must keep doing:
  *
  * 1. **Be complete in the server HTML** (§14.1). No client component, no fetch after
@@ -94,37 +108,45 @@ export const dynamic = "force-dynamic";
  */
 export const metadata: Metadata = {
   description:
-    "Get paid by agents for your code. Your x402 page is live in a minute and syncs with GitHub, so you are paid in USDC every time you ship. Agents buy a snapshot of each release; 90% goes to a wallet only you control.",
+    "A new way to fund open source, paid for by the agents that use it. Put your next release on early access: agents pay in USDT0 or USDC over x402, 90% goes to the project, and on the date you set it goes public under its licence.",
   alternates: { canonical: "/" },
 };
 
 const STEPS: { name: string; note: string }[] = [
-  // Every sub-line is the same kind of sentence — what you get — so the row reads as
-  // one promise of ease rather than a feature, a fact and an instruction (2026-08-30).
-  // The first step returned on 2026-08-31 (founder) with different words from the
-  // button above it, so the 2026-08-30 "one flow, not two CTAs" rule still holds:
-  // the button offers the click, this names the choice it opens with.
-  {
-    name: "Connect repo",
-    note: "Every release syncs automatically",
-  },
-  { name: "Set price", note: "One to buy, one to keep updated" },
-  { name: "Add wallet", note: "Any EVM address only you control" },
-  { name: "Get paid", note: "A clean landing page where agents buy your code" },
+  // The deck's "Early access, then open" (2026-10-26), in four steps rather than its
+  // three: the maintainer's half splits into connecting and pricing, the way the video
+  // tells it. Names stay short enough to sit on one line beside the arrow at 64rem.
+  // Every sub-line is still one short fact, and step one's words still differ from
+  // the button above it, so "one flow, not two CTAs" holds.
+  { name: "Connect repo", note: "Each new release syncs from GitHub" },
+  { name: "Set price and date", note: "Agents get it up to 90 days early" },
+  { name: "Agents pay", note: "Over x402, in USDT0 or USDC" },
+  { name: "Everyone gets it", note: "Free on your date, under your licence" },
 ];
 
 /**
- * The five questions the home page closes with (founder, 2026-08-31), pulled from the
- * one FAQ module so the words here can never drift from /how-it-works, where the same
- * answers carry the `FAQPage` structured data. This page emits no second `FAQPage`:
- * one canonical claim per question.
+ * The deck's problem slide (2026-10-26), as rows: the figure in the computed face, what
+ * it measures in the text face. The same three numbers /open-source puts in prose under
+ * Why now, with the deck's wording.
+ */
+const FIGURES: { figure: string; note: string }[] = [
+  { figure: "$8.8T", note: "What open source is worth to the companies that use it." },
+  { figure: "$100M", note: "All GitHub Sponsors has paid maintainers, in seven years." },
+  { figure: "−80%", note: "Tailwind’s revenue, while its usage hit an all-time high." },
+];
+
+/**
+ * The five questions the home page closes with, pulled from the one FAQ module so the
+ * words here can never drift. Since 2026-10-26 they are open-release questions, the
+ * ones /open-source answers in full; they are not in `FAQPage` structured data on
+ * either page.
  */
 const HOME_FAQ_QUESTIONS = [
-  "Can buyers see my code before they pay?",
-  "What does it cost to list?",
-  "Does my repository have to leave GitHub?",
-  "What happens when I push a new release?",
-  "Do I need a crypto wallet?",
+  "So you are closing open source?",
+  "The first buyer can just republish it.",
+  "How do you know it really opened?",
+  "Who holds the money?",
+  "Is this crypto?",
 ];
 
 /**
@@ -172,15 +194,19 @@ export default async function Home() {
           dangerouslySetInnerHTML={{ __html: structuredData() }}
         />
         {/* Centred, with room (founder, 2026-08-31): the promise, one line under it,
-            the button in the middle — and the steps row still above the fold. The
-            audience line ("For scripts, skills, plugins…") left the subhead on the
-            same direction; the h1 already casts the net. */}
+            the button in the middle — and the steps row still above the fold. Since
+            2026-10-26 the promise is the explainer's opening line and the deck's
+            title, broken where the film breaks it: the offer, then who pays. The
+            subhead is the deck's v1/v2 slide in words. */}
         <div className="hero">
-          <h1>Get paid by agents for your code.</h1>
+          <h1>
+            A new way to fund open source,
+            <br /> paid for by the agents that use it.
+          </h1>
           <p className="written hero-sub">
-            Your x402 page, live in a minute.
+            Put your next release on early access.
             <br />
-            <span>Syncs with GitHub.</span> <span>Paid in USDC every time you ship.</span>
+            <span>Agents pay to get it now.</span> <span>Everyone gets it free on the date you set.</span>
           </p>
           {/* The one place to start, directly under the promise it starts. It lands
               on /signin (2026-09-13, founder), the door that offers both ways in —
@@ -192,18 +218,18 @@ export default async function Home() {
             <input type="hidden" name="next" value="/dashboard" />
             <button type="submit" data-variant="github">
               <GitHubMark />
-              Start selling
+              List your next release
             </button>
           </form>
         </div>
 
         {/* The row's heading, worn at Label size (founder, 2026-08-31) — a real h2,
             not an eyebrow: nothing sits above it, so The No Kicker Rule holds. The
-            list is ordered, so with CSS off it still reads 1–4 in sequence — what
-            happens after the button above is pressed. */}
-        <section aria-labelledby="how-to-earn">
-          <h2 className="section-label" id="how-to-earn">
-            How to earn
+            words are the deck's How it works headline (2026-10-26). The list is
+            ordered, so with CSS off it still reads 1–4 in sequence. */}
+        <section aria-labelledby="early-access">
+          <h2 className="section-label" id="early-access">
+            Early access, then open
           </h2>
           <ol className="steps">
             {STEPS.map((step) => (
@@ -215,21 +241,22 @@ export default async function Home() {
           </ol>
         </section>
 
-        {/* The steps row, shown (founder, 2026-10-06): the 54-second walkthrough
-            follows the same four steps in the same order — connect, price, wallet,
-            live — then an agent buying. It sits under the row it illustrates, so
-            the row stays above the fold and the video is the first thing past it.
+        {/* The steps row, shown (founder, 2026-10-06; swapped 2026-10-26): the
+            45-second HackMeridian explainer follows the same order — connect the
+            next release, price and date, an agent paying in USDT0, the money
+            reaching the project. It sits under the row it illustrates, so the row
+            stays above the fold and the video is the first thing past it.
             youtube-nocookie and loading="lazy": no third-party cookie and no
-            player fetched until it scrolls near. The h2 and the link under it are
-            server HTML, so the section still says what it is without the frame. */}
+            player fetched until it scrolls near. The h2 is server HTML, so the
+            section still says what it is without the frame. */}
         <section aria-labelledby="walkthrough" className="walkthrough">
           <h2 className="section-label" id="walkthrough">
             Watch it work
           </h2>
           <div className="video-frame">
             <iframe
-              src="https://www.youtube-nocookie.com/embed/BO3FxiykLqI?rel=0"
-              title="Selling a repo to agents on X402 Git, start to finish"
+              src="https://www.youtube-nocookie.com/embed/5VRasZWb3CU?rel=0"
+              title="X402 Git: open source, paid for by the agents that use it"
               loading="lazy"
               allow="encrypted-media; picture-in-picture; fullscreen"
               allowFullScreen
@@ -240,7 +267,9 @@ export default async function Home() {
 
         {examples.length > 0 ? (
           <section>
-            <h2 className="section-label">Featured repositories</h2>
+            {/* One example since 2026-10-26 (founder): the open release we listed
+                and bought on mainnet, not the three USDC examples. */}
+            <h2 className="section-label">See an example</h2>
             {/* On a phone the cards ride a swipe rail with the next one peeking in
                 from the right; the wrapper adds the arrows and the position line.
                 On desktop it is inert and the three-up grid renders as before. */}
@@ -250,21 +279,51 @@ export default async function Home() {
           </section>
         ) : null}
 
+        {/* The deck's problem slide (2026-10-26): the claim, the three figures that
+            make it, and the turn that makes this product possible. The figures are a
+            ruled table — a listing of facts, figure at the row head — not three big
+            numbers over small labels. */}
+        <section aria-labelledby="why-now">
+          <h2 className="section-label" id="why-now">
+            Why now
+          </h2>
+          <p className="written">Open source has never been used more, or paid less.</p>
+          <table className="figures">
+            <tbody>
+              {FIGURES.map((row) => (
+                <tr key={row.figure}>
+                  <th scope="row" className="num">
+                    {row.figure}
+                  </th>
+                  <td className="written">{row.note}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <p className="written">
+            AI made the gap worse. Agents now do the reading, installing and upgrading, and an agent never sees a sponsor button. But
+            an agent with a wallet can pay, in one round trip.
+          </p>
+        </section>
+
         {/* The pitch, as a placed advertisement rather than a section of the sheet: the
             ground steps down one and runs to both edges of the window, so it reads as a
-            block bought on the page instead of the next thing after the examples. It is
-            one column at every width. */}
+            block bought on the page instead of the next thing after the examples. Since
+            2026-10-26 it closes on the deck's last line. */}
         <section className="pitch" aria-labelledby="pitch-title">
-          <h2 id="pitch-title">Push to GitHub. Get paid every release.</h2>
+          <h2 id="pitch-title">
+            Agents use open source more than anyone.
+            <br /> Now they can fund it.
+          </h2>
 
           {/* The terms as three flat facts in the computed face, and no paragraph
               explaining them (the explaining paragraph went 2026-08-30, on the
               founder's direction). Ink, not Ash: the offer itself, not a footnote
-              about it. */}
+              about it. They are the deck's three guarantees (2026-10-26). */}
           <ul className="facts terms">
-            <li>Free to list. No monthly fees.</li>
-            <li>Each release syncs with your GitHub.</li>
-            <li>Payments made in USDC using x402.</li>
+            <li>Existing public code is never locked.</li>
+            <li>90% goes to the project&rsquo;s own account.</li>
+            <li>The opening date is checked, not trusted.</li>
           </ul>
 
           {/* Same label and same weight as the button the page opens with, so the reader
@@ -275,16 +334,17 @@ export default async function Home() {
               <input type="hidden" name="next" value="/dashboard" />
               <button type="submit" data-variant="github">
                 <GitHubMark />
-                Start selling
+                List your next release
               </button>
             </form>
             <a href="/how-it-works">How it works</a>
           </div>
         </section>
 
-        {/* The five questions a creator asks before pressing the button (founder,
-            2026-08-31), answered in the same words as /how-it-works — same module,
-            same disclosure component. The rest of the questions live there. */}
+        {/* The five questions a maintainer asks before pressing the button (founder,
+            2026-08-31; open-release questions since 2026-10-26), answered in the same
+            words as /open-source — same module, same disclosure component. The
+            money-side questions live on /how-it-works. */}
         <section aria-labelledby="questions" className="faq">
           <h2 id="questions">Questions</h2>
           <div className="faq-group">

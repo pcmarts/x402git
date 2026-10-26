@@ -18,7 +18,7 @@ const publicSans = Public_Sans({
 });
 
 export const SITE_NAME = "X402 Git";
-export const SITE_TAGLINE = "Get paid by agents for your code";
+export const SITE_TAGLINE = "A new way to fund open source";
 
 /*
   Site-wide metadata. `metadataBase` makes every relative `canonical`, `og:url` and
@@ -31,8 +31,8 @@ export const metadata: Metadata = {
     default: `${SITE_NAME} — ${SITE_TAGLINE}`,
     template: `%s — ${SITE_NAME}`,
   },
-  description: `${SITE_TAGLINE}. Buyers pay in USDC and receive the repo at a version; the manifest is public, the contents are private.`,
-  keywords: ["x402", "sell private GitHub repo", "paid git access", "USDC", "Base", "agent payments", "private repository marketplace"],
+  description: `${SITE_TAGLINE}, paid for by the agents that use it. Agents pay for early access to a project's next release in USDT0 or USDC over x402; on the date the maintainer sets, it goes public under its licence.`,
+  keywords: ["x402", "open source funding", "fund open source", "early access", "USDT0", "Stellar", "agent payments"],
   openGraph: {
     type: "website",
     siteName: SITE_NAME,

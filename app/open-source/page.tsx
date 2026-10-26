@@ -17,6 +17,7 @@ import type { Metadata } from "next";
 import { GitHubMark } from "../_components/github-mark";
 import { SiteFooter, SiteHeader } from "../_components/chrome";
 import { optionalSession } from "@/lib/web/current";
+import { OPEN_RELEASE_FAQ } from "@/lib/web/faq";
 
 export const metadata: Metadata = {
   title: "Open releases — early access, then open",
@@ -47,33 +48,6 @@ const RULES = [
   "The project decides who gets paid. We send the money to the address you give us, and nowhere else.",
   "Every open release names its licence and its opening date before the first sale, and the date can be brought forward but never pushed back.",
   "No tokens and no leaderboards. Payment is USDT0, a dollar stablecoin, on Stellar.",
-];
-
-const QUESTIONS: { q: string; a: string }[] = [
-  {
-    q: "So you are closing open source?",
-    a: "No. Only new releases, only until a date you commit to publicly, always under an OSI licence. Code that is already public is never restricted, and the platform refuses to list a public repository at all.",
-  },
-  {
-    q: "The first buyer can just republish it.",
-    a: "Yes. The licence allows that. Buyers pay to fund the work and get it first, with a scanned, hash-pinned build. Sponsorware has shown for years that people pay for exactly that.",
-  },
-  {
-    q: "How do you know it really opened?",
-    a: "After the date, we ask GitHub whether the public repository contains the exact commit that was sold, under the same licence. The listing then says Opened on time, with a link to the public commit, or Overdue. The same answer is in the listing JSON and in the MCP tool an agent reads.",
-  },
-  {
-    q: "Who holds the money?",
-    a: "A buyer pays in USDT0 on Stellar; the payment lands at the platform's account and 90% is forwarded to your project's Stellar address. The address and every payout are on chain. The platform's fee is 10%.",
-  },
-  {
-    q: "Is this crypto?",
-    a: "There is no token. Your project receives dollars, as USDT0, which can be moved to whichever chain you keep them on or cashed out through a Stellar anchor.",
-  },
-  {
-    q: "Paying contributors will attract slop PRs.",
-    a: "The project decides who gets paid. Nothing is paid out by metric, and sending a pull request to a listed repository earns nothing automatically.",
-  },
 ];
 
 export default async function OpenSourcePage() {
@@ -141,7 +115,7 @@ export default async function OpenSourcePage() {
         <section aria-labelledby="questions" className="faq">
           <h2 id="questions">Questions</h2>
           <div className="faq-group">
-            {QUESTIONS.map((item) => (
+            {OPEN_RELEASE_FAQ.map((item) => (
               <details key={item.q}>
                 <summary>{item.q}</summary>
                 <p className="written">{item.a}</p>

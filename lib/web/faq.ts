@@ -102,12 +102,45 @@ export const FAQ: { group: string; items: QA[] }[] = [
 ];
 
 /**
+ * The open-release questions a maintainer asks (25 Oct 2026, HackMeridian). They render
+ * in full on /open-source and, a five of them, close the home page (26 Oct 2026). Not a
+ * group of `FAQ` on purpose: /how-it-works and its `FAQPage` stay about the money side
+ * every listing shares.
+ */
+export const OPEN_RELEASE_FAQ: QA[] = [
+  {
+    q: "So you are closing open source?",
+    a: "No. Only new releases, only until a date you commit to publicly, always under an OSI licence. Code that is already public is never restricted, and the platform refuses to list a public repository at all.",
+  },
+  {
+    q: "The first buyer can just republish it.",
+    a: "Yes. The licence allows that. Buyers pay to fund the work and get it first, with a scanned, hash-pinned build. Sponsorware has shown for years that people pay for exactly that.",
+  },
+  {
+    q: "How do you know it really opened?",
+    a: "After the date, we ask GitHub whether the public repository contains the exact commit that was sold, under the same licence. The listing then says Opened on time, with a link to the public commit, or Overdue. The same answer is in the listing JSON and in the MCP tool an agent reads.",
+  },
+  {
+    q: "Who holds the money?",
+    a: "A buyer pays in USDT0 on Stellar; the payment lands at the platform's account and 90% is forwarded to your project's Stellar address. The address and every payout are on chain. The platform's fee is 10%.",
+  },
+  {
+    q: "Is this crypto?",
+    a: "There is no token. Your project receives dollars, as USDT0, which can be moved to whichever chain you keep them on or cashed out through a Stellar anchor.",
+  },
+  {
+    q: "Paying contributors will attract slop PRs.",
+    a: "The project decides who gets paid. Nothing is paid out by metric, and sending a pull request to a listed repository earns nothing automatically.",
+  },
+];
+
+/**
  * The questions the home page closes with, by exact question text. A missing
  * question is a build-time throw, not a silently shorter FAQ, so a reworded
- * question on /how-it-works cannot quietly drop it from the home page.
+ * question on /how-it-works or /open-source cannot quietly drop it from the home page.
  */
 export function faqItems(questions: string[]): QA[] {
-  const all = FAQ.flatMap((group) => group.items);
+  const all = [...FAQ.flatMap((group) => group.items), ...OPEN_RELEASE_FAQ];
   return questions.map((q) => {
     const hit = all.find((item) => item.q === q);
     if (!hit) throw new Error(`FAQ question not found: ${q}`);

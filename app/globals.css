@@ -1449,6 +1449,39 @@ h2.section-label + .steps {
   border: 0;
 }
 
+/* Why now ------------------------------------------------------------------
+   The deck's problem slide on the home page (2026-10-26): three figures as a
+   listing. The figure is the row's head, in the computed face at Title size and
+   full ink, right-aligned on one tab stop so the three line up on their last
+   character; what it measures sits beside it in the text face. The head column
+   shrinks to the widest figure, so the notes start on one edge. Not stat tiles:
+   big numbers over small labels is the template this system refuses.
+*/
+
+.figures {
+  margin-bottom: var(--space-4);
+}
+
+.figures th[scope="row"] {
+  width: 1%;
+  padding: var(--space-2) var(--space-6) var(--space-2) 0;
+  font-size: var(--size-title);
+  line-height: var(--leading-heading);
+  letter-spacing: var(--tracking-normal);
+  text-transform: none;
+  color: var(--ink);
+  border-bottom: var(--rule-width) solid var(--rule);
+  vertical-align: baseline;
+}
+
+.figures td {
+  height: auto;
+  padding: var(--space-2) 0;
+  font-size: var(--size-body);
+  line-height: var(--leading-body);
+  vertical-align: baseline;
+}
+
 /* The pitch band -----------------------------------------------------------
    The home page's closing block, and the one place in the product where a region
    is marked by its ground rather than by a heading. It is an advertisement placed
@@ -1812,6 +1845,12 @@ h2.section-label + .steps {
 
   .card-rail .cards > li {
     scroll-snap-align: start;
+  }
+
+  /* One card has no neighbour to peek at (2026-10-26: the home page shows one
+     example), so it takes the sheet's width rather than promising a second. */
+  .card-rail .cards:has(> li:only-child) {
+    grid-auto-columns: 100%;
   }
 }
 

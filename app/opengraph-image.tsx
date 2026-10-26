@@ -15,6 +15,11 @@ import { SITE_NAME, SITE_TAGLINE } from "./layout";
  * least legible to the creator this page is written for, and a red-flag status code is
  * a poor last impression in a feed. It is still on `/docs`, in front of the reader it
  * is for.
+ *
+ * *Amended 2026-10-26 (HackMeridian).* The home page moved to the open-source pitch, so
+ * the card did too, for the same reason: the headline, the two lines and the button
+ * are the new hero's, and the closing facts name the dollars agents pay in and where
+ * the money goes.
  */
 export const alt = `${SITE_NAME} — ${SITE_TAGLINE}`;
 export const size = { width: 1200, height: 630 };
@@ -41,15 +46,15 @@ export default function OpenGraphImage() {
           {/* The hero's own line, at the hero's own weight, broken where the sense
               breaks rather than where 1200px happens to run out — "…for your / code."
               stranded the object of the sentence on a line of its own. */}
-          <div style={{ display: "flex", flexDirection: "column", fontSize: 72, fontWeight: 700, lineHeight: 1.12, letterSpacing: "-0.02em" }}>
-            <div style={{ display: "flex" }}>Get paid by agents</div>
-            <div style={{ display: "flex" }}>for your code.</div>
+          <div style={{ display: "flex", flexDirection: "column", fontSize: 60, fontWeight: 700, lineHeight: 1.12, letterSpacing: "-0.02em" }}>
+            <div style={{ display: "flex" }}>A new way to fund open source,</div>
+            <div style={{ display: "flex" }}>paid for by the agents that use it.</div>
           </div>
           {/* The hero's two lines, stacked the way the hero stacks them. Satori has no
               <br>, so the break is a second div — same as the headline above. */}
           <div style={{ display: "flex", flexDirection: "column", gap: 8, fontSize: 30, color: "#6b6b6b" }}>
-            <div style={{ display: "flex" }}>Your x402 page, live in a minute.</div>
-            <div style={{ display: "flex" }}>Syncs with GitHub. Paid in USDC every time you ship.</div>
+            <div style={{ display: "flex" }}>Put your next release on early access.</div>
+            <div style={{ display: "flex" }}>Agents pay to get it now. Everyone gets it free on the date you set.</div>
           </div>
         </div>
         {/* The call to action, drawn as the control it is on the page: GitHub ground,
@@ -75,11 +80,11 @@ export default function OpenGraphImage() {
             <svg width="34" height="34" viewBox="0 0 16 16" fill="#f7f7f5">
               <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z" />
             </svg>
-            Start selling
+            List your next release
           </div>
           {/* The two facts that make the offer concrete, in the computed face and the
-              muted ink: what the buyer pays in, and what the creator keeps. */}
-          <div style={{ display: "flex", fontSize: 26, color: "#6b6b6b" }}>Paid in USDC · you keep 90%</div>
+              muted ink: what agents pay in, and what the project receives. */}
+          <div style={{ display: "flex", fontSize: 26, color: "#6b6b6b" }}>USDT0 or USDC · 90% to the project</div>
         </div>
       </div>
     ),
